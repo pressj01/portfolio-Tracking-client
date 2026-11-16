@@ -4,6 +4,21 @@ import { themedPlotlyLayout } from '../utils/chartTheme'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { API_BASE } from '../config'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
+import LotSortHeader from '../components/LotSortHeader'
+import useTableSort from '../utils/useTableSort'
+
+const CEF_LIST_COLUMNS = [
+  { key: 'ticker', label: 'Ticker', type: 'string' },
+  { key: 'name', label: 'Fund Name', type: 'string' },
+  { key: 'strategy', label: 'Strategy', type: 'string', value: row => row.strategy || row.category || '' },
+  { key: 'price', label: 'Price', type: 'number' },
+  { key: 'price_change', label: 'Change', type: 'number' },
+  { key: 'nav', label: 'NAV', type: 'number' },
+  { key: 'premium_discount', label: 'Premium / Discount', type: 'number' },
+  { key: 'distribution_rate_price', label: 'Distribution Rate', type: 'number' },
+  { key: 'distribution_rate_nav', label: 'Rate on NAV', type: 'number' },
+  { key: 'return_on_nav_1y', label: '1 Yr NAV Rtn', type: 'number' },
+]
 
 const PERIODS = [
   { value: '5D', label: '5D' },
@@ -788,6 +803,11 @@ export default function ClosedCEFInformation() {
       return String(a[sort] || '').localeCompare(String(b[sort] || ''))
     })
   }, [data, query, category, strategy, sort])
+  // A clicked heading sorts on top of the dropdown's order; picking from the
+  // dropdown again hands the order back to it.
+  const { sorted: listRows, sort: headerSort, onSort: onHeaderSort, setSort: setHeaderSort } = useTableSort(
+    filteredRows, CEF_LIST_COLUMNS,
+  )
 
   if (ticker) {
     return (
@@ -828,7 +848,7 @@ export default function ClosedCEFInformation() {
         </label>
         <label>
           Sort
-          <select value={sort} onChange={e => setSort(e.target.value)}>
+          <select value={sort} onChange={e => { setSort(e.target.value); setHeaderSort(null) }}>
             <option value="ticker">Ticker</option>
             <option value="name">Fund Name</option>
             <option value="discount">Premium / Discount</option>
@@ -852,20 +872,13 @@ export default function ClosedCEFInformation() {
             <table className="cef-list-table">
               <thead>
                 <tr>
-                  <th>Ticker</th>
-                  <th>Fund Name</th>
-                  <th>Strategy</th>
-                  <th>Price</th>
-                  <th>Change</th>
-                  <th>NAV</th>
-                  <th>Premium / Discount</th>
-                  <th>Distribution Rate</th>
-                  <th>Rate on NAV</th>
-                  <th>1 Yr NAV Rtn</th>
+                  {CEF_LIST_COLUMNS.map(col => (
+                    <LotSortHeader key={col.key} column={col} sort={headerSort} onSort={onHeaderSort} />
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map(row => (
+                {listRows.map(row => (
                   <tr key={row.ticker}>
                     <td>
                       <button className="cef-ticker-link" onClick={() => navigate(`/closed-cef-info/${encodeURIComponent(row.ticker)}`)}>

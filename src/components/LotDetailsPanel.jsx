@@ -5,15 +5,17 @@ import LotTransactionHistory from './LotTransactionHistory'
  * Read-only lot detail for one ticker row: the open lots and the complete
  * transaction history behind a two-view switch. `detail` is the ticker's entry
  * from useLotDetails. Editing stays on Holdings, which `onManage` links to.
+ * `historyOnly` is for a ticker with nothing held now: it has no open lots to
+ * show, so the panel is its transaction history alone.
  */
-export default function LotDetailsPanel({ ticker, detail, holding, profiles, onViewChange, onManage }) {
-  const view = detail.view === 'history' ? 'history' : 'open'
+export default function LotDetailsPanel({ ticker, detail, holding, profiles, onViewChange, onManage, historyOnly = false }) {
+  const view = historyOnly || detail.view === 'history' ? 'history' : 'open'
   return (
     <div className="mh-lot-panel">
       <div className="mh-lot-toolbar">
         <div className="mh-lot-toolbar-main">
-          <strong>{ticker} lot details</strong>
-          <div className="mh-lot-view-tabs" role="tablist" aria-label={`${ticker} lot detail view`}>
+          <strong>{ticker} {historyOnly ? 'closed lots' : 'lot details'}</strong>
+          {!historyOnly && <div className="mh-lot-view-tabs" role="tablist" aria-label={`${ticker} lot detail view`}>
             <button
               type="button"
               role="tab"
@@ -28,7 +30,7 @@ export default function LotDetailsPanel({ ticker, detail, holding, profiles, onV
               className={view === 'history' ? 'active' : undefined}
               onClick={() => onViewChange('history')}
             >Transaction history</button>
-          </div>
+          </div>}
         </div>
         {onManage && (
           <button type="button" className="btn btn-secondary" onClick={onManage}>Manage transactions</button>

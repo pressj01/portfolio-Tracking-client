@@ -14,7 +14,8 @@ export default function useLotDetails(pf) {
   // reopen the panel with an answer nobody is waiting for.
   const requestSeq = useRef(0)
 
-  const toggleLotDetails = async ticker => {
+  // `initialView` is the view a newly opened row starts on ('open' or 'history').
+  const toggleLotDetails = async (ticker, initialView = 'open') => {
     if (lotDetails[ticker]) {
       setLotDetails(current => {
         const next = { ...current }
@@ -30,7 +31,7 @@ export default function useLotDetails(pf) {
         ? { ...current, [ticker]: { ...current[ticker], loading: false, ...result } }
         : current
     ))
-    setLotDetails(current => ({ ...current, [ticker]: { loading: true, view: 'open', requestId } }))
+    setLotDetails(current => ({ ...current, [ticker]: { loading: true, view: initialView, requestId } }))
     try {
       const response = await pf(`/api/holdings/${encodeURIComponent(ticker)}/transactions?include_dividends=true`)
       const data = await response.json()

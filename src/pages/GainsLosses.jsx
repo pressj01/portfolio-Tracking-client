@@ -659,6 +659,11 @@ export default function GainsLosses({ embedded = false }) {
     () => (data?.combined || []).map(row => ({ ...row, description: describe(row) })),
     [data, describe],
   )
+  // Which Combined rows still have a position, and what it is.
+  const unrealizedByTicker = useMemo(
+    () => new Map((data?.unrealized || []).map(row => [row.ticker, row])),
+    [data],
+  )
 
   // One saved layout per tab. The three tables answer different questions and
   // share barely any columns, so a single shared layout would be meaningless.
@@ -735,16 +740,23 @@ export default function GainsLosses({ embedded = false }) {
             </button>
           </span>
         )
-      } else if (tab === 'unrealized') {
+      } else if (tab === 'unrealized' || tab === 'combined') {
         const open = !!lotDetails[row.ticker]
+        // A closed position has no open lots, so its row opens straight onto
+        // the buys and sells that made up its realized result.
+        const closedOnly = tab === 'combined' && !unrealizedByTicker.has(row.ticker)
         display = (
           <span className="tr-ticker-lot-toggle">
             <button
               type="button"
               aria-label={`${open ? 'Collapse' : 'Expand'} ${row.ticker} lot details`}
               aria-expanded={open}
-              title="Show the open lots and transaction history behind this total"
-              onClick={() => toggleLotDetails(row.ticker)}
+              title={closedOnly
+                ? 'Show every buy and sell behind this closed position'
+                : tab === 'combined'
+                  ? 'Show the open lots, and every buy and sell, behind these totals'
+                  : 'Show the open lots and transaction history behind this total'}
+              onClick={() => toggleLotDetails(row.ticker, closedOnly ? 'history' : 'open')}
             >
               {open ? '▼' : '▶'}
             </button>
@@ -898,29 +910,37 @@ export default function GainsLosses({ embedded = false }) {
                       {renderCells(lot, true)}
                     </tr>
                   ))}
-                {tab === 'unrealized' && lotDetails[row.ticker] && (
-                  <tr className="gl-lot-detail-row">
-                    <td colSpan={activeCols.length}>
-                      <LotDetailsPanel
-                        ticker={row.ticker}
-                        detail={lotDetails[row.ticker]}
-                        holding={{
-                          ticker: row.ticker,
-                          quantity: row.quantity,
-                          purchase_value: row.purchase_value,
-                          current_price: row.current_price,
-                          current_value: row.current_value,
-                          basis_mode: basisMode,
-                          // The summary reports shares to four decimals.
-                          share_tolerance: 0.0001,
-                        }}
-                        profiles={profiles}
-                        onViewChange={view => setLotDetailView(row.ticker, view)}
-                        onManage={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}`)}
-                      />
-                    </td>
-                  </tr>
-                )}
+                {(tab === 'unrealized' || tab === 'combined') && lotDetails[row.ticker] && (() => {
+                  // Combined rows carry only gain totals; the position itself
+                  // comes from the Unrealized row for that ticker, when it has one.
+                  const held = tab === 'combined' ? unrealizedByTicker.get(row.ticker) : row
+                  return (
+                    <tr className="gl-lot-detail-row">
+                      <td colSpan={activeCols.length}>
+                        <LotDetailsPanel
+                          ticker={row.ticker}
+                          detail={lotDetails[row.ticker]}
+                          historyOnly={!held}
+                          holding={held ? {
+                            ticker: row.ticker,
+                            quantity: held.quantity,
+                            purchase_value: held.purchase_value,
+                            current_price: held.current_price,
+                            current_value: held.current_value,
+                            basis_mode: basisMode,
+                            // The summary reports shares to four decimals.
+                            share_tolerance: 0.0001,
+                          } : null}
+                          profiles={profiles}
+                          onViewChange={view => setLotDetailView(row.ticker, view)}
+                          onManage={held
+                            ? () => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}`)
+                            : () => setHistoryTicker(row.ticker)}
+                        />
+                      </td>
+                    </tr>
+                  )
+                })()}
               </React.Fragment>
             ))}
           </tbody>
@@ -1111,7 +1131,8 @@ export default function GainsLosses({ embedded = false }) {
               per ticker with the individual sells available behind the expand arrow when there is more
               than one; sorting a column orders those sells as well as the ticker rows.
               <strong> Combined</strong> shows both sides side by side for every ticker you have
-              ever owned. <strong>RvY</strong> (Return vs. Yield, Unrealized tab only) compares each
+              ever owned; the arrow beside a ticker opens its open lots and its complete buy and sell
+              history together, or just the history for a position that is fully closed. <strong>RvY</strong> (Return vs. Yield, Unrealized tab only) compares each
               holding's Tracker Total Return % for the selected range against its yield scaled to that
               same window — Good means the total return beat the income, Poor means the income alone beat
               the total return.

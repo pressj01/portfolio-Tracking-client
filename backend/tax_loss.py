@@ -73,49 +73,109 @@ def _load_tax_rates(conn) -> dict:
     }
 
 
+def _table_columns(conn, table: str) -> set[str]:
+    try:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except Exception:
+        return set()
+
+
 def _open_shares_by_lot(conn, profile_ids: list[int]) -> list[dict]:
-    """Return BUY transactions with their remaining open shares (post-SELL allocations).
+    """Return BUY transactions with their remaining open shares.
+
+    Each account's ledger is replayed per ticker in the same order the holdings
+    rollup uses: a SELL consumes the lots it names in
+    transaction_lot_allocations and, when it names none, the oldest lots first
+    (FIFO). Counting only the stored allocations is not enough -- an imported
+    or plain FIFO sell stores none, so every lot it closed would still look
+    open and a position sold out years ago would come back as harvestable.
 
     Profile-scoped. Only lots with open_shares > 1e-9 are returned.
     """
+    if not profile_ids:
+        return []
     placeholders = ",".join("?" * len(profile_ids))
+    columns = _table_columns(conn, "transactions")
+    order_expr = "COALESCE(sort_order, id)" if "sort_order" in columns else "id"
     rows = conn.execute(
         f"""
-        SELECT t.id           AS txn_id,
-               t.ticker       AS ticker,
-               t.profile_id   AS profile_id,
-               t.transaction_date AS buy_date,
-               t.shares       AS shares,
-               t.price_per_share AS price_per_share,
-               t.fees         AS fees,
-               t.notes        AS notes,
-               COALESCE((SELECT SUM(a.shares)
-                         FROM transaction_lot_allocations a
-                         WHERE a.buy_txn_id = t.id), 0) AS allocated
-        FROM transactions t
-        WHERE t.transaction_type = 'BUY'
-          AND t.profile_id IN ({placeholders})
+        SELECT id, ticker, profile_id, transaction_type, transaction_date,
+               shares, price_per_share, fees, notes
+        FROM transactions
+        WHERE profile_id IN ({placeholders})
+        ORDER BY profile_id, UPPER(ticker), transaction_date, {order_expr}, id
         """,
         profile_ids,
     ).fetchall()
 
-    lots = []
+    alloc_map: dict[int, list[tuple[int, float]]] = {}
+    if _table_columns(conn, "transaction_lot_allocations"):
+        for a in conn.execute(
+            "SELECT sell_txn_id, buy_txn_id, shares FROM transaction_lot_allocations ORDER BY id"
+        ).fetchall():
+            alloc_map.setdefault(a["sell_txn_id"], []).append(
+                (a["buy_txn_id"], float(a["shares"] or 0))
+            )
+
+    open_lots: list[dict] = []
+    queue: list[dict] = []
+    deficit = 0.0
+    current_key = None
+
     for r in rows:
         r = dict(r)
-        open_sh = float(r["shares"] or 0) - float(r["allocated"] or 0)
-        if open_sh <= 1e-9:
-            continue
-        lots.append({
-            "txn_id": r["txn_id"],
-            "ticker": (r["ticker"] or "").upper(),
-            "profile_id": r["profile_id"],
-            "buy_date": r["buy_date"],
-            "open_shares": open_sh,
-            "price_per_share": float(r["price_per_share"] or 0),
-            "fees_per_share": (float(r["fees"] or 0) / float(r["shares"]) if r["shares"] else 0),
-            "notes": r["notes"] or "",
-        })
-    return lots
+        key = (r["profile_id"], (r["ticker"] or "").upper())
+        if key != current_key:
+            open_lots.extend(queue)
+            queue = []
+            deficit = 0.0
+            current_key = key
+
+        txn_type = (r["transaction_type"] or "BUY").upper()
+        shares = abs(float(r["shares"] or 0))
+        if txn_type == "BUY":
+            bought = shares
+            # Shares an earlier sell took that the ledger had no purchase for
+            # are covered by the next buy, exactly as the rollup does.
+            if deficit > 1e-9:
+                covered = min(deficit, shares)
+                deficit -= covered
+                shares -= covered
+            if shares <= 1e-9:
+                continue
+            queue.append({
+                "txn_id": r["id"],
+                "ticker": key[1],
+                "profile_id": r["profile_id"],
+                "buy_date": r["transaction_date"],
+                "open_shares": shares,
+                "price_per_share": float(r["price_per_share"] or 0),
+                "fees_per_share": (float(r["fees"] or 0) / bought) if bought else 0.0,
+                "notes": r["notes"] or "",
+            })
+        elif txn_type == "SELL":
+            remaining = shares
+            allocations = alloc_map.get(r["id"])
+            if allocations:
+                for buy_id, alloc_shares in allocations:
+                    lot = next((item for item in queue if item["txn_id"] == buy_id), None)
+                    if lot is None:
+                        continue
+                    take = min(alloc_shares, lot["open_shares"])
+                    lot["open_shares"] -= take
+                    remaining -= take
+            else:
+                for lot in queue:
+                    if remaining <= 1e-9:
+                        break
+                    take = min(remaining, lot["open_shares"])
+                    lot["open_shares"] -= take
+                    remaining -= take
+            queue = [lot for lot in queue if lot["open_shares"] > 1e-9]
+            if remaining > 1e-9:
+                deficit += remaining
+    open_lots.extend(queue)
+    return open_lots
 
 
 def _current_prices(conn, profile_ids: list[int]) -> dict[str, float]:
@@ -185,6 +245,27 @@ def _wash_sale_check(conn, ticker: str, profile_ids: list[int], wash_days: int, 
     return {"status": "blocked", "clears_on": clears_on, "offenders": offenders}
 
 
+def _wash_for_lot(wash: dict, lot_txn_id, wash_days: int, today: date) -> dict:
+    """Narrow a ticker's wash-sale result to one lot.
+
+    The purchase that created a lot is not a replacement purchase for that same
+    lot: selling shares bought two weeks ago is only a wash sale if *other*
+    shares were also bought inside the window. Without this a lone recent
+    purchase listed itself as its own blocking transaction.
+    """
+    offenders = [o for o in wash["offenders"] if o["txn_id"] != lot_txn_id]
+    if len(offenders) == len(wash["offenders"]):
+        return wash
+    if not offenders:
+        return {"status": "clear", "clears_on": None, "offenders": []}
+    latest = max(_parse_date(o["date"]) or today for o in offenders)
+    return {
+        "status": "blocked",
+        "clears_on": (latest + timedelta(days=wash_days + 1)).isoformat(),
+        "offenders": offenders,
+    }
+
+
 def _classify_term(buy_date_str, today: date) -> str:
     bd = _parse_date(buy_date_str)
     if not bd:
@@ -245,7 +326,7 @@ def build_candidates(conn, scope: dict, today: date | None = None) -> dict:
 
         if tkr not in wash_cache:
             wash_cache[tkr] = _wash_sale_check(conn, tkr, txn_pids, rates["wash_days"], today)
-        wash = wash_cache[tkr]
+        wash = _wash_for_lot(wash_cache[tkr], lot["txn_id"], rates["wash_days"], today)
 
         candidates.append({
             "txn_id": lot["txn_id"],
@@ -335,6 +416,42 @@ def _yield_ratio(value):
     return y / 100.0 if y > 1 else y
 
 
+# general_scanner_cache.dividend_yield was written as percent x 100 (KO 2.74%
+# -> 274) until the 2026-05-28 build, and as plain percent (2.74) since. Rows
+# keep whichever unit they were last refreshed in.
+_SCANNER_YIELD_PERCENT_SINCE = "2026-05-28"
+
+
+def _percent_yield_ratio(value):
+    """A yield stored in percent (8.29 -> 0.0829), however small.
+
+    etf_provider_funds.div_yield is always percent. Guessing the unit from the
+    size of the number read a 0.24% fund as a 24% one, which is how growth and
+    sector ETFs came to be offered as replacements for high-income holdings.
+    """
+    y = _num(value)
+    if y is None or y < 0:
+        return None
+    return y / 100.0
+
+
+def _scanner_yield_ratio(value, updated_at=None):
+    """general_scanner_cache.dividend_yield as a ratio, by the unit it was saved in.
+
+    With no timestamp to go by (older fixtures, a hand-built cache) the value
+    falls back to the magnitude guess in _yield_ratio.
+    """
+    y = _num(value)
+    if y is None or y < 0:
+        return None
+    stamp = str(updated_at or "")[:10]
+    if not stamp:
+        return _yield_ratio(y)
+    if y > 100 or stamp < _SCANNER_YIELD_PERCENT_SINCE:
+        return y / 10000.0
+    return y / 100.0
+
+
 def _freq_bucket(value):
     raw = _clean_text(value).upper()
     if raw in {"W", "52", "WEEKLY"}:
@@ -378,7 +495,9 @@ def _asset_family(profile: dict) -> str:
         return "bdc"
     if "reit" in text or "real estate investment trust" in text:
         return "reit"
-    if any(term in text for term in ("etf", "fund", "trust")) or asset_type in {"etf", "fund"} or classification in {"etf", "fund"}:
+    # Broker descriptions abbreviate: "CORNERSTONE TOTAL RETURN FD IN COM".
+    if (any(term in text for term in ("etf", "fund", "trust")) or re.search(r"\bfd\b", text)
+            or asset_type in {"etf", "fund"} or classification in {"etf", "fund"}):
         return "fund"
     if asset_type in {"stock", "equity"} or classification in {"stock", "equity"}:
         return "stock"
@@ -456,8 +575,7 @@ def _source_profile(conn, ticker: str, profile_ids: list[int]) -> dict:
         """, [ticker, *profile_ids])
 
     scanner = _fetchone_dict(conn, """
-        SELECT ticker, name, sector, industry, asset_type, etf_category, etf_strategy,
-               dividend_yield, market_cap, aum
+        SELECT *
         FROM general_scanner_cache
         WHERE UPPER(ticker) = ?
         LIMIT 1
@@ -484,10 +602,10 @@ def _source_profile(conn, ticker: str, profile_ids: list[int]) -> dict:
     current_value = _num(holding.get("current_value"), 0) or 0
     annual_income = _num(holding.get("annual_income"))
     holding_yield = _yield_ratio(holding.get("holding_yield"))
-    scanner_yield = _yield_ratio(scanner.get("dividend_yield"))
-    provider_yield = _yield_ratio(provider.get("div_yield"))
+    scanner_yield = _scanner_yield_ratio(scanner.get("dividend_yield"), scanner.get("updated_at"))
+    provider_yield = _percent_yield_ratio(provider.get("div_yield"))
     income_yield = (annual_income / current_value) if annual_income is not None and current_value > 0 else None
-    y = next((v for v in (income_yield, holding_yield, scanner_yield, provider_yield) if v is not None), None)
+    y = next((v for v in (income_yield, holding_yield, provider_yield, scanner_yield) if v is not None), None)
 
     profile = {
         "ticker": ticker,
@@ -544,8 +662,7 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
         if not value:
             continue
         rows = conn.execute(f"""
-            SELECT ticker, name, sector, industry, asset_type, etf_category, etf_strategy,
-                   dividend_yield, market_cap, aum
+            SELECT *
             FROM general_scanner_cache
             WHERE UPPER(ticker) != ?
               AND {field} = ?
@@ -558,7 +675,8 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
                 d["ticker"], source_label,
                 name=d.get("name"), sector=d.get("sector"), industry=d.get("industry"),
                 asset_type=d.get("asset_type"), etf_category=d.get("etf_category"),
-                etf_strategy=d.get("etf_strategy"), yield_value=d.get("dividend_yield"),
+                etf_strategy=d.get("etf_strategy"),
+                yield_scanner=_scanner_yield_ratio(d.get("dividend_yield"), d.get("updated_at")),
                 size=d.get("aum") or d.get("market_cap"),
             )
 
@@ -573,8 +691,7 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
         scanner_clauses.append("dividend_yield IS NOT NULL")
     if scanner_clauses:
         rows = conn.execute(f"""
-            SELECT ticker, name, sector, industry, asset_type, etf_category, etf_strategy,
-                   dividend_yield, market_cap, aum
+            SELECT *
             FROM general_scanner_cache
             WHERE UPPER(ticker) != ?
               AND ({' OR '.join(scanner_clauses)})
@@ -587,7 +704,8 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
                 d["ticker"], "scanner match",
                 name=d.get("name"), sector=d.get("sector"), industry=d.get("industry"),
                 asset_type=d.get("asset_type"), etf_category=d.get("etf_category"),
-                etf_strategy=d.get("etf_strategy"), yield_value=d.get("dividend_yield"),
+                etf_strategy=d.get("etf_strategy"),
+                yield_scanner=_scanner_yield_ratio(d.get("dividend_yield"), d.get("updated_at")),
                 size=d.get("aum") or d.get("market_cap"),
             )
 
@@ -605,7 +723,8 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
             d = dict(row)
             add(
                 d["ticker"], "ETF provider universe",
-                name=d.get("name"), provider=d.get("provider"), yield_value=d.get("div_yield"),
+                name=d.get("name"), provider=d.get("provider"),
+                yield_provider=_percent_yield_ratio(d.get("div_yield")),
                 div_frequency=d.get("frequency"), size=d.get("assets"),
                 asset_type="ETF",
             )
@@ -619,11 +738,10 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
             LIMIT 1
         """, [t])
         if div:
-            profile.setdefault("yield_value", div.get("current_annual_yield"))
+            profile["yield_holding"] = _yield_ratio(div.get("current_annual_yield"))
             profile.setdefault("div_frequency", div.get("div_frequency"))
         scanner = _fetchone_dict(conn, """
-            SELECT name, sector, industry, asset_type, etf_category, etf_strategy,
-                   dividend_yield, market_cap, aum
+            SELECT *
             FROM general_scanner_cache
             WHERE UPPER(ticker) = ?
             LIMIT 1
@@ -631,9 +749,19 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
         if scanner:
             for k in ("name", "sector", "industry", "asset_type", "etf_category", "etf_strategy"):
                 profile.setdefault(k, scanner.get(k))
-            profile.setdefault("yield_value", scanner.get("dividend_yield"))
+            profile.setdefault(
+                "yield_scanner",
+                _scanner_yield_ratio(scanner.get("dividend_yield"), scanner.get("updated_at")),
+            )
             profile.setdefault("size", scanner.get("aum") or scanner.get("market_cap"))
-        profile["yield"] = _yield_ratio(profile.get("yield_value"))
+        # Each source keeps its own unit, so each is converted where it is read
+        # and the most trustworthy one wins: the user's own holding, then the
+        # issuer listing, then the scanner cache.
+        profile["yield"] = next(
+            (profile[k] for k in ("yield_holding", "yield_provider", "yield_scanner")
+             if profile.get(k) is not None),
+            None,
+        )
         profile["div_frequency"] = _freq_bucket(profile.get("div_frequency"))
         profile["asset_family"] = _asset_family(profile)
         profile["tags"] = _profile_tags(profile)

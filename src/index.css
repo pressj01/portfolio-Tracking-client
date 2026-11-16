@@ -3199,6 +3199,15 @@ th.col-drag-target {
   border-top: 1px solid var(--border);
   font-weight: 700;
 }
+/* Lots listed under a Tax-Loss Harvest holding. The global sticky header
+   would pin this inner header over the outer table while scrolling. */
+.tlh-nested-table th {
+  position: static;
+  font-size: 0.8rem;
+}
+.tlh-nested-table td {
+  font-size: 0.85rem;
+}
 .mh-lot-sort {
   align-items: center;
   background: transparent;

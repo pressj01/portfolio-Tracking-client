@@ -26546,6 +26546,84 @@ def _dividend_transaction_events(conn, profile_ids, ticker=None):
     return events
 
 
+# A sale that leaves less than this many shares has closed the position. Broker
+# exports round fractional DRIP shares to three places, so a sold-out position
+# can replay to a few ten-thousandths of a share rather than to zero.
+_ROUND_TRIP_CLOSED_TOLERANCE = 1e-3
+
+
+def _mark_closed_position_events(equity_events, dividend_events, current_positions):
+    """Set ``closed_position`` on every ledger event, one round trip at a time.
+
+    A ticker that was sold out and bought back later has two histories: the
+    trades up to the sale that emptied the position are finished business, and
+    only the trades since belong to what is held now. Asking merely whether the
+    ticker is held today labelled all of them Open, so a position closed a year
+    before its repurchase never showed as closed.
+
+    ``equity_events`` must be in replay order (oldest first) per account and
+    ticker. A dividend belongs to the round trip that was open, or most
+    recently open, on its payment date -- the last distribution of a sold-out
+    position usually pays after the sale.
+    """
+    grouped = {}
+    for event in equity_events:
+        key = (int(event.get("profile_id") or 1), str(event.get("ticker") or "").upper())
+        grouped.setdefault(key, []).append(event)
+
+    # (profile, ticker) -> [(first trade date, closed?)] oldest first
+    round_trips = {}
+    for key, rows in grouped.items():
+        held_now = key in current_positions
+        trips = []
+        current = []
+        running = 0.0
+        deficit = 0.0
+        for event in rows:
+            txn_type = str(event.get("transaction_type") or "BUY").upper()
+            shares = abs(float(event.get("shares") or 0))
+            current.append(event)
+            if txn_type == "BUY":
+                covered = min(deficit, shares)
+                deficit -= covered
+                running += shares - covered
+                continue
+            running -= shares
+            if running < -_ROUND_TRIP_CLOSED_TOLERANCE:
+                # More sold than the ledger ever bought: the opening shares are
+                # missing, so the count proves nothing about being sold out.
+                deficit += -running
+                running = 0.0
+                continue
+            if running <= _ROUND_TRIP_CLOSED_TOLERANCE and deficit <= 1e-9:
+                running = 0.0
+                trips.append((current, True))
+                current = []
+        if current:
+            # Whatever follows the last full exit is the live position, unless
+            # the account no longer holds the ticker at all.
+            trips.append((current, not held_now))
+        round_trips[key] = []
+        for trip_events, closed in trips:
+            for event in trip_events:
+                event["closed_position"] = closed
+            round_trips[key].append((str(trip_events[0].get("transaction_date") or ""), closed))
+
+    for event in dividend_events:
+        key = (int(event.get("profile_id") or 1), str(event.get("ticker") or "").upper())
+        trips = round_trips.get(key)
+        if not trips:
+            event["closed_position"] = key not in current_positions
+            continue
+        paid = str(event.get("transaction_date") or "")
+        closed = trips[0][1]
+        for started, trip_closed in trips:
+            if started and paid and started > paid:
+                break
+            closed = trip_closed
+        event["closed_position"] = closed
+
+
 @app.route("/api/transactions/history", methods=["GET"])
 def transaction_history():
     """Return every saved buy, sell, and actual dividend in the active scope.
@@ -26598,12 +26676,7 @@ def transaction_history():
             }
 
         events = [*equity_events, *dividend_events]
-        for event in events:
-            position_key = (
-                int(event.get("profile_id") or 1),
-                str(event.get("ticker") or "").upper(),
-            )
-            event["closed_position"] = position_key not in current_positions
+        _mark_closed_position_events(equity_events, dividend_events, current_positions)
 
         # The full ledger has an Account column even for a single-account view.
         # ``include_account_note`` controls whether that label is also prefixed
@@ -27794,6 +27867,109 @@ def delete_transaction(ticker, txn_id):
 
     conn.close()
     return jsonify({"ticker": ticker, "message": f"Transaction {txn_id} deleted"})
+
+
+@app.route("/api/transactions/bulk-delete", methods=["POST"])
+def bulk_delete_transactions():
+    """Delete many ledger rows at once, each in its own account.
+
+    Body: ``{"transactions": [{"id", "profile_id"}], "dividends": [{"id",
+    "profile_id"}]}``. Rows are removed first and every affected position is
+    then replayed once, where deleting them one at a time would replay a
+    position after each of its rows. A row is only touched when it sits in an
+    account the current view can read, and under the account it claims.
+    """
+    data = request.get_json(silent=True) or {}
+
+    def _pairs(key):
+        pairs = []
+        for item in data.get(key) or []:
+            try:
+                pairs.append((int(item["id"]), int(item["profile_id"])))
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"Each entry in {key} needs a numeric id and profile_id")
+        return list(dict.fromkeys(pairs))
+
+    try:
+        txn_pairs = _pairs("transactions")
+        dividend_pairs = _pairs("dividends")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not txn_pairs and not dividend_pairs:
+        return jsonify({"error": "Select at least one row to delete"}), 400
+
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        equity_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
+        dividend_pids = _dividend_payment_profile_ids_for_read(conn, equity_pids)
+        allowed = {int(pid) for pid in [*equity_pids, *dividend_pids]}
+        if any(pid not in allowed for _, pid in [*txn_pairs, *dividend_pairs]):
+            return jsonify({"error": "A selected row belongs to an account outside this view"}), 400
+
+        positions = {}  # (profile_id, ticker) -> [transaction ids]
+        for txn_id, profile_id in txn_pairs:
+            row = conn.execute(
+                "SELECT ticker FROM transactions WHERE id = ? AND profile_id = ?",
+                (txn_id, profile_id),
+            ).fetchone()
+            if not row:
+                continue  # already gone; nothing to undo
+            ticker = (row["ticker"] if isinstance(row, dict) else row[0]).upper()
+            positions.setdefault((profile_id, ticker), []).append(txn_id)
+
+        deleted_transactions = 0
+        touched_profiles = set()
+        for (profile_id, ticker), txn_ids in positions.items():
+            broker_baseline = (
+                _broker_holding_baseline(conn, ticker, profile_id)
+                or _closed_position_baseline(conn, ticker, profile_id)
+            )
+            placeholders = ",".join("?" * len(txn_ids))
+            conn.execute(f"DELETE FROM transactions WHERE id IN ({placeholders})", txn_ids)
+            conn.commit()
+            deleted_transactions += len(txn_ids)
+            remaining = conn.execute(
+                "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ?",
+                (ticker, profile_id),
+            ).fetchone()[0]
+            # Same rule as a single delete: with no trades left the holding is
+            # left as it stands, apart from a broker-managed share count.
+            if remaining > 0 or broker_baseline:
+                _rollup_transactions(ticker, profile_id, conn, broker_baseline=broker_baseline)
+                touched_profiles.add(profile_id)
+
+        deleted_dividends = 0
+        dividend_positions = set()
+        for payment_id, profile_id in dividend_pairs:
+            row = conn.execute(
+                "SELECT ticker FROM dividend_payments WHERE id = ? AND profile_id = ? "
+                "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'",
+                (payment_id, profile_id),
+            ).fetchone()
+            if not row:
+                continue
+            ticker = (row["ticker"] if isinstance(row, dict) else row[0]).upper()
+            conn.execute("DELETE FROM dividend_payments WHERE id = ?", (payment_id,))
+            deleted_dividends += 1
+            dividend_positions.add((profile_id, ticker))
+        for profile_id, ticker in dividend_positions:
+            _refresh_edited_dividend_totals(conn, ticker, profile_id)
+        conn.commit()
+
+        for profile_id in touched_profiles:
+            _reconcile_owner_after_member_change(conn, profile_id)
+    finally:
+        conn.close()
+
+    for profile_id in {pid for pid, _ in dividend_positions}:
+        populate_dividends(profile_id)
+    _clear_total_return_caches()
+    return jsonify({
+        "deleted_transactions": deleted_transactions,
+        "deleted_dividends": deleted_dividends,
+        "tickers": sorted({ticker for _, ticker in [*positions.keys(), *dividend_positions]}),
+    })
 
 
 @app.route("/api/holdings/<ticker>/has_transactions", methods=["GET"])
@@ -41796,6 +41972,18 @@ def tax_loss_candidates():
     try:
         scope = _get_gains_losses_profile_scope(conn)
         result = tax_loss.build_candidates(conn, scope)
+        # Lots and blocking purchases are per account; name the account rather
+        # than leaving the reader with a bare profile number.
+        account_ids = {c["profile_id"] for c in result["candidates"]}
+        for candidate in result["candidates"]:
+            account_ids.update(o["profile_id"] for o in candidate["wash_offenders"])
+        names = _load_profile_name_map(conn, sorted(account_ids)) if account_ids else {}
+        for candidate in result["candidates"]:
+            candidate["account_name"] = names.get(candidate["profile_id"])
+            candidate["wash_offenders"] = [
+                {**o, "account_name": names.get(o["profile_id"])}
+                for o in candidate["wash_offenders"]
+            ]
         return jsonify(result)
     finally:
         conn.close()

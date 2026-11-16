@@ -5,6 +5,7 @@ import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
 import { withSignalFormula } from '../utils/gradingPreferences'
 import LotSortHeader from '../components/LotSortHeader'
+import useTableSort from '../utils/useTableSort'
 import {
   GROUP_ORDER_MODES,
   buildSubcategoryTree,
@@ -546,9 +547,22 @@ function CopyCategoriesModal({ pf, categories, sourceName, onCancel, onDone }) {
   )
 }
 
+const QUALITY_TICKER_COLUMNS = [
+  { key: 'ticker', label: 'Ticker', type: 'string', align: { textAlign: 'left' } },
+  { key: 'drivers', label: 'Drivers', type: 'string', align: { textAlign: 'left' }, value: row => (row.drivers || []).join('; ') },
+  { key: 'portfolio_pct', label: 'Portfolio', type: 'number' },
+  { key: 'category_pct', label: 'Category', type: 'number' },
+  { key: 'income_share_pct', label: 'Income Share', type: 'number' },
+  { key: 'yield_pct', label: 'Yield', type: 'number' },
+  { key: 'gain_loss_pct', label: 'Gain/Loss', type: 'number' },
+  { key: 'current_value', label: 'Value', type: 'number' },
+]
+
 function QualityDetailsModal({ row, onClose, fmt, fmtPct }) {
+  const { sorted: tickers, sort: tickerSort, onSort: onTickerSort } = useTableSort(
+    row?.quality?.tickers || [], QUALITY_TICKER_COLUMNS,
+  )
   if (!row) return null
-  const tickers = row.quality?.tickers || []
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" style={{ maxWidth: 820 }} onClick={e => e.stopPropagation()}>
@@ -574,14 +588,9 @@ function QualityDetailsModal({ row, onClose, fmt, fmtPct }) {
             <table className="pb-table">
               <thead>
                 <tr>
-                  <th style={{ textAlign: 'left' }}>Ticker</th>
-                  <th style={{ textAlign: 'left' }}>Drivers</th>
-                  <th>Portfolio</th>
-                  <th>Category</th>
-                  <th>Income Share</th>
-                  <th>Yield</th>
-                  <th>Gain/Loss</th>
-                  <th>Value</th>
+                  {QUALITY_TICKER_COLUMNS.map(col => (
+                    <LotSortHeader key={col.key} column={col} sort={tickerSort} onSort={onTickerSort} style={col.align} />
+                  ))}
                 </tr>
               </thead>
               <tbody>

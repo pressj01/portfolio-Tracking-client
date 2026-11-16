@@ -2,6 +2,29 @@ import React, { useState, useMemo, useCallback } from 'react'
 import { API_BASE } from '../config'
 import { useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
+import LotSortHeader from '../components/LotSortHeader'
+import useTableSort from '../utils/useTableSort'
+
+// The tooltips name what each column is; LotSortHeader adds "click to sort".
+const FUND_TABLE_COLUMNS = [
+  { key: 'ticker', label: 'Fund', type: 'string', tip: 'Fund ticker symbol and name' },
+  { key: 'yieldPct', label: 'Yield', type: 'number', tip: 'Stated distribution (gross) yield, before any taxes' },
+  { key: 'taxType', label: 'Tax Type', type: 'string', tip: "How this fund's distributions are taxed (e.g. fully taxable, treasury, municipal, return of capital, qualified/LTCG)" },
+  { key: 'applicableRate', label: 'Tax Rate', type: 'number', tip: "Effective tax rate applied to this fund's distributions, based on your tax profile" },
+  { key: 'aty', label: 'ATY', type: 'number', tip: "After-Tax Yield — the yield you actually keep after taxes on this fund's distributions" },
+  { key: 'tey', label: 'TEY', type: 'number', tip: "Tax-Equivalent Yield — the gross yield a fully-taxable fund would need to match this fund's after-tax yield" },
+  { key: 'allocPct', label: 'Alloc %', type: 'number', tip: "This fund's share of the total portfolio, as a percent" },
+  { key: 'allocDollar', label: 'Allocation', type: 'number', tip: 'Dollar amount allocated to this fund' },
+  { key: 'shares', label: 'Shares', type: 'number', tip: 'Estimated number of shares (allocation ÷ latest share price)' },
+  { key: 'grossIncome', label: 'Annual Income', type: 'number', tip: 'Estimated gross annual income (allocation × yield), before taxes' },
+  { key: 'netIncome', label: 'After-Tax', type: 'number', tip: 'Estimated annual income from this fund after taxes' },
+]
+const PORTFOLIO_PICKER_COLUMNS = [
+  { key: 'select', label: '', sortable: false },
+  { key: 'ticker', label: 'Ticker', type: 'string' },
+  { key: 'description', label: 'Description', type: 'string' },
+  { key: 'current_value', label: 'Current Value', type: 'number' },
+]
 
 // ── Default 2025 Federal Income Tax Brackets ──────────────────────
 
@@ -730,6 +753,14 @@ export default function BlendedYield() {
     return { totalAllocPct, totalGrossIncome, totalNetIncome, totalShares, blendedTEY, blendedATY, blendedGross }
   }, [fundMetrics])
 
+  const fundRows = useMemo(() => fundMetrics.filter(f => f.allocPct > 0), [fundMetrics])
+  const { sorted: sortedFundRows, sort: fundSort, onSort: onFundSort } = useTableSort(fundRows, FUND_TABLE_COLUMNS)
+  const pickerRows = useMemo(() => visiblePortfolioHoldings.map(h => ({
+    ...h,
+    description: FUND_DB[h.ticker]?.name || (h.categories || []).join(', ') || 'Current portfolio holding',
+  })), [visiblePortfolioHoldings])
+  const { sorted: sortedPickerRows, sort: pickerSort, onSort: onPickerSort } = useTableSort(pickerRows, PORTFOLIO_PICKER_COLUMNS)
+
   const handleAdd = async (e) => { e?.preventDefault(); const sym = tickerInput; setTickerInput(''); await addFund(sym) }
   const muniStateLabel = `Fed+State Exempt (${state.abbr} Muni)`
   return (
@@ -1001,9 +1032,9 @@ export default function BlendedYield() {
               <thead>
                 <tr>
                   <th className="by-portfolio-check-col" aria-label="Selected"></th>
-                  <th>Ticker</th>
-                  <th>Description</th>
-                  <th>Current Value</th>
+                  {PORTFOLIO_PICKER_COLUMNS.slice(1).map(col => (
+                    <LotSortHeader key={col.key} column={col} sort={pickerSort} onSort={onPickerSort} />
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -1012,8 +1043,8 @@ export default function BlendedYield() {
                     <td colSpan={4} className="by-portfolio-empty">Loading portfolio holdings...</td>
                   </tr>
                 )}
-                {!loadingPortfolio && visiblePortfolioHoldings.map(h => {
-                  const description = FUND_DB[h.ticker]?.name || (h.categories || []).join(', ') || 'Current portfolio holding'
+                {!loadingPortfolio && sortedPickerRows.map(h => {
+                  const { description } = h
                   return (
                     <tr key={h.ticker} onClick={() => togglePortfolioTicker(h.ticker)}>
                       <td className="by-portfolio-check-col">
@@ -1206,21 +1237,13 @@ export default function BlendedYield() {
             <table className="by-table">
               <thead>
                 <tr>
-                  <th title="Fund ticker symbol and name">Fund</th>
-                  <th title="Stated distribution (gross) yield, before any taxes">Yield</th>
-                  <th title="How this fund's distributions are taxed (e.g. fully taxable, treasury, municipal, return of capital, qualified/LTCG)">Tax Type</th>
-                  <th title="Effective tax rate applied to this fund's distributions, based on your tax profile">Tax Rate</th>
-                  <th title="After-Tax Yield — the yield you actually keep after taxes on this fund's distributions">ATY</th>
-                  <th title="Tax-Equivalent Yield — the gross yield a fully-taxable fund would need to match this fund's after-tax yield">TEY</th>
-                  <th title="This fund's share of the total portfolio, as a percent">Alloc %</th>
-                  <th title="Dollar amount allocated to this fund">Allocation</th>
-                  <th title="Estimated number of shares (allocation ÷ latest share price)">Shares</th>
-                  <th title="Estimated gross annual income (allocation × yield), before taxes">Annual Income</th>
-                  <th title="Estimated annual income from this fund after taxes">After-Tax</th>
+                  {FUND_TABLE_COLUMNS.map(col => (
+                    <LotSortHeader key={col.key} column={col} sort={fundSort} onSort={onFundSort} />
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {fundMetrics.filter(f => f.allocPct > 0).map(f => (
+                {sortedFundRows.map(f => (
                   <tr key={f.id}>
                     <td>
                       <span style={{ color: f.color, fontWeight: 700 }}>{f.ticker}</span>

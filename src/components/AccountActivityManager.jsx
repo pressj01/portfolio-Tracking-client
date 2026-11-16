@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDialog } from './DialogProvider'
 import { formatMoney } from '../utils/money'
+import LotSortHeader from './LotSortHeader'
+import useTableSort from '../utils/useTableSort'
 
 // Deposits, withdrawals and share transfers are what the Dashboard's Account
 // Alpha subtracts from the account's recorded value. Broker imports supply
@@ -48,6 +50,23 @@ const sectionTitle = {
 }
 const thStyle = { padding: '5px 8px', textAlign: 'left', borderBottom: '2px solid var(--border)', position: 'sticky', top: 0, background: 'var(--surface-inset)' }
 const tdStyle = { padding: '4px 8px', borderBottom: '1px solid var(--grid-line)', verticalAlign: 'top' }
+
+const flowAmount = row => {
+  const money = row.base_amount ?? row.amount
+  if (money != null) return Number(money)
+  const quantity = Number(row.quantity || 0)
+  return row.direction === 'OUT' ? -quantity : quantity
+}
+
+const FLOW_COLUMNS = [
+  { key: 'activity_date', label: 'Date', type: 'date' },
+  { key: 'profile_name', label: 'Account', type: 'string', accountOnly: true },
+  { key: 'activity_type', label: 'Type', type: 'string', value: row => TYPE_LABELS[row.activity_type] || row.raw_type || row.activity_type },
+  { key: 'amount', label: 'Amount', type: 'number', value: flowAmount, align: { textAlign: 'right' } },
+  { key: 'description', label: 'Description', type: 'string', value: row => row.description || row.raw_type || '' },
+  { key: 'counted', label: 'Counted', type: 'string', value: row => (row.performance_treatment === 'EXTERNAL_FLOW' ? 'Yes' : 'No') },
+  { key: 'source', label: 'Source', type: 'string', value: row => sourceLabel(row.source_format) },
+]
 
 export default function AccountActivityManager({ pf, onClose }) {
   const dialog = useDialog()
@@ -138,8 +157,10 @@ export default function AccountActivityManager({ pf, onClose }) {
       || new Set((data?.covered_runs || []).map(row => row.profile_id)).size > 1,
     [data],
   )
-  const flows = data?.flows || []
-  const shownFlows = flows.slice(0, 400)
+  const flows = useMemo(() => data?.flows || [], [data])
+  const latestFlows = useMemo(() => flows.slice(0, 400), [flows])
+  const flowColumns = useMemo(() => FLOW_COLUMNS.filter(col => !col.accountOnly || showAccount), [showAccount])
+  const { sorted: shownFlows, sort: flowSort, onSort: onFlowSort } = useTableSort(latestFlows, flowColumns)
 
   return (
     <div
@@ -300,13 +321,10 @@ export default function AccountActivityManager({ pf, onClose }) {
                 <table style={{ width: '100%', fontSize: '0.78rem', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
-                      <th style={thStyle}>Date</th>
-                      {showAccount && <th style={thStyle}>Account</th>}
-                      <th style={thStyle}>Type</th>
-                      <th style={{ ...thStyle, textAlign: 'right' }}>Amount</th>
-                      <th style={thStyle}>Description</th>
-                      <th style={thStyle}>Counted</th>
-                      <th style={thStyle}>Source</th>
+                      {flowColumns.map(col => (
+                        <LotSortHeader key={col.key} column={col} sort={flowSort} onSort={onFlowSort}
+                          style={{ ...thStyle, ...col.align }} />
+                      ))}
                       {editable && <th style={thStyle} aria-label="Actions" />}
                     </tr>
                   </thead>
