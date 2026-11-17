@@ -9,7 +9,10 @@ const { spawn, execSync } = require('child_process')
 // build uses electron/main-prod.js instead, so this file is the dev entry.
 const isDev = process.env.NODE_ENV !== 'production'
 const shouldOpenDevTools = process.env.PORTFOLIO_OPEN_DEVTOOLS === '1'
-app.setAppUserModelId('com.press.portfolio.tracker.client')
+// The dev app gets its own taskbar identity. Sharing the installed app's id
+// ('com.press.portfolio.tracker.client', main-prod.js) let the installer's pin
+// replace the "Portfolio Tracker Dev" taskbar pin, which runs this checkout.
+app.setAppUserModelId('com.press.portfolio.tracker.client.dev')
 
 const PROJECT_ROOT = path.join(__dirname, '..')
 const BACKEND_DIR = path.join(PROJECT_ROOT, 'backend')
