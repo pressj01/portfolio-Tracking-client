@@ -7611,6 +7611,21 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   border-color: color-mix(in srgb, var(--neg) 45%, var(--border));
   background: color-mix(in srgb, var(--neg) 8%, transparent);
 }
+.pb-target {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  flex-wrap: wrap; margin-bottom: 0.75rem;
+}
+.pb-target-met {
+  border-color: color-mix(in srgb, var(--pos) 45%, var(--border));
+  background: color-mix(in srgb, var(--pos) 8%, transparent);
+}
+.pb-target .btn { flex-shrink: 0; }
+.pb-target-input { width: 64px; text-transform: none; }
+.pb-target-input.pb-target-money { width: 96px; }
+.pb-target-row { gap: 0.6rem; }
+.pb-target-equiv { font-size: 0.8rem; color: var(--text-dim); white-space: nowrap; }
+.pb-check { cursor: pointer; }
+.pb-check input { margin: 0; accent-color: var(--accent); }
 
 .pb-table-tools {
   display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;

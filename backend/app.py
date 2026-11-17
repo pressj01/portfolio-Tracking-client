@@ -53531,6 +53531,70 @@ def _builder_clean_amount(raw):
     return round(amount, 2)
 
 
+# Portfolio settings that steer target-yield balancing: (column, label, upper
+# bound, unit). Blank, null, and zero clear a setting.
+_BUILDER_TARGET_FIELDS = {
+    "target_yield_pct": ("The target yield", 500.0, "%"),
+    "target_monthly_income": ("The monthly income target", 1e12, ""),
+    "max_weight_pct": ("The max per holding", 100.0, "%"),
+}
+# A target is a yield or dollars a month, never both: setting one clears the other.
+_BUILDER_TARGET_PAIRS = {
+    "target_yield_pct": "target_monthly_income",
+    "target_monthly_income": "target_yield_pct",
+}
+
+
+def _builder_clean_target_field(field, raw):
+    """(value or None, error) for one of _BUILDER_TARGET_FIELDS."""
+    label, upper, unit = _BUILDER_TARGET_FIELDS[field]
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, f"{label} must be a number"
+    if not math.isfinite(value) or value < 0 or value > upper:
+        bound = f"{upper:g}{unit}" if unit else f"{upper:,.0f}"
+        return None, f"{label} must be between 0{unit} and {bound}"
+    if value == 0:
+        return None, None
+    return round(value, 2), None
+
+
+def _builder_target_updates(data):
+    """({column: value}, error) for the target settings present in ``data``."""
+    updates = {}
+    for field in _BUILDER_TARGET_FIELDS:
+        if field not in data:
+            continue
+        value, error = _builder_clean_target_field(field, data.get(field))
+        if error:
+            return None, error
+        updates[field] = value
+    for field, other in _BUILDER_TARGET_PAIRS.items():
+        if updates.get(field) is not None:
+            if updates.get(other) is not None:
+                return None, "Set the target as a yield or as monthly income, not both"
+            updates[other] = None
+    return updates, None
+
+
+def _builder_targets(conn, port_id):
+    """The portfolio's saved target settings; a missing or zero one is None."""
+    columns = list(_BUILDER_TARGET_FIELDS)
+    try:
+        row = conn.execute(
+            f"SELECT {', '.join(columns)} FROM builder_portfolios WHERE id = ?", (port_id,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    out = {}
+    for i, column in enumerate(columns):
+        value = _builder_finite(row[i]) if row is not None else None
+        out[column] = value if value and value > 0 else None
+    return out
+
+
 def _builder_clean_holdings(raw_holdings):
     """Validate a list of {ticker, dollar_amount}; same ticker twice is summed.
 
@@ -53622,7 +53686,8 @@ def builder_list_portfolios():
     pid = get_profile_id()
     conn = get_connection()
     rows = conn.execute("""
-        SELECT p.id, p.name, p.notes, p.created_at, p.updated_at,
+        SELECT p.id, p.name, p.notes, p.target_yield_pct, p.target_monthly_income,
+               p.max_weight_pct, p.created_at, p.updated_at,
                (SELECT COUNT(*) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS holding_count,
                (SELECT COALESCE(SUM(h.dollar_amount), 0) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS total_value
         FROM builder_portfolios p WHERE p.profile_id = ?
@@ -53646,6 +53711,9 @@ def builder_create_portfolio():
     if not name:
         return jsonify({"error": "Name is required"}), 400
     notes = str(data.get("notes") or "").strip()
+    targets, error = _builder_target_updates(data)
+    if error:
+        return jsonify({"error": error}), 400
     holdings = []
     conn = get_connection()
     try:
@@ -53659,8 +53727,10 @@ def builder_create_portfolio():
                 return jsonify({"error": error}), 400
         try:
             cur = conn.execute(
-                "INSERT INTO builder_portfolios (profile_id, name, notes) VALUES (?, ?, ?)",
-                (pid, name, notes))
+                "INSERT INTO builder_portfolios (profile_id, name, notes, target_yield_pct, "
+                "target_monthly_income, max_weight_pct) VALUES (?, ?, ?, ?, ?, ?)",
+                (pid, name, notes, targets.get("target_yield_pct"),
+                 targets.get("target_monthly_income"), targets.get("max_weight_pct")))
         except sqlite3.IntegrityError:
             return jsonify({"error": f'A portfolio named "{name}" already exists.'}), 409
         new_id = cur.lastrowid
@@ -53686,6 +53756,12 @@ def builder_update_portfolio(port_id):
     if "notes" in data:
         fields.append("notes = ?")
         vals.append(str(data.get("notes") or "").strip())
+    targets, error = _builder_target_updates(data)
+    if error:
+        return jsonify({"error": error}), 400
+    for column, value in targets.items():
+        fields.append(f"{column} = ?")
+        vals.append(value)
     if not fields:
         return jsonify({"error": "Nothing to update"}), 400
     fields.append("updated_at = CURRENT_TIMESTAMP")
@@ -54916,35 +54992,271 @@ _BUILDER_NO_PRICES = (
 )
 
 
-@app.route("/api/builder/portfolios/<int:port_id>/analyze", methods=["POST"])
-def builder_analyze(port_id):
-    data = request.get_json(silent=True) or {}
+def _builder_run_analysis(port_id, data):
+    """Grade one saved model portfolio: (analysis, None) or (None, (error, status))."""
     grading_settings, benchmark, period_range = _builder_request_options(data)
 
     conn = get_connection()
     try:
         port = _builder_portfolio_row(conn, port_id)
         if port is None:
-            return jsonify({"error": "Portfolio not found"}), 404
+            return None, ("Portfolio not found", 404)
         holdings = _builder_load_holdings(conn, port_id)
+        targets = _builder_targets(conn, port_id)
     finally:
         conn.close()
     if not holdings:
-        return jsonify({"error": "No holdings in this portfolio"}), 400
+        return None, ("No holdings in this portfolio", 400)
 
     tickers = [h["ticker"] for h in holdings]
     try:
         adjusted, price = _builder_price_frames([*tickers, benchmark], period_range)
     except Exception as e:
-        return jsonify({"error": f"Price download failed: {e}"}), 502
+        return None, (f"Price download failed: {e}", 502)
     if adjusted.empty:
-        return jsonify({"error": _BUILDER_NO_PRICES}), 503
+        return None, (_BUILDER_NO_PRICES, 503)
 
     yields = _builder_yields(tickers, _builder_last_prices(adjusted, price, tickers))
     result = _builder_analyze_holdings(
         holdings, adjusted, price, benchmark, period_range, grading_settings, yields)
-    result.update({"portfolio_id": port_id, "portfolio_name": port["name"]})
+    result.update({"portfolio_id": port_id, "portfolio_name": port["name"], **targets})
+    return result, None
+
+
+@app.route("/api/builder/portfolios/<int:port_id>/analyze", methods=["POST"])
+def builder_analyze(port_id):
+    result, failure = _builder_run_analysis(port_id, request.get_json(silent=True) or {})
+    if failure:
+        return jsonify({"error": failure[0]}), failure[1]
     return jsonify(result)
+
+
+# ── Portfolio Builder Export ─────────────────────────────────────────────────
+
+# (header, analysis key). The same columns, in the same order, as the Builder's
+# holdings table; the last row is the portfolio as a whole.
+_BUILDER_EXPORT_COLUMNS = [
+    ("Ticker", "ticker"),
+    ("Amount", "dollar_amount"),
+    ("Weight %", "weight_pct"),
+    ("Shares", "shares"),
+    ("Price", "current_price"),
+    ("Grade", "grade"),
+    ("Score", "score"),
+    ("Ulcer Index", "ulcer_index"),
+    ("Sharpe", "sharpe"),
+    ("Sortino", "sortino"),
+    ("Calmar", "calmar"),
+    ("Omega", "omega"),
+    ("Max Drawdown %", "max_drawdown"),
+    ("Down Capture", "down_capture"),
+    ("Up Capture", "up_capture"),
+    ("Volatility %", "annual_vol"),
+    ("Total Return %", "total_return_pct"),
+    ("Price Change %", "price_change_pct"),
+    ("Annualized Return %", "annual_ret"),
+    ("Yield %", "annual_yield_pct"),
+    ("Yield Source", "yield_source"),
+    ("Annual Income", "annual_income"),
+    ("Monthly Income", "monthly_income"),
+]
+_BUILDER_EXPORT_MONEY_HEADERS = ("Amount", "Price", "Annual Income", "Monthly Income")
+_BUILDER_EXPORT_FORMATS = {
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv",
+}
+
+
+def _builder_export_rows(analysis, fx):
+    """(holding rows, portfolio row) keyed by export header, in display currency."""
+    pm = analysis["portfolio_metrics"]
+    grade = pm.get("grade") or {}
+    rows = [
+        {header: row.get(key) for header, key in _BUILDER_EXPORT_COLUMNS}
+        for row in analysis["holdings"]
+    ]
+    max_drawdown = pm.get("max_drawdown")
+    total = {header: None for header, _key in _BUILDER_EXPORT_COLUMNS}
+    total.update({
+        "Ticker": "Portfolio",
+        "Amount": pm.get("total_value"),
+        "Weight %": 100.0 if pm.get("total_value") else None,
+        "Grade": grade.get("overall"),
+        "Score": grade.get("score"),
+        "Ulcer Index": pm.get("ulcer_index"),
+        "Sharpe": pm.get("sharpe"),
+        "Sortino": pm.get("sortino"),
+        "Calmar": pm.get("calmar"),
+        "Omega": pm.get("omega"),
+        # The grade carries drawdown as a fraction; the holdings carry percent.
+        "Max Drawdown %": _builder_finite(max_drawdown * 100) if max_drawdown is not None else None,
+        "Down Capture": pm.get("down_capture"),
+        "Up Capture": pm.get("up_capture"),
+        "Volatility %": pm.get("annual_vol"),
+        "Total Return %": pm.get("total_return_pct"),
+        "Annualized Return %": pm.get("annual_ret"),
+        "Yield %": pm.get("yield_pct"),
+        "Annual Income": pm.get("est_annual_income"),
+        "Monthly Income": pm.get("est_monthly_income"),
+    })
+    converted = _convert_export_rows([*rows, total], _BUILDER_EXPORT_MONEY_HEADERS, fx)
+    return converted[:-1], converted[-1]
+
+
+def _builder_export_summary(analysis, fx):
+    """(label, value) pairs for the Summary sheet, in display currency."""
+    pm = analysis["portfolio_metrics"]
+    window = analysis["window"]
+    grade = pm.get("grade") or {}
+    rate = fx["rate"] if fx["currency"] == "CAD" else 1.0
+
+    def money(value):
+        return round(float(value) * rate, 2) if value is not None else None
+
+    total_value = pm.get("total_value") or 0.0
+    current_yield = pm.get("yield_pct")
+    monthly_target = analysis.get("target_monthly_income")
+    target = analysis.get("target_yield_pct")
+    if monthly_target is not None:
+        # A monthly target is a yield that moves with the total invested.
+        target = _builder_finite(monthly_target * 12 / total_value * 100) if total_value > 0 else None
+    elif target is not None:
+        monthly_target = total_value * target / 1200
+    gap = shortfall = None
+    if target is not None and current_yield is not None:
+        gap = round(current_yield - target, 2)
+        shortfall = max(total_value * target / 100 - (pm.get("est_annual_income") or 0.0), 0.0)
+    span = (
+        f"{window['actual_start_date']} to {window['actual_end_date']}"
+        if window.get("actual_start_date") else ""
+    )
+    return [
+        ("Portfolio", analysis["portfolio_name"]),
+        ("Period", window.get("period_label")),
+        ("Window", span),
+        ("Trading days", window.get("window_observations")),
+        ("Benchmark", analysis["benchmark"]),
+        ("Holdings", pm.get("n_holdings")),
+        ("Holdings graded", pm.get("n_graded")),
+        ("Total value", money(pm.get("total_value"))),
+        ("Est. annual income", money(pm.get("est_annual_income"))),
+        ("Est. monthly income", money(pm.get("est_monthly_income"))),
+        ("Yield %", current_yield),
+        ("Target set as", "Monthly income" if analysis.get("target_monthly_income") is not None
+         else "Yield %" if target is not None else ""),
+        ("Target yield %", target),
+        ("Target monthly income", money(monthly_target)),
+        ("Yield vs target (pts)", gap),
+        ("Annual income short of target", money(shortfall)),
+        ("Max per holding %", analysis.get("max_weight_pct")),
+        ("Grade", grade.get("overall")),
+        ("Score", grade.get("score")),
+        ("Total return %", pm.get("total_return_pct")),
+        (f"{analysis['benchmark']} total return %", pm.get("benchmark_total_return_pct")),
+        ("Annualized return %", pm.get("annual_ret")),
+        ("Volatility %", pm.get("annual_vol")),
+        ("Beta", pm.get("beta")),
+        ("Currency", fx["currency"]),
+        ("Exported", datetime.datetime.now().strftime("%Y-%m-%d %H:%M")),
+    ]
+
+
+def _builder_export_filename(name, period_key, extension):
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", str(name or "")).strip("_") or "model"
+    return f"portfolio_builder_{slug}_{period_key}.{extension}"
+
+
+@app.route("/api/builder/portfolios/<int:port_id>/export", methods=["POST"])
+def builder_export(port_id):
+    """The Builder's holdings table as an Excel workbook or a CSV file.
+
+    Graded through the same path as Analyze, so the file carries the numbers
+    the page shows for the same period, benchmark, and grade settings.
+    """
+    data = request.get_json(silent=True) or {}
+    fmt = str(data.get("format") or "xlsx").strip().lower()
+    if fmt not in _BUILDER_EXPORT_FORMATS:
+        return jsonify({"error": "format must be xlsx or csv"}), 400
+    analysis, failure = _builder_run_analysis(port_id, data)
+    if failure:
+        return jsonify({"error": failure[0]}), failure[1]
+
+    from io import BytesIO
+
+    fx = _export_currency_context()
+    rows, total = _builder_export_rows(analysis, fx)
+    headers = [header for header, _key in _BUILDER_EXPORT_COLUMNS]
+    filename = _builder_export_filename(
+        analysis["portfolio_name"], analysis["window"]["period_key"], fmt)
+
+    if fmt == "csv":
+        import csv
+        from io import StringIO
+
+        text = StringIO()
+        writer = csv.DictWriter(text, fieldnames=headers)
+        writer.writeheader()
+        for row in [*rows, total]:
+            writer.writerow({h: "" if row[h] is None else row[h] for h in headers})
+        # The BOM makes Excel read the file as UTF-8 rather than the ANSI codepage.
+        out = BytesIO(text.getvalue().encode("utf-8-sig"))
+        return send_file(out, as_attachment=True, download_name=filename,
+                         mimetype=_BUILDER_EXPORT_FORMATS[fmt])
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
+    row_border = Border(bottom=Side(style="thin", color="90CAF9"))
+    total_border = Border(top=Side(style="medium", color="1565C0"))
+    text_headers = {"Ticker", "Grade", "Yield Source"}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Holdings"
+    for ci, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=ci, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[get_column_letter(ci)].width = max(len(header) + 4, 12)
+    for ri, row in enumerate([*rows, total], 2):
+        is_total = ri == len(rows) + 2
+        for ci, header in enumerate(headers, 1):
+            cell = ws.cell(row=ri, column=ci, value=row[header])
+            cell.border = total_border if is_total else row_border
+            if is_total:
+                cell.font = Font(bold=True)
+            if header in _BUILDER_EXPORT_MONEY_HEADERS:
+                cell.number_format = "#,##0.00"
+            elif header == "Shares":
+                cell.number_format = "#,##0.0000"
+            elif header not in text_headers:
+                cell.number_format = "0.00"
+    ws.freeze_panes = "B2"
+
+    summary = wb.create_sheet(title="Summary")
+    money_labels = {"Total value", "Est. annual income", "Est. monthly income",
+                    "Target monthly income", "Annual income short of target"}
+    for ri, (label, value) in enumerate(_builder_export_summary(analysis, fx), 1):
+        summary.cell(row=ri, column=1, value=label).font = Font(bold=True)
+        cell = summary.cell(row=ri, column=2, value=value)
+        cell.alignment = Alignment(horizontal="left")
+        if label in money_labels:
+            cell.number_format = "#,##0.00"
+    summary.column_dimensions["A"].width = 32
+    summary.column_dimensions["B"].width = 34
+    if fx["currency"] == "CAD":
+        _add_export_info_sheet(wb, fx)
+        wb.move_sheet("Export Info", offset=len(wb.sheetnames) - 1)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=filename,
+                     mimetype=_BUILDER_EXPORT_FORMATS[fmt])
 
 
 # ── Portfolio Builder Compare ────────────────────────────────────────────────

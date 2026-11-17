@@ -5490,6 +5490,27 @@ function PortfolioBuilderHelp() {
         <li>The <strong>Portfolio</strong> row at the bottom shows the same measures for the whole model. Use the column chips to show only the risk or the return-and-income columns, and click a header to sort.</li>
       </ul>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Target Yield</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Type your income goal in <strong>Target</strong> and choose its unit: <strong>% yield</strong>, or <strong>$ / month</strong> of income (Enter or click away to save). Beside the box the page shows what it equals in the other unit on today&apos;s total, for example $5,000 a month = 6.00% yield on $1,000,000. Switching units keeps the same goal, restated. The target is saved with the portfolio and copied by Save As. Clear the box for no target.</li>
+        <li>A monthly target stays a dollar amount: if you add or remove money, the yield it needs changes with the total.</li>
+        <li>A line under the Add row shows where the model stands: its yield and monthly income, how far above or below the target it is, and any holding above the max per holding.</li>
+        <li>When the income is below the target, <strong>Balance to target</strong> moves dollars out of the lower-yielding holdings and into the higher-yielding ones, just far enough to reach it. No holding is removed, holdings with the same yield keep their proportions to each other, and each share count follows its new amount. <strong>Undo</strong> puts the amounts back.</li>
+        <li><strong>Max per holding</strong> limits how much of the portfolio Balance may put in any one holding (for example 25%). With it set, Balance never builds a holding past it, and if a holding is already over it, <strong>Apply max per holding</strong> brings it down and spreads the difference over the others, keeping as much yield as the cap allows and never dropping below the target. A cap lowers the highest yield the holdings can reach, and it needs enough holdings to hold every dollar (four holdings for a 25% cap).</li>
+        <li><strong>Whole shares</strong> makes Balance buy whole shares at the latest price instead of fractional amounts. Every holding keeps at least one share, and what no share fits into is left over as cash, so the total invested drops by less than one share&apos;s price. The yield lands on the target or a little above it.</li>
+        <li>A target above what the holdings can reach cannot be met by shifting dollars: the line says how high they can go, and you add a higher-yielding fund, raise the max per holding, or lower the target. A holding with no price is left untouched.</li>
+        <li>A high target can concentrate the model in one or two funds. Check the grade, the largest-holding figure, and the Price Δ column after balancing: a higher yield is not a higher return.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Exporting</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Export Excel</strong> downloads a workbook with the holdings table (every column, plus the
+        Portfolio row) and a Summary sheet: period, window, benchmark, total value, income, yield, the
+        target as both a yield and monthly income and the gap to it, the max per holding, grade, and return. <strong>Export CSV</strong> downloads the holdings
+        table alone. Both use the period and benchmark selected on the page, and amounts are in your display
+        currency.
+      </p>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Report Card and Charts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The report card shows the overall grade, each factor's measured value, its 0–100 score, letter,
