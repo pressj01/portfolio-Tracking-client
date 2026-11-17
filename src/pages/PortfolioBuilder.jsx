@@ -3,7 +3,15 @@ import { useTheme } from '../context/ThemeContext'
 import { chartTheme, themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
-import { formatMoney } from '../utils/money'
+import { formatMoney, getDisplayCurrency, getMoneyDisplayConfig } from '../utils/money'
+import {
+  balanceToTargetYield,
+  holdingsOverCap,
+  monthlyToYieldPct,
+  yieldPctToMonthly,
+  yieldRange,
+  yieldTargetStatus,
+} from '../utils/targetYield'
 import { GRADING_PREFERENCES_EVENT, gradingSettingsPayload } from '../utils/gradingPreferences'
 import { PERFORMANCE_PERIODS } from '../utils/performancePeriods'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
@@ -26,6 +34,14 @@ const PREF_PERIOD = 'portfolioBuilder.period'
 const PREF_BENCHMARK = 'portfolioBuilder.benchmark'
 const PREF_VIEW = 'portfolioBuilder.columnView'
 const PREF_LAST = 'portfolioBuilder.lastPortfolio:'
+const PREF_WHOLE_SHARES = 'portfolioBuilder.wholeShares'
+
+// Amounts are stored in USD and shown in the display currency: the factor a
+// stored amount is multiplied by to show it.
+function moneyRate() {
+  const { currency, usdToCadRate } = getMoneyDisplayConfig()
+  return currency === 'CAD' && usdToCadRate > 0 ? usdToCadRate : 1
+}
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
@@ -327,6 +343,108 @@ function AnalysisNotes({ data }) {
   )
 }
 
+// ── Target yield ─────────────────────────────────────────────────────────────
+
+const BALANCE_HELP = 'Moves dollars out of the lower-yielding holdings and into the higher-yielding ones, '
+  + 'just far enough to reach the target. No holding is removed, holdings with the same yield keep their '
+  + 'proportions, and each share count follows its new amount. You can undo it.'
+const CAP_HELP = 'Brings every holding down to the max per holding and spreads the difference over the others, '
+  + 'keeping the yield as close to where it is as the cap allows (and never below the target). You can undo it.'
+
+const listTickers = items => {
+  const names = items.map(i => i.ticker)
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]
+}
+
+function blockedReason(plan) {
+  if (!plan || plan.ok) return null
+  switch (plan.reason) {
+    case 'above_max':
+      return plan.cap != null
+        ? `With no holding above ${fmtN(plan.cap, 0)}%, these holdings reach at most ${fmtPct(plan.maxYieldPct, 2)}. Add a higher-yielding holding, raise the max per holding, or lower the target.`
+        : `No mix of these holdings gets there: with everything in ${plan.maxTicker}, the highest yielder, the portfolio would yield ${fmtPct(plan.maxYieldPct, 2)}. Add a higher-yielding holding or lower the target.`
+    case 'cap_too_low':
+      return `A ${fmtN(plan.cap, 0)}% max per holding needs at least ${plan.minHoldings} holdings to hold every dollar. Add holdings or raise the max.`
+    case 'no_price':
+      return 'Whole shares needs a price for every holding. Turn Whole shares off, or fix the symbol that has no price.'
+    case 'no_spread':
+      return 'There is nothing to shift between: add a higher-yielding holding or lower the target.'
+    default:
+      return 'No mix of these holdings reaches it.'
+  }
+}
+
+/**
+ * The line under the Add row: where the portfolio stands against its target
+ * (in the unit the target was set in, with the other beside it), any holding
+ * over the max per holding, and the one button that fixes either.
+ */
+function TargetYieldNotice({
+  status, plan, overCap, cap, monthlyTarget, undo, topHolding, total, busy, onBalance, onUndo,
+}) {
+  const monthlyAt = y => (isNum(y) && total > 0 ? (total * y) / 1200 : null)
+  const current = `${fmtPct(status.yieldPct, 2)} (${fmt$(monthlyAt(status.yieldPct))}/mo)`
+  const hasTarget = status.status !== 'none'
+  const target = !hasTarget ? null
+    : monthlyTarget != null
+      ? `${fmt$(monthlyTarget)}/mo target (${fmtPct(status.targetPct, 2)} yield)`
+      : `${fmtPct(status.targetPct, 2)} target (${fmt$(monthlyAt(status.targetPct))}/mo)`
+  const capNote = overCap.length
+    ? ` ${listTickers(overCap)} ${overCap.length === 1 ? 'is' : 'are'} above the ${fmtN(cap, 0)}% max per holding.`
+    : ''
+
+  if (undo) {
+    const lead = undo.kind === 'cap'
+      ? `Capped every holding at ${fmtN(cap, 0)}%; yield is now ${current}.`
+      : `Balanced to ${current}.`
+    const totalNote = undo.wholeShares && undo.cash > 0.005
+      ? ` In whole shares: ${fmt$(undo.cash)} is left over as cash, so the total invested is now ${fmt$(total)}.`
+      : ` The total invested is still ${fmt$(total)}.`
+    const concentration = cap == null && topHolding && topHolding.weight_pct >= 50
+      ? ` ${topHolding.ticker} is now ${fmtPct(topHolding.weight_pct, 0)} of the portfolio; set a Max per holding to limit that.`
+      : ''
+    return (
+      <div className="pb-notice pb-target pb-target-met" role="status">
+        <span><strong>{lead}</strong> Moved {fmt$(undo.moved)} between holdings.{totalNote}{concentration}</span>
+        <button type="button" className="btn btn-secondary pb-btn-sm" onClick={onUndo} disabled={busy}>Undo</button>
+      </div>
+    )
+  }
+
+  const blocked = blockedReason(plan)
+  const button = plan?.ok && (
+    <button
+      type="button"
+      className="btn btn-primary pb-btn-sm"
+      onClick={onBalance}
+      disabled={busy}
+      title={plan.kind === 'cap' ? CAP_HELP : BALANCE_HELP}
+    >{plan.kind === 'cap' ? 'Apply max per holding' : 'Balance to target'}</button>
+  )
+
+  if (status.status === 'short') {
+    const gap = monthlyTarget != null
+      ? `${fmt$(monthlyTarget - monthlyAt(status.yieldPct))}/mo short of the ${target}`
+      : `${fmtN(-status.gapPct, 2)} pts below the ${target}, about ${fmt$(status.incomeShort)} a year short`
+    return (
+      <div className="pb-notice pb-notice-warn pb-target" role="status">
+        <span><strong>Yield {current}</strong> is {gap}.{capNote}{blocked ? ` ${blocked}` : ''}</span>
+        {button}
+      </div>
+    )
+  }
+
+  const standing = hasTarget
+    ? <><strong>Yield {current}</strong> meets the {target}{status.gapPct >= 0.005 ? `, ${fmtN(status.gapPct, 2)} pts above it` : ''}.</>
+    : <><strong>Yield {current}.</strong></>
+  return (
+    <div className={`pb-notice pb-target ${overCap.length ? 'pb-notice-warn' : 'pb-target-met'}`} role="status">
+      <span>{standing}{capNote}{overCap.length && blocked ? ` ${blocked}` : ''}</span>
+      {overCap.length > 0 && button}
+    </div>
+  )
+}
+
 // ── Compare ──────────────────────────────────────────────────────────────────
 
 function CompareResults({ result, radarRef, onClose }) {
@@ -470,6 +588,14 @@ export default function PortfolioBuilder() {
   const [editingDollar, setEditingDollar] = useState(null)
   const committingRef = useRef(false)
 
+  // Target yield
+  const [targetInput, setTargetInput] = useState('')
+  const [targetMode, setTargetMode] = useState('yield') // 'yield' (%) or 'monthly' ($ a month)
+  const [capInput, setCapInput] = useState('')
+  const [wholeShares, setWholeSharesState] = useState(() => readPref(PREF_WHOLE_SHARES, '0') === '1')
+  const [balanceUndo, setBalanceUndo] = useState(null) // { pid, changes, moved, cash, kind, wholeShares }
+  const [exporting, setExporting] = useState(null)
+
   // Analysis
   const [period, setPeriodState] = useState(() => {
     const saved = readPref(PREF_PERIOD, '1y')
@@ -523,6 +649,29 @@ export default function PortfolioBuilder() {
 
   const active = portfolios.find(p => p.id === activeId) || null
   const activeName = active?.name || ''
+  const positive = v => (isNum(v) && Number(v) > 0 ? Number(v) : null)
+  const savedTargetYield = positive(active?.target_yield_pct)
+  const savedMonthly = positive(active?.target_monthly_income) // USD a month
+  const savedCap = positive(active?.max_weight_pct)
+
+  // The target box in a unit: a monthly amount shows in the display currency.
+  const targetInputFor = useCallback((mode) => {
+    if (mode === 'monthly') {
+      return savedMonthly == null ? '' : String(Math.round(savedMonthly * moneyRate() * 100) / 100)
+    }
+    return savedTargetYield == null ? '' : String(savedTargetYield)
+  }, [savedMonthly, savedTargetYield])
+
+  // A saved target opens in the unit it was set in; with none, the unit stays.
+  useEffect(() => {
+    const mode = savedMonthly != null ? 'monthly' : savedTargetYield != null ? 'yield' : null
+    if (mode) setTargetMode(mode)
+    setTargetInput(targetInputFor(mode || 'yield'))
+  }, [activeId, savedMonthly, savedTargetYield, targetInputFor])
+
+  useEffect(() => {
+    setCapInput(savedCap == null ? '' : String(savedCap))
+  }, [activeId, savedCap])
 
   const send = useCallback(async (path, method, body) => {
     const res = await pf(path, {
@@ -603,6 +752,7 @@ export default function PortfolioBuilder() {
     setEditingName(false)
     setEditingDollar(null)
     setSortCol(null)
+    setBalanceUndo(null)
     if (activeId) fetchHoldings(activeId)
   }, [activeId, fetchHoldings])
 
@@ -732,7 +882,13 @@ export default function PortfolioBuilder() {
     const name = (await dialog.prompt('Save a copy as:', `${activeName} copy`))?.trim()
     if (!name) return
     try {
-      const created = await send('/api/builder/portfolios', 'POST', { name, holdings })
+      const created = await send('/api/builder/portfolios', 'POST', {
+        name,
+        holdings,
+        target_yield_pct: savedTargetYield,
+        target_monthly_income: savedMonthly,
+        max_weight_pct: savedCap,
+      })
       await loadPortfolios()
       selectPortfolio(created.id)
     } catch (e) { await dialog.alert(e.message) }
@@ -982,6 +1138,197 @@ export default function PortfolioBuilder() {
       setSortCol(key)
       setSortAsc(key === 'ticker')
     }
+  }
+
+  // ── Target yield ───────────────────────────────────────────────────────────
+  // Read from the table's rows, so the status follows an amount the moment it
+  // is edited: a holding's yield does not depend on how much of it is held.
+  const yieldReady = Boolean(data) && tableRows.length > 0 && tableRows.every(r => !r.pending)
+  const yieldHoldings = useMemo(() => tableRows.map(r => ({
+    ticker: r.ticker,
+    dollar_amount: r.dollar_amount,
+    yieldPct: r.annual_yield_pct,
+    price: r.current_price,
+    // No price means the yield is unknown, not zero: leave that holding alone.
+    locked: !isNum(r.current_price),
+  })), [tableRows])
+  // A monthly target is a yield that moves with the total invested.
+  const targetYieldPct = savedMonthly != null ? monthlyToYieldPct(savedMonthly, totalInvested) : savedTargetYield
+  const targetStatus = useMemo(
+    () => (yieldReady ? yieldTargetStatus(yieldHoldings, targetYieldPct) : null),
+    [yieldReady, yieldHoldings, targetYieldPct],
+  )
+  const overCap = useMemo(
+    () => (yieldReady ? holdingsOverCap(yieldHoldings, savedCap) : []),
+    [yieldReady, yieldHoldings, savedCap],
+  )
+  // Short of the target: balance to it. On target (or with no target) but
+  // over the cap: bring the big holdings down, keeping as much yield as the
+  // cap allows and never dropping below the target.
+  const balancePlan = useMemo(() => {
+    if (!targetStatus) return null
+    const options = { maxWeightPct: savedCap, wholeShares }
+    if (targetStatus.status === 'short') {
+      let plan = null
+      if (wholeShares && savedMonthly != null) {
+        // Whole shares can leave up to a share's price as cash, and the income
+        // must still cover the target on the smaller total.
+        const priciest = Math.max(0, ...yieldHoldings.filter(h => !h.locked).map(h => Number(h.price) || 0))
+        const covered = monthlyToYieldPct(savedMonthly, totalInvested - priciest)
+        if (covered != null && priciest < totalInvested) plan = balanceToTargetYield(yieldHoldings, covered, options)
+      }
+      if (!plan?.ok) plan = balanceToTargetYield(yieldHoldings, targetYieldPct, options)
+      return { ...plan, kind: 'target' }
+    }
+    if (!overCap.length || targetStatus.yieldPct == null) return null
+    const range = yieldRange(yieldHoldings, savedCap)
+    if (!range?.feasible) return { ok: false, reason: 'cap_too_low', minHoldings: range?.minHoldings, cap: savedCap, kind: 'cap' }
+    const goal = Math.max(targetYieldPct ?? 0, Math.min(targetStatus.yieldPct, range.maxYieldPct))
+    return { ...balanceToTargetYield(yieldHoldings, goal, options), kind: 'cap' }
+  }, [targetStatus, overCap, yieldHoldings, savedCap, wholeShares, savedMonthly, totalInvested, targetYieldPct])
+  // Undo is offered only while the holdings are still exactly what Balance wrote.
+  const undoLive = Boolean(balanceUndo) && balanceUndo.pid === activeId && balanceUndo.changes.every(c => {
+    const held = holdings.find(h => h.ticker === c.ticker)
+    return held && Math.abs(held.dollar_amount - c.to) < 0.005
+  })
+  const topHolding = tableRows.reduce((top, r) => (!top || r.weight_pct > top.weight_pct ? r : top), null)
+
+  // What the typed (or saved) target means in the other unit, on today's total.
+  const typedTarget = targetInput.trim() !== '' && Number(targetInput) > 0
+    ? (targetMode === 'monthly' ? Number(targetInput) / moneyRate() : Number(targetInput))
+    : null
+  const targetEquivalent = typedTarget == null || !(totalInvested > 0) ? null
+    : targetMode === 'monthly'
+      ? `= ${fmtPct(monthlyToYieldPct(typedTarget, totalInvested), 2)} yield on ${fmt$(totalInvested)}`
+      : `= ${fmt$(yieldPctToMonthly(typedTarget, totalInvested))}/mo on ${fmt$(totalInvested)}`
+
+  const saveSettings = async (changes) => {
+    const pid = activeId
+    setFormError(null)
+    setBalanceUndo(null)
+    setPortfolios(prev => prev.map(p => (p.id === pid ? { ...p, ...changes } : p)))
+    try {
+      await send(`/api/builder/portfolios/${pid}`, 'PATCH', changes)
+    } catch (e) {
+      await dialog.alert(e.message)
+      loadPortfolios()
+    }
+  }
+
+  const commitTarget = async () => {
+    if (!activeId) return
+    const raw = targetInput.trim()
+    const typed = raw === '' ? 0 : Number(raw)
+    const monthly = targetMode === 'monthly'
+    const limit = monthly ? 1e12 : 500
+    if (!Number.isFinite(typed) || typed < 0 || typed > limit) {
+      setFormError(monthly ? 'Enter a monthly income target of $0 or more.' : 'Enter a target yield between 0% and 500%.')
+      setTargetInput(targetInputFor(targetMode))
+      return
+    }
+    // Typed in the display currency; saved, like every amount, in USD.
+    const value = typed > 0 ? Math.round((monthly ? typed / moneyRate() : typed) * 100) / 100 : null
+    const field = monthly ? 'target_monthly_income' : 'target_yield_pct'
+    const saved = monthly ? savedMonthly : savedTargetYield
+    const otherSaved = monthly ? savedTargetYield : savedMonthly
+    // Clearing the box clears the target in either unit.
+    if (value === saved && (value != null || otherSaved == null)) { setTargetInput(targetInputFor(targetMode)); return }
+    await saveSettings(value == null
+      ? { target_yield_pct: null, target_monthly_income: null }
+      : { [field]: value, ...(monthly ? { target_yield_pct: null } : { target_monthly_income: null }) })
+  }
+
+  // Switching units keeps the same target, restated on today's total.
+  const switchTargetMode = async (mode) => {
+    if (mode === targetMode) return
+    setTargetMode(mode)
+    if (!activeId || targetYieldPct == null || !(totalInvested > 0)) {
+      setTargetInput('')
+      return
+    }
+    const changes = mode === 'monthly'
+      ? { target_monthly_income: Math.round(yieldPctToMonthly(targetYieldPct, totalInvested) * 100) / 100, target_yield_pct: null }
+      : { target_yield_pct: Math.round(targetYieldPct * 100) / 100, target_monthly_income: null }
+    await saveSettings(changes)
+  }
+
+  const commitCap = async () => {
+    if (!activeId) return
+    const raw = capInput.trim()
+    const typed = raw === '' ? 0 : Number(raw)
+    if (!Number.isFinite(typed) || typed < 0 || typed > 100) {
+      setFormError('Enter a max per holding between 0% and 100%.')
+      setCapInput(savedCap == null ? '' : String(savedCap))
+      return
+    }
+    const value = typed > 0 && typed < 100 ? Math.round(typed * 100) / 100 : null
+    if (value === savedCap) { setCapInput(savedCap == null ? '' : String(savedCap)); return }
+    await saveSettings({ max_weight_pct: value })
+  }
+
+  const setWholeShares = (on) => {
+    setWholeSharesState(on)
+    writePref(PREF_WHOLE_SHARES, on ? '1' : '0')
+  }
+
+  const writeAmounts = async (pid, amounts) => {
+    setBusy(true)
+    try {
+      // Merge, not replace: holdings Balance did not touch stay as they are.
+      await send(`/api/builder/portfolios/${pid}/holdings`, 'PUT', { holdings: amounts, replace: false })
+      await refreshAfterWrite(pid)
+      return true
+    } catch (e) {
+      await dialog.alert(e.message)
+      return false
+    } finally { setBusy(false) }
+  }
+
+  const balanceToTarget = async () => {
+    if (!activeId || busy || !balancePlan?.ok) return
+    const changes = balancePlan.changes.filter(c => Math.abs(c.to - c.from) >= 0.005)
+    if (!changes.length) return
+    const undo = {
+      pid: activeId, changes, moved: balancePlan.moved, cash: balancePlan.cash, kind: balancePlan.kind, wholeShares,
+    }
+    setFormError(null)
+    if (await writeAmounts(activeId, changes.map(c => ({ ticker: c.ticker, dollar_amount: c.to })))) {
+      setBalanceUndo(undo)
+    }
+  }
+
+  const undoBalance = async () => {
+    if (!undoLive || busy) return
+    const { pid, changes } = balanceUndo
+    if (await writeAmounts(pid, changes.map(c => ({ ticker: c.ticker, dollar_amount: c.from })))) {
+      setBalanceUndo(null)
+    }
+  }
+
+  // ── Export ─────────────────────────────────────────────────────────────────
+  const exportPortfolio = async (format) => {
+    if (!activeId || !holdings.length || exporting) return
+    setExporting(format)
+    try {
+      const res = await pf(`/api/builder/portfolios/${activeId}/export?currency=${getDisplayCurrency()}`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ format, benchmark, period, grading_settings: gradingSettingsPayload() }),
+      })
+      if (!res.ok) {
+        const failure = await res.json().catch(() => ({}))
+        throw new Error(failure.error || `HTTP ${res.status}`)
+      }
+      const url = URL.createObjectURL(await res.blob())
+      const link = document.createElement('a')
+      const slug = activeName.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'model'
+      link.href = url
+      link.download = `portfolio_builder_${slug}_${period}.${format}`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      await dialog.alert(`Export failed: ${e.message}`)
+    } finally { setExporting(null) }
   }
 
   const visibleGroups = (COLUMN_VIEWS.find(v => v.key === columnView) || COLUMN_VIEWS[0]).groups
@@ -1328,6 +1675,20 @@ export default function PortfolioBuilder() {
               </div>
               <div className="pb-actions">
                 <button type="button" className="btn btn-success pb-btn-sm" onClick={openStrategies}>Strategies</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary pb-btn-sm"
+                  onClick={() => exportPortfolio('xlsx')}
+                  disabled={!holdings.length || Boolean(exporting)}
+                  title="Download the holdings table and a summary as an Excel workbook, for the selected period and benchmark."
+                >{exporting === 'xlsx' ? 'Exporting…' : 'Export Excel'}</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary pb-btn-sm"
+                  onClick={() => exportPortfolio('csv')}
+                  disabled={!holdings.length || Boolean(exporting)}
+                  title="Download the holdings table as a CSV file, for the selected period and benchmark."
+                >{exporting === 'csv' ? 'Exporting…' : 'Export CSV'}</button>
                 <button type="button" className="btn btn-secondary pb-btn-sm" onClick={saveAsPortfolio} disabled={!holdings.length || busy}>Save As</button>
                 <button type="button" className="btn btn-danger pb-btn-sm" onClick={clearHoldings} disabled={!holdings.length || busy}>Clear</button>
               </div>
@@ -1369,6 +1730,77 @@ export default function PortfolioBuilder() {
               </button>
             </div>
 
+            {/* Income target and how Balance may move money */}
+            <div className="pb-toolbar pb-target-row">
+              <label
+                className="pb-bench"
+                title="The income you are building this model toward, as a yield or as dollars a month. Saved with the portfolio. Leave it blank for no target."
+              >
+                <span>Target</span>
+                <input
+                  className={`pb-bench-input pb-target-input ${targetMode === 'monthly' ? 'pb-target-money' : ''}`}
+                  type="number"
+                  min="0"
+                  max={targetMode === 'monthly' ? undefined : 500}
+                  step={targetMode === 'monthly' ? 'any' : '0.1'}
+                  value={targetInput}
+                  onChange={e => setTargetInput(e.target.value)}
+                  onBlur={commitTarget}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    if (e.key === 'Escape') setTargetInput(targetInputFor(targetMode))
+                  }}
+                  placeholder="None"
+                  aria-label={targetMode === 'monthly' ? 'Target monthly income' : 'Target yield percent'}
+                />
+              </label>
+              <div className="pb-inline-group" role="group" aria-label="Target unit">
+                {[['yield', '% yield'], ['monthly', '$ / month']].map(([mode, label]) => (
+                  <button
+                    type="button"
+                    key={mode}
+                    className={`pb-period-btn ${targetMode === mode ? 'pb-period-active' : ''}`}
+                    onClick={() => switchTargetMode(mode)}
+                    aria-pressed={targetMode === mode}
+                    title={mode === 'monthly'
+                      ? 'Set the target as income a month. Its yield follows the total invested.'
+                      : 'Set the target as a yield on the total invested.'}
+                  >{label}</button>
+                ))}
+              </div>
+              {targetEquivalent && <span className="pb-target-equiv">{targetEquivalent}</span>}
+              <label
+                className="pb-bench"
+                title="The largest share of the portfolio Balance may put in one holding. Leave it blank for no limit."
+              >
+                <span>Max per holding</span>
+                <input
+                  className="pb-bench-input pb-target-input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={capInput}
+                  onChange={e => setCapInput(e.target.value)}
+                  onBlur={commitCap}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    if (e.key === 'Escape') setCapInput(savedCap == null ? '' : String(savedCap))
+                  }}
+                  placeholder="None"
+                  aria-label="Max per holding percent"
+                />
+                <span>%</span>
+              </label>
+              <label
+                className="pb-bench pb-check"
+                title="Balance in whole shares at the latest price. What no share fits into is left over as cash, so the total invested drops a little."
+              >
+                <input type="checkbox" checked={wholeShares} onChange={e => setWholeShares(e.target.checked)} />
+                <span>Whole shares</span>
+              </label>
+            </div>
+
             {/* Add holding */}
             <form className="pb-add-row" onSubmit={addHolding} noValidate>
               <input
@@ -1391,6 +1823,22 @@ export default function PortfolioBuilder() {
               <button type="submit" className="btn btn-primary pb-btn-sm" disabled={busy}>Add</button>
               {formError && <span className="pb-form-error">{formError}</span>}
             </form>
+
+            {targetStatus && (targetStatus.status !== 'none' || overCap.length > 0 || undoLive) && (
+              <TargetYieldNotice
+                status={targetStatus}
+                plan={balancePlan}
+                overCap={overCap}
+                cap={savedCap}
+                monthlyTarget={savedMonthly}
+                undo={undoLive ? balanceUndo : null}
+                topHolding={topHolding}
+                total={totalInvested}
+                busy={busy}
+                onBalance={balanceToTarget}
+                onUndo={undoBalance}
+              />
+            )}
 
             {error && <div className="alert alert-error">{error}</div>}
             {data && <AnalysisNotes data={data} />}

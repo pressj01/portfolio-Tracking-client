@@ -43,7 +43,8 @@ class PortfolioBuilderTest(unittest.TestCase):
             CREATE TABLE builder_portfolios (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 profile_id INTEGER NOT NULL DEFAULT 1,
-                name TEXT NOT NULL, notes TEXT,
+                name TEXT NOT NULL, notes TEXT, target_yield_pct REAL,
+                target_monthly_income REAL, max_weight_pct REAL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE (profile_id, name)
@@ -372,6 +373,211 @@ class PortfolioBuilderTest(unittest.TestCase):
         self.assertAlmostEqual(plan["SPYI"], 2250.0, delta=0.01)
         self.assertAlmostEqual(plan["QQQI"], 750.0, delta=0.01)
         self.assertNotIn("XYZ", plan)
+
+    # ── Target yield ─────────────────────────────────────────────────────────
+
+    def _listed(self, pid):
+        listed = self.client.get("/api/builder/portfolios?profile_id=1").get_json()["portfolios"]
+        return next(p for p in listed if p["id"] == pid)
+
+    def _set_target(self, pid, value, profile_id=1):
+        return self.client.patch(
+            f"/api/builder/portfolios/{pid}?profile_id={profile_id}", json={"target_yield_pct": value})
+
+    def test_target_yield_is_saved_with_the_portfolio(self):
+        pid = self._portfolio(self.HELD)
+        self.assertIsNone(self._listed(pid)["target_yield_pct"])
+        self.assertEqual(self._set_target(pid, "8.256").status_code, 200)
+        self.assertEqual(self._listed(pid)["target_yield_pct"], 8.26)
+        self.assertEqual(self._analyze(pid)[1]["target_yield_pct"], 8.26)
+
+    def test_blank_or_zero_clears_the_target_yield(self):
+        pid = self._portfolio(self.HELD)
+        for cleared in (None, "", 0):
+            self._set_target(pid, 6)
+            self.assertEqual(self._set_target(pid, cleared).status_code, 200, cleared)
+            self.assertIsNone(self._listed(pid)["target_yield_pct"], cleared)
+
+    def test_a_target_yield_must_be_a_sane_percentage(self):
+        pid = self._portfolio(self.HELD)
+        self._set_target(pid, 6)
+        for bad in (-1, 501, "abc", "inf", "nan"):
+            self.assertEqual(self._set_target(pid, bad).status_code, 400, bad)
+        self.assertEqual(self._listed(pid)["target_yield_pct"], 6.0)
+
+    def test_target_yield_of_another_profile_is_not_writable(self):
+        pid = self._portfolio(self.HELD, profile_id=2)
+        self.assertEqual(self._set_target(pid, 6, profile_id=1).status_code, 404)
+
+    def test_save_as_carries_the_target_yield(self):
+        response = self.client.post("/api/builder/portfolios?profile_id=1", json={
+            "name": "Copy", "target_yield_pct": 7.5,
+            "holdings": [{"ticker": "AAA", "dollar_amount": 100}],
+        })
+        self.assertEqual(response.status_code, 201, response.get_json())
+        self.assertEqual(self._listed(response.get_json()["id"])["target_yield_pct"], 7.5)
+
+    def _patch(self, pid, body):
+        return self.client.patch(f"/api/builder/portfolios/{pid}?profile_id=1", json=body)
+
+    def test_a_target_is_a_yield_or_a_monthly_income_never_both(self):
+        pid = self._portfolio(self.HELD)
+        self._set_target(pid, 6)
+        self.assertEqual(self._patch(pid, {"target_monthly_income": "5000"}).status_code, 200)
+        listed = self._listed(pid)
+        self.assertEqual(listed["target_monthly_income"], 5000.0)
+        self.assertIsNone(listed["target_yield_pct"])
+
+        self._set_target(pid, 7)
+        listed = self._listed(pid)
+        self.assertEqual(listed["target_yield_pct"], 7.0)
+        self.assertIsNone(listed["target_monthly_income"])
+
+        both = self._patch(pid, {"target_yield_pct": 5, "target_monthly_income": 100})
+        self.assertEqual(both.status_code, 400)
+        self.assertEqual(self._listed(pid)["target_yield_pct"], 7.0)
+
+    def test_clearing_a_monthly_target_leaves_the_yield_target_alone(self):
+        pid = self._portfolio(self.HELD)
+        self._set_target(pid, 6)
+        self.assertEqual(self._patch(pid, {"target_monthly_income": None}).status_code, 200)
+        self.assertEqual(self._listed(pid)["target_yield_pct"], 6.0)
+
+    def test_max_per_holding_is_saved_and_validated(self):
+        pid = self._portfolio(self.HELD)
+        self.assertEqual(self._patch(pid, {"max_weight_pct": 25}).status_code, 200)
+        self.assertEqual(self._listed(pid)["max_weight_pct"], 25.0)
+        # A cap does not touch the target.
+        self._set_target(pid, 6)
+        self.assertEqual(self._listed(pid)["max_weight_pct"], 25.0)
+        for bad in (-5, 101, "abc"):
+            self.assertEqual(self._patch(pid, {"max_weight_pct": bad}).status_code, 400, bad)
+        self.assertEqual(self._patch(pid, {"max_weight_pct": ""}).status_code, 200)
+        self.assertIsNone(self._listed(pid)["max_weight_pct"])
+        self.assertEqual(self._patch(pid, {"target_monthly_income": -1}).status_code, 400)
+
+    def test_analyze_reports_the_target_settings(self):
+        pid = self._portfolio(self.HELD)
+        self._patch(pid, {"target_monthly_income": 30, "max_weight_pct": 40})
+        analyzed = self._analyze(pid)[1]
+        self.assertEqual(analyzed["target_monthly_income"], 30.0)
+        self.assertIsNone(analyzed["target_yield_pct"])
+        self.assertEqual(analyzed["max_weight_pct"], 40.0)
+
+    def test_save_as_carries_the_monthly_target_and_the_cap(self):
+        response = self.client.post("/api/builder/portfolios?profile_id=1", json={
+            "name": "Copy", "target_monthly_income": 2500, "max_weight_pct": 30,
+            "holdings": [{"ticker": "AAA", "dollar_amount": 100}],
+        })
+        self.assertEqual(response.status_code, 201, response.get_json())
+        listed = self._listed(response.get_json()["id"])
+        self.assertEqual((listed["target_monthly_income"], listed["max_weight_pct"]), (2500.0, 30.0))
+
+    # ── Export ───────────────────────────────────────────────────────────────
+
+    YIELDS = {"AAA": (12.0, "x"), "BBB": (3.0, "x"), "CCC": (0.0, None)}
+
+    def _export(self, pid, fmt, profile_id=1):
+        self.yield_patch.stop()
+        try:
+            with patch.object(app_module, "_builder_distribution_yield",
+                              side_effect=lambda t, _p: self.YIELDS.get(t, (0.0, None))):
+                analyzed = self._analyze(pid, profile_id=profile_id)[1]
+                response = self.client.post(
+                    f"/api/builder/portfolios/{pid}/export?profile_id={profile_id}",
+                    json={"format": fmt, "benchmark": "SPY", "period": "1y"})
+        finally:
+            self.yield_patch.start()
+        return response, analyzed
+
+    def test_csv_export_carries_the_table_the_page_shows(self):
+        import csv
+        from io import StringIO
+
+        pid = self._portfolio(self.HELD, name="My Model / 2026")
+        response, analyzed = self._export(pid, "csv")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("portfolio_builder_My_Model_2026_1y.csv", response.headers["Content-Disposition"])
+        rows = list(csv.DictReader(StringIO(response.data.decode("utf-8-sig"))))
+
+        self.assertEqual([r["Ticker"] for r in rows], ["AAA", "BBB", "CCC", "Portfolio"])
+        for row, holding in zip(rows, analyzed["holdings"]):
+            self.assertAlmostEqual(float(row["Amount"]), holding["dollar_amount"])
+            self.assertAlmostEqual(float(row["Shares"]), holding["shares"])
+            self.assertAlmostEqual(float(row["Yield %"]), holding["annual_yield_pct"])
+            self.assertAlmostEqual(float(row["Annual Income"]), holding["annual_income"])
+            self.assertEqual(row["Grade"], holding["grade"])
+            self.assertAlmostEqual(float(row["Max Drawdown %"]), holding["max_drawdown"])
+        pm = analyzed["portfolio_metrics"]
+        total = rows[-1]
+        self.assertAlmostEqual(float(total["Amount"]), 3500.0)
+        self.assertAlmostEqual(float(total["Yield %"]), pm["yield_pct"])
+        self.assertAlmostEqual(float(total["Annual Income"]), pm["est_annual_income"])
+        self.assertEqual(total["Grade"], pm["grade"]["overall"])
+        # The grade holds drawdown as a fraction; the column is percent.
+        self.assertAlmostEqual(float(total["Max Drawdown %"]), pm["max_drawdown"] * 100, places=2)
+        self.assertEqual(total["Shares"], "")
+
+    def test_excel_export_has_the_holdings_and_a_summary_with_the_target(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+
+        pid = self._portfolio(self.HELD)
+        self._set_target(pid, 8)
+        response, analyzed = self._export(pid, "xlsx")
+        self.assertEqual(response.status_code, 200)
+        wb = load_workbook(BytesIO(response.data))
+        self.assertEqual(wb.sheetnames, ["Holdings", "Summary"])
+
+        table = list(wb["Holdings"].iter_rows(values_only=True))
+        headers = table[0]
+        self.assertEqual(headers[:5], ("Ticker", "Amount", "Weight %", "Shares", "Price"))
+        self.assertEqual([r[0] for r in table[1:]], ["AAA", "BBB", "CCC", "Portfolio"])
+        self.assertEqual(table[1][headers.index("Amount")], 1200.0)
+        self.assertEqual(table[1][headers.index("Yield %")], 12.0)
+
+        pm = analyzed["portfolio_metrics"]
+        summary = dict(wb["Summary"].iter_rows(values_only=True))
+        self.assertEqual(summary["Portfolio"], "Model")
+        self.assertEqual(summary["Total value"], 3500.0)
+        self.assertEqual(summary["Target yield %"], 8.0)
+        self.assertAlmostEqual(summary["Yield %"], pm["yield_pct"])
+        self.assertAlmostEqual(summary["Yield vs target (pts)"], pm["yield_pct"] - 8.0, places=2)
+        self.assertAlmostEqual(
+            summary["Annual income short of target"], 3500.0 * 0.08 - pm["est_annual_income"], places=2)
+        # 8% of $3,500 is $23.33 a month.
+        self.assertAlmostEqual(summary["Target monthly income"], 3500.0 * 0.08 / 12, places=2)
+
+    def test_excel_export_states_a_monthly_target_and_its_yield(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+
+        pid = self._portfolio(self.HELD)
+        self._patch(pid, {"target_monthly_income": 35, "max_weight_pct": 40})
+        response, _analyzed = self._export(pid, "xlsx")
+        summary = dict(load_workbook(BytesIO(response.data))["Summary"].iter_rows(values_only=True))
+        self.assertEqual(summary["Target set as"], "Monthly income")
+        self.assertEqual(summary["Target monthly income"], 35.0)
+        # $35 a month is $420 a year: 12% of $3,500.
+        self.assertEqual(summary["Target yield %"], 12.0)
+        self.assertEqual(summary["Max per holding %"], 40.0)
+
+    def test_export_without_a_target_leaves_the_target_rows_blank(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+
+        response, _analyzed = self._export(self._portfolio(self.HELD), "xlsx")
+        summary = dict(load_workbook(BytesIO(response.data))["Summary"].iter_rows(values_only=True))
+        self.assertIsNone(summary["Target yield %"])
+        self.assertIsNone(summary["Yield vs target (pts)"])
+        self.assertIsNone(summary["Annual income short of target"])
+
+    def test_export_refuses_what_it_cannot_export(self):
+        pid = self._portfolio(self.HELD)
+        self.assertEqual(self._export(pid, "pdf")[0].status_code, 400)
+        self.assertEqual(self._export(self._portfolio({}, name="Empty"), "csv")[0].status_code, 400)
+        other = self._portfolio(self.HELD, name="Theirs", profile_id=2)
+        self.assertEqual(self._export(other, "csv", profile_id=1)[0].status_code, 404)
 
 
 if __name__ == "__main__":
