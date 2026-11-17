@@ -47,9 +47,25 @@ export default function DialogProvider({ children }) {
     })
   }, [])
 
+  // Buttons with their own labels: choices is [{ label, value, primary }],
+  // shown in order. Resolves to the clicked choice's value; Escape gives null
+  // and Enter the primary choice.
+  const showChoose = useCallback((message, choices) => {
+    return new Promise((resolve) => {
+      resolveRef.current = resolve
+      setDialog({ type: 'choose', message, choices })
+    })
+  }, [])
+
   const handleKeyDown = (e) => {
     if (e.key === 'Escape') {
       close(dialog.type === 'alert' ? undefined : null)
+    }
+    if (e.key === 'Enter' && dialog.type === 'choose') {
+      e.preventDefault()
+      const primary = dialog.choices.find(c => c.primary)
+      close(primary ? primary.value : null)
+      return
     }
     if (e.key === 'Enter' && dialog.type !== 'prompt') {
       close(dialog.type === 'confirm' ? true : undefined)
@@ -57,7 +73,7 @@ export default function DialogProvider({ children }) {
   }
 
   return (
-    <DialogContext.Provider value={{ alert: showAlert, confirm: showConfirm, prompt: showPrompt }}>
+    <DialogContext.Provider value={{ alert: showAlert, confirm: showConfirm, prompt: showPrompt, choose: showChoose }}>
       {children}
       {dialog && (
         <div className="dialog-overlay" onKeyDown={handleKeyDown}>
@@ -92,6 +108,14 @@ export default function DialogProvider({ children }) {
                   <button className="btn btn-primary" onClick={() => close(inputRef.current?.value || '')}>OK</button>
                 </>
               )}
+              {dialog.type === 'choose' && dialog.choices.map(choice => (
+                <button
+                  key={choice.label}
+                  className={`btn ${choice.primary ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => close(choice.value)}
+                  autoFocus={Boolean(choice.primary)}
+                >{choice.label}</button>
+              ))}
             </div>
           </div>
         </div>

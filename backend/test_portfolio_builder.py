@@ -44,7 +44,7 @@ class PortfolioBuilderTest(unittest.TestCase):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 profile_id INTEGER NOT NULL DEFAULT 1,
                 name TEXT NOT NULL, notes TEXT, target_yield_pct REAL,
-                target_monthly_income REAL, max_weight_pct REAL,
+                target_monthly_income REAL, max_weight_pct REAL, starting_balance REAL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE (profile_id, name)
@@ -473,6 +473,75 @@ class PortfolioBuilderTest(unittest.TestCase):
         listed = self._listed(response.get_json()["id"])
         self.assertEqual((listed["target_monthly_income"], listed["max_weight_pct"]), (2500.0, 30.0))
 
+    # ── Editing a holding's ticker ───────────────────────────────────────────
+
+    def _rename(self, pid, old, new, merge=None, profile_id=1):
+        body = {"ticker": new}
+        if merge is not None:
+            body["merge"] = merge
+        return self.client.patch(
+            f"/api/builder/portfolios/{pid}/holdings/{old}?profile_id={profile_id}", json=body)
+
+    def _held(self, pid):
+        holdings = self.client.get(f"/api/builder/portfolios/{pid}/holdings?profile_id=1").get_json()
+        return [(h["ticker"], h["dollar_amount"]) for h in holdings["holdings"]]
+
+    def test_renaming_a_holding_keeps_its_amount_and_its_place(self):
+        pid = self._portfolio({"AAA": 100.0, "BLOX": 200.0, "CCC": 300.0})
+        response = self._rename(pid, "BLOX", " rblx ")
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(self._held(pid), [("AAA", 100.0), ("RBLX", 200.0), ("CCC", 300.0)])
+
+    def test_renaming_onto_a_held_symbol_asks_then_merges(self):
+        pid = self._portfolio({"AAA": 100.0, "BBB": 200.0})
+        refused = self._rename(pid, "BBB", "AAA")
+        self.assertEqual(refused.status_code, 409)
+        self.assertEqual(refused.get_json()["dollar_amount"], 100.0)
+        self.assertEqual(self._held(pid), [("AAA", 100.0), ("BBB", 200.0)])
+        merged = self._rename(pid, "BBB", "AAA", merge=True)
+        self.assertEqual(merged.status_code, 200)
+        self.assertEqual(self._held(pid), [("AAA", 300.0)])
+
+    def test_renaming_checks_the_symbol_the_holding_and_the_owner(self):
+        pid = self._portfolio({"AAA": 100.0})
+        self.assertEqual(self._rename(pid, "AAA", "TWO WORDS").status_code, 400)
+        self.assertEqual(self._rename(pid, "AAA", "").status_code, 400)
+        self.assertEqual(self._rename(pid, "ZZZ", "YYY").status_code, 404)
+        self.assertEqual(self._rename(pid, "AAA", "AAA").status_code, 200)
+        other = self._portfolio({"AAA": 100.0}, name="Theirs", profile_id=2)
+        self.assertEqual(self._rename(other, "AAA", "BBB", profile_id=1).status_code, 404)
+        self.assertEqual(self._held(pid), [("AAA", 100.0)])
+
+    # ── Starting balance ─────────────────────────────────────────────────────
+
+    def test_a_new_portfolio_can_start_with_a_balance_and_no_holdings(self):
+        response = self.client.post(
+            "/api/builder/portfolios?profile_id=1", json={"name": "Fresh", "starting_balance": "150000"})
+        self.assertEqual(response.status_code, 201, response.get_json())
+        listed = self._listed(response.get_json()["id"])
+        self.assertEqual(listed["starting_balance"], 150000.0)
+        self.assertEqual(listed["holding_count"], 0)
+
+    def test_starting_balance_is_saved_validated_and_cleared(self):
+        pid = self._portfolio(self.HELD)
+        self.assertEqual(self._patch(pid, {"starting_balance": 150000.456}).status_code, 200)
+        self.assertEqual(self._listed(pid)["starting_balance"], 150000.46)
+        # Setting it does not touch the target or the cap.
+        self._patch(pid, {"target_yield_pct": 6, "max_weight_pct": 30})
+        listed = self._listed(pid)
+        self.assertEqual((listed["starting_balance"], listed["target_yield_pct"], listed["max_weight_pct"]),
+                         (150000.46, 6.0, 30.0))
+        for bad in (-1, "abc", "inf"):
+            self.assertEqual(self._patch(pid, {"starting_balance": bad}).status_code, 400, bad)
+        self.assertEqual(self._patch(pid, {"starting_balance": ""}).status_code, 200)
+        self.assertIsNone(self._listed(pid)["starting_balance"])
+        self.assertEqual(self._analyze(pid)[1]["target_yield_pct"], 6.0)
+
+    def test_analyze_reports_the_starting_balance(self):
+        pid = self._portfolio(self.HELD)
+        self._patch(pid, {"starting_balance": 5000})
+        self.assertEqual(self._analyze(pid)[1]["starting_balance"], 5000.0)
+
     # ── Export ───────────────────────────────────────────────────────────────
 
     YIELDS = {"AAA": (12.0, "x"), "BBB": (3.0, "x"), "CCC": (0.0, None)}
@@ -517,6 +586,8 @@ class PortfolioBuilderTest(unittest.TestCase):
         # The grade holds drawdown as a fraction; the column is percent.
         self.assertAlmostEqual(float(total["Max Drawdown %"]), pm["max_drawdown"] * 100, places=2)
         self.assertEqual(total["Shares"], "")
+        # Each row's running total adds its amount to every row above it.
+        self.assertEqual([r["Running Total"] for r in rows], ["1200.0", "3000.0", "3500.0", ""])
 
     def test_excel_export_has_the_holdings_and_a_summary_with_the_target(self):
         from io import BytesIO
@@ -531,7 +602,7 @@ class PortfolioBuilderTest(unittest.TestCase):
 
         table = list(wb["Holdings"].iter_rows(values_only=True))
         headers = table[0]
-        self.assertEqual(headers[:5], ("Ticker", "Amount", "Weight %", "Shares", "Price"))
+        self.assertEqual(headers[:6], ("Ticker", "Amount", "Running Total", "Weight %", "Shares", "Price"))
         self.assertEqual([r[0] for r in table[1:]], ["AAA", "BBB", "CCC", "Portfolio"])
         self.assertEqual(table[1][headers.index("Amount")], 1200.0)
         self.assertEqual(table[1][headers.index("Yield %")], 12.0)
@@ -571,6 +642,20 @@ class PortfolioBuilderTest(unittest.TestCase):
         self.assertIsNone(summary["Target yield %"])
         self.assertIsNone(summary["Yield vs target (pts)"])
         self.assertIsNone(summary["Annual income short of target"])
+        self.assertIsNone(summary["Starting balance"])
+        self.assertIsNone(summary["Cash not invested"])
+
+    def test_excel_export_shows_the_starting_balance_and_the_cash_left(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+
+        pid = self._portfolio(self.HELD)
+        self._patch(pid, {"starting_balance": 5000})
+        response, _analyzed = self._export(pid, "xlsx")
+        summary = dict(load_workbook(BytesIO(response.data))["Summary"].iter_rows(values_only=True))
+        self.assertEqual(summary["Starting balance"], 5000.0)
+        self.assertEqual(summary["Total value"], 3500.0)
+        self.assertEqual(summary["Cash not invested"], 1500.0)
 
     def test_export_refuses_what_it_cannot_export(self):
         pid = self._portfolio(self.HELD)
