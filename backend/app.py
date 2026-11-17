@@ -53531,12 +53531,14 @@ def _builder_clean_amount(raw):
     return round(amount, 2)
 
 
-# Portfolio settings that steer target-yield balancing: (column, label, upper
-# bound, unit). Blank, null, and zero clear a setting.
+# Model portfolio settings: the starting balance and the ones that steer
+# target-yield balancing: (label, upper bound, unit). Blank, null, and zero
+# clear a setting.
 _BUILDER_TARGET_FIELDS = {
     "target_yield_pct": ("The target yield", 500.0, "%"),
     "target_monthly_income": ("The monthly income target", 1e12, ""),
     "max_weight_pct": ("The max per holding", 100.0, "%"),
+    "starting_balance": ("The starting balance", 1e12, ""),
 }
 # A target is a yield or dollars a month, never both: setting one clears the other.
 _BUILDER_TARGET_PAIRS = {
@@ -53687,7 +53689,7 @@ def builder_list_portfolios():
     conn = get_connection()
     rows = conn.execute("""
         SELECT p.id, p.name, p.notes, p.target_yield_pct, p.target_monthly_income,
-               p.max_weight_pct, p.created_at, p.updated_at,
+               p.max_weight_pct, p.starting_balance, p.created_at, p.updated_at,
                (SELECT COUNT(*) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS holding_count,
                (SELECT COALESCE(SUM(h.dollar_amount), 0) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS total_value
         FROM builder_portfolios p WHERE p.profile_id = ?
@@ -53728,9 +53730,10 @@ def builder_create_portfolio():
         try:
             cur = conn.execute(
                 "INSERT INTO builder_portfolios (profile_id, name, notes, target_yield_pct, "
-                "target_monthly_income, max_weight_pct) VALUES (?, ?, ?, ?, ?, ?)",
+                "target_monthly_income, max_weight_pct, starting_balance) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (pid, name, notes, targets.get("target_yield_pct"),
-                 targets.get("target_monthly_income"), targets.get("max_weight_pct")))
+                 targets.get("target_monthly_income"), targets.get("max_weight_pct"),
+                 targets.get("starting_balance")))
         except sqlite3.IntegrityError:
             return jsonify({"error": f'A portfolio named "{name}" already exists.'}), 409
         new_id = cur.lastrowid
@@ -54553,6 +54556,53 @@ def builder_delete_holding(port_id, ticker):
     return jsonify({"ok": True})
 
 
+@app.route("/api/builder/portfolios/<int:port_id>/holdings/<path:ticker>", methods=["PATCH"])
+def builder_rename_holding(port_id, ticker):
+    """Change a holding's symbol, keeping its amount and its place in the table.
+
+    A symbol the portfolio already holds is refused with 409 unless ``merge``
+    is set; then the two amounts are added into the holding already there.
+    """
+    data = request.get_json(silent=True) or {}
+    old = _builder_clean_ticker(ticker)
+    new = _builder_clean_ticker(data.get("ticker"))
+    if new is None:
+        return jsonify({"error": f"Invalid ticker: {data.get('ticker')!r}"}), 400
+    conn = get_connection()
+    try:
+        if _builder_portfolio_row(conn, port_id) is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        current = conn.execute(
+            "SELECT id, dollar_amount FROM builder_holdings WHERE portfolio_id = ? AND ticker = ?",
+            (port_id, old)).fetchone()
+        if current is None:
+            return jsonify({"error": f"{old} is not in this portfolio"}), 404
+        if new != old:
+            existing = conn.execute(
+                "SELECT id, dollar_amount FROM builder_holdings WHERE portfolio_id = ? AND ticker = ?",
+                (port_id, new)).fetchone()
+            if existing is not None:
+                if not data.get("merge"):
+                    return jsonify({
+                        "error": f"{new} is already in this portfolio",
+                        "exists": True,
+                        "dollar_amount": float(existing["dollar_amount"] or 0),
+                    }), 409
+                conn.execute(
+                    "UPDATE builder_holdings SET dollar_amount = ? WHERE id = ?",
+                    (round(float(existing["dollar_amount"] or 0) + float(current["dollar_amount"] or 0), 2),
+                     existing["id"]))
+                conn.execute("DELETE FROM builder_holdings WHERE id = ?", (current["id"],))
+            else:
+                conn.execute("UPDATE builder_holdings SET ticker = ? WHERE id = ?", (new, current["id"]))
+            conn.execute("UPDATE builder_portfolios SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (port_id,))
+            conn.commit()
+        holdings = _builder_load_holdings(conn, port_id)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "holdings": holdings})
+
+
 # ── Portfolio Builder Analyze ────────────────────────────────────────────────
 #
 # A model portfolio is graded exactly the way Dashboard grades a real one
@@ -55038,6 +55088,7 @@ def builder_analyze(port_id):
 _BUILDER_EXPORT_COLUMNS = [
     ("Ticker", "ticker"),
     ("Amount", "dollar_amount"),
+    ("Running Total", "running_total"),
     ("Weight %", "weight_pct"),
     ("Shares", "shares"),
     ("Price", "current_price"),
@@ -55060,7 +55111,7 @@ _BUILDER_EXPORT_COLUMNS = [
     ("Annual Income", "annual_income"),
     ("Monthly Income", "monthly_income"),
 ]
-_BUILDER_EXPORT_MONEY_HEADERS = ("Amount", "Price", "Annual Income", "Monthly Income")
+_BUILDER_EXPORT_MONEY_HEADERS = ("Amount", "Running Total", "Price", "Annual Income", "Monthly Income")
 _BUILDER_EXPORT_FORMATS = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "csv": "text/csv",
@@ -55071,10 +55122,13 @@ def _builder_export_rows(analysis, fx):
     """(holding rows, portfolio row) keyed by export header, in display currency."""
     pm = analysis["portfolio_metrics"]
     grade = pm.get("grade") or {}
-    rows = [
-        {header: row.get(key) for header, key in _BUILDER_EXPORT_COLUMNS}
-        for row in analysis["holdings"]
-    ]
+    rows = []
+    running = 0.0
+    for row in analysis["holdings"]:
+        # In the portfolio's saved order: the order the table shows unsorted.
+        running += float(row.get("dollar_amount") or 0)
+        rows.append({header: (round(running, 2) if key == "running_total" else row.get(key))
+                     for header, key in _BUILDER_EXPORT_COLUMNS})
     max_drawdown = pm.get("max_drawdown")
     total = {header: None for header, _key in _BUILDER_EXPORT_COLUMNS}
     total.update({
@@ -55138,7 +55192,11 @@ def _builder_export_summary(analysis, fx):
         ("Benchmark", analysis["benchmark"]),
         ("Holdings", pm.get("n_holdings")),
         ("Holdings graded", pm.get("n_graded")),
+        ("Starting balance", money(analysis.get("starting_balance"))),
         ("Total value", money(pm.get("total_value"))),
+        ("Cash not invested", money(
+            max(analysis["starting_balance"] - total_value, 0.0)
+            if analysis.get("starting_balance") is not None else None)),
         ("Est. annual income", money(pm.get("est_annual_income"))),
         ("Est. monthly income", money(pm.get("est_monthly_income"))),
         ("Yield %", current_yield),
@@ -55238,8 +55296,8 @@ def builder_export(port_id):
     ws.freeze_panes = "B2"
 
     summary = wb.create_sheet(title="Summary")
-    money_labels = {"Total value", "Est. annual income", "Est. monthly income",
-                    "Target monthly income", "Annual income short of target"}
+    money_labels = {"Starting balance", "Total value", "Cash not invested", "Est. annual income",
+                    "Est. monthly income", "Target monthly income", "Annual income short of target"}
     for ri, (label, value) in enumerate(_builder_export_summary(analysis, fx), 1):
         summary.cell(row=ri, column=1, value=label).font = Font(bold=True)
         cell = summary.cell(row=ri, column=2, value=value)

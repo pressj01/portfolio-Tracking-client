@@ -7585,12 +7585,12 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem; flex-wrap: wrap;
 }
 .pb-add-ticker {
-  width: 100px; background: var(--bg); border: 1px solid var(--border);
+  width: calc(10ch + 1.2rem); background: var(--bg); border: 1px solid var(--border);
   color: var(--text); padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.85rem;
   text-transform: uppercase;
 }
 .pb-add-dollars {
-  width: 120px; background: var(--bg); border: 1px solid var(--border);
+  width: calc(16ch + 1.2rem); background: var(--bg); border: 1px solid var(--border);
   color: var(--text); padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.85rem;
 }
 .pb-form-error { color: var(--neg); font-size: 0.8rem; margin-left: 0.25rem; }
@@ -7620,9 +7620,13 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   background: color-mix(in srgb, var(--pos) 8%, transparent);
 }
 .pb-target .btn { flex-shrink: 0; }
-.pb-target-input { width: 64px; text-transform: none; }
-.pb-target-input.pb-target-money { width: 96px; }
+/* Widths in ch so the boxes grow with the font: a number box also needs room
+   for its spinner. */
+.pb-target-input { width: calc(6ch + 2.6rem); text-transform: none; }
+.pb-target-input.pb-target-money { width: calc(10ch + 2.6rem); }
 .pb-target-row { gap: 0.6rem; }
+.pb-target-input.pb-balance-input { width: calc(11ch + 1.4rem); }
+.pb-target-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 0.15rem; }
 .pb-target-equiv { font-size: 0.8rem; color: var(--text-dim); white-space: nowrap; }
 .pb-check { cursor: pointer; }
 .pb-check input { margin: 0; accent-color: var(--accent); }
@@ -7670,6 +7674,7 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit;
 }
 .pb-sort-btn:hover { color: var(--accent); }
+.pb-sort-btn.pb-no-sort, .pb-sort-btn.pb-no-sort:hover { cursor: default; color: inherit; }
 .pb-ticker { font-weight: 600; color: var(--text-strong); }
 .pb-pending { color: var(--text-dim); margin-left: 0.2rem; }
 .pb-total-row td {
@@ -7677,6 +7682,21 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   background: color-mix(in srgb, var(--accent) 6%, var(--bg));
 }
 .pb-total-row td.pb-sticky { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+/* Starting balance: cash left to invest, with a bar of how much is in. */
+.pb-total-row.pb-cash-row td { border-top: 1px solid var(--border); font-weight: 600; }
+.pb-cash-row .pb-progress-wrap {
+  display: flex; align-items: center; gap: 0.75rem; text-align: left; white-space: nowrap;
+}
+.pb-progress {
+  flex: 0 0 auto; width: 220px; height: 8px; border-radius: 4px; overflow: hidden;
+  background: color-mix(in srgb, var(--text-dim) 22%, transparent);
+}
+.pb-progress span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.pb-progress-text { font-weight: 500; color: var(--text-dim); }
+.pb-cash-full .pb-progress span { background: var(--pos); }
+.pb-cash-full td:nth-child(2) { color: var(--pos); }
+.pb-cash-over .pb-progress span { background: var(--neg); }
+.pb-cash-over td:first-child, .pb-cash-over td:nth-child(2) { color: var(--neg); }
 .pb-dollar-cell { text-align: right; }
 .pb-link-btn {
   background: none; border: none; padding: 0; cursor: pointer; color: var(--accent);
@@ -7684,10 +7704,13 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 }
 .pb-link-btn:hover, .pb-link-btn:focus-visible { border-bottom-color: var(--accent); }
 .pb-dollar-input {
-  width: 100px; background: var(--bg); border: 1px solid var(--accent);
+  width: calc(11ch + 0.8rem); background: var(--bg); border: 1px solid var(--accent);
   color: var(--text); padding: 0.2rem 0.3rem; border-radius: 3px; font-size: 0.82rem;
   text-align: right;
 }
+.pb-dollar-input.pb-ticker-input { width: calc(8ch + 0.8rem); text-align: left; text-transform: uppercase; }
+/* A ticker reads as a symbol, not a link, until it is hovered. */
+.pb-link-btn.pb-ticker-btn { color: inherit; font-weight: inherit; }
 .pb-del-holding {
   background: none; border: none; color: var(--neg); font-size: 1rem;
   cursor: pointer; opacity: 0.45; padding: 0; line-height: 1;

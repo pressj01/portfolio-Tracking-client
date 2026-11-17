@@ -1048,9 +1048,10 @@ def ensure_tables_exist(conn=None):
     """)
     # Migration: the income a model is being built toward, as a yield % or as
     # dollars a month (at most one is set; NULL = no target), and the largest
-    # share of the portfolio balancing may put in one holding (NULL = no cap).
+    # share of the portfolio balancing may put in one holding (NULL = no cap),
+    # and the dollars the model starts out with (NULL = no starting balance).
     builder_cols = [r[1] for r in cur.execute("PRAGMA table_info(builder_portfolios)").fetchall()]
-    for column in ("target_yield_pct", "target_monthly_income", "max_weight_pct"):
+    for column in ("target_yield_pct", "target_monthly_income", "max_weight_pct", "starting_balance"):
         if column not in builder_cols:
             cur.execute(f"ALTER TABLE builder_portfolios ADD COLUMN {column} REAL")
 

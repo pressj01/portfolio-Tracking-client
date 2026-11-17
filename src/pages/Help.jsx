@@ -5460,9 +5460,10 @@ function PortfolioBuilderHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Holdings</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Type a ticker symbol and a <strong>dollar amount</strong> greater than zero, then press <strong>Add</strong> (or Enter).</li>
+        <li>Type a ticker symbol and a <strong>dollar amount</strong> greater than zero, then press <strong>Add</strong> (or Enter). With a starting balance set, you can type a percent of it instead, such as <strong>25%</strong>; the dollar amount it stands for shows beside the box.</li>
         <li>Adding a ticker that is already in the portfolio asks before changing its amount.</li>
-        <li>Click any amount in the table to <strong>edit it inline</strong>. Enter saves, Esc cancels.</li>
+        <li>With a starting balance set, a dollar amount under 1% of it asks first, since it is usually a percent typed without its % sign: <strong>Use 3% ($450.00)</strong>, <strong>Keep $3.00</strong>, or Cancel.</li>
+        <li>Each row is <strong>editable in place</strong>: click the <strong>ticker</strong> to change the symbol (the amount stays; onto a symbol already held, it offers to combine the two), the <strong>amount</strong> to type dollars or a percent of the starting balance, or the <strong>shares</strong> to type a share count, which sets the amount at the latest price. Enter or clicking away saves, Esc cancels.</li>
         <li>Remove a holding with the <strong>×</strong> button on its row.</li>
       </ol>
 
@@ -5488,6 +5489,18 @@ function PortfolioBuilderHelp() {
         <li><strong>Return:</strong> total return with distributions reinvested, the price (NAV) change alone, and the annualized return. A high yield beside a falling price is NAV erosion.</li>
         <li><strong>Income:</strong> forward yield and estimated annual and monthly income. The yield annualizes the fund's recent distributions at their current cadence (the issuer's rate for TappAlpha funds), because Yahoo's quoted yield badly understates many option-income funds.</li>
         <li>The <strong>Portfolio</strong> row at the bottom shows the same measures for the whole model. Use the column chips to show only the risk or the return-and-income columns, and click a header to sort.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Starting Balance</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Give a model the dollars it starts out with, such as $150,000: <strong>New Portfolio</strong> asks for it, or type it in <strong>Starting balance</strong> (Enter or click away to save). It is saved with the portfolio and copied by Save As. Clear the box for none.</li>
+        <li>The line under the portfolio name shows how much of the balance is invested and how much is still cash.</li>
+        <li>The <strong>Running Total</strong> column adds each row&apos;s amount to every row above it, in the order shown (so sorting the table changes it). It turns green on the row that fills the starting balance and red once the holdings go past it. The exports carry it in the portfolio&apos;s saved order.</li>
+        <li>The holdings table ends with a <strong>Cash left</strong> row: the dollars still to invest and a bar of how much of the balance is in. It turns green when the holdings fill the balance exactly, and reads <strong>Over by</strong> in red when they go past it.</li>
+        <li>Holdings can be added as a percent of the balance (type <strong>25%</strong> in the Amount box).</li>
+        <li>When the holdings add up to less or more than the balance, <strong>Scale holdings</strong> multiplies every amount by the same factor so they fill it exactly. The mix, and so the yield and grade, stays the same. <strong>Undo</strong> puts the amounts back.</li>
+        <li><strong>Strategies</strong> uses the starting balance as its budget, and before anything is invested the target&apos;s equivalent (for example $750 a month = 6.00% yield) is figured on the starting balance.</li>
+        <li>The Excel export&apos;s Summary sheet lists the starting balance and the cash not invested.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Target Yield</h3>

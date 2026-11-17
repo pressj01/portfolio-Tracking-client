@@ -43,6 +43,12 @@ function moneyRate() {
   return currency === 'CAD' && usdToCadRate > 0 ? usdToCadRate : 1
 }
 
+// A typed dollar amount such as "150,000" or "$150000.50"; NaN when it is not one.
+function parseMoneyText(text) {
+  const cleaned = String(text ?? '').trim().replace(/^\$/, '').replace(/,/g, '').trim()
+  return cleaned === '' || !/^\d*\.?\d+$|^\d+\.$/.test(cleaned) ? NaN : Number(cleaned)
+}
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 // Plotly needs concrete colors; a var(--x) silently falls back to its palette.
@@ -116,6 +122,14 @@ const COLUMN_GROUPS = {
 const COLUMNS = [
   { key: 'ticker', label: 'Ticker', group: 'position', align: 'left', sticky: true },
   { key: 'dollar_amount', label: 'Amount', group: 'position', fmt: fmt$, title: 'Dollars in this holding. Click an amount to edit it.' },
+  {
+    key: 'running_total',
+    label: 'Running Total',
+    group: 'position',
+    fmt: fmt$,
+    noSort: true,
+    title: 'This amount plus every amount above it, in the order shown. With a starting balance, it turns green where the holdings fill it and red past it.',
+  },
   { key: 'weight_pct', label: 'Wt %', group: 'position', fmt: v => fmtN(v, 1) },
   { key: 'shares', label: 'Shares', group: 'position', fmt: v => fmtN(v, 2), title: 'Amount ÷ latest close.' },
   { key: 'current_price', label: 'Price', group: 'position', fmt: fmt$, title: 'Latest close.' },
@@ -375,6 +389,76 @@ function blockedReason(plan) {
 }
 
 /**
+ * The holdings table's last row: the cash still to invest (or how far the
+ * holdings are over the starting balance) and a bar of how much is invested.
+ */
+function BalanceProgressRow({ balance, invested, span }) {
+  const left = balance - invested
+  const pct = balance > 0 ? (invested / balance) * 100 : 0
+  const state = Math.abs(left) < 0.005 ? 'full' : left > 0 ? 'under' : 'over'
+  const label = state === 'over' ? 'Over by' : 'Cash left'
+  const summary = state === 'full'
+    ? `Fully invested: ${fmt$(invested)} of the ${fmt$(balance)} starting balance.`
+    : state === 'over'
+      ? `${fmt$(invested)} invested: ${fmtPct(pct, 1)} of the ${fmt$(balance)} starting balance.`
+      : `${fmt$(invested)} of the ${fmt$(balance)} starting balance invested (${fmtPct(pct, 1)}).`
+  return (
+    <tr className={`pb-total-row pb-cash-row pb-cash-${state}`}>
+      <td className="pb-sticky pb-left">{label}</td>
+      <td className="pb-dollar-cell">{fmt$(Math.abs(left))}</td>
+      <td colSpan={span}>
+        <div className="pb-progress-wrap">
+          <div
+            className="pb-progress"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(Math.min(pct, 100))}
+            aria-label="Share of the starting balance invested"
+          >
+            <span style={{ width: `${Math.min(pct, 100)}%` }} />
+          </div>
+          <span className="pb-progress-text">{summary}</span>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+/** How the holdings compare with the starting balance, and the Scale button. */
+function BalanceNotice({ balance, invested, undone, busy, onScale, onUndo }) {
+  if (!undone) {
+    return (
+      <div className="pb-notice pb-target pb-target-met" role="status">
+        <span>
+          <strong>Scaled every holding to fill the {fmt$(balance)} starting balance.</strong> The mix, and so the
+          yield, is unchanged.
+        </span>
+        <button type="button" className="btn btn-secondary pb-btn-sm" onClick={onUndo} disabled={busy}>Undo</button>
+      </div>
+    )
+  }
+  const gap = balance - invested
+  const pct = balance > 0 ? (invested / balance) * 100 : 0
+  return (
+    <div className="pb-notice pb-target" role="status">
+      <span>
+        {gap > 0
+          ? <><strong>{fmt$(gap)} of the {fmt$(balance)} starting balance is not invested</strong> ({fmtPct(pct, 1)} invested).</>
+          : <><strong>The holdings total {fmt$(invested)}, {fmt$(-gap)} over the {fmt$(balance)} starting balance.</strong></>}
+      </span>
+      <button
+        type="button"
+        className="btn btn-secondary pb-btn-sm"
+        onClick={onScale}
+        disabled={busy}
+        title="Scale every holding by the same factor so they add up to the starting balance. The mix stays the same. You can undo it."
+      >Scale holdings to {fmt$(balance)}</button>
+    </div>
+  )
+}
+
+/**
  * The line under the Add row: where the portfolio stands against its target
  * (in the unit the target was set in, with the other beside it), any holding
  * over the max per holding, and the one button that fixes either.
@@ -585,13 +669,15 @@ export default function PortfolioBuilder() {
   const [dollarInput, setDollarInput] = useState('')
   const [formError, setFormError] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [editingDollar, setEditingDollar] = useState(null)
+  const [editing, setEditing] = useState(null) // { ticker, field: 'ticker' | 'amount' | 'shares' }
   const committingRef = useRef(false)
 
   // Target yield
   const [targetInput, setTargetInput] = useState('')
   const [targetMode, setTargetMode] = useState('yield') // 'yield' (%) or 'monthly' ($ a month)
   const [capInput, setCapInput] = useState('')
+  const [balanceInput, setBalanceInput] = useState('')
+  const [scaleUndo, setScaleUndo] = useState(null) // { pid, changes } from the last Scale
   const [wholeShares, setWholeSharesState] = useState(() => readPref(PREF_WHOLE_SHARES, '0') === '1')
   const [balanceUndo, setBalanceUndo] = useState(null) // { pid, changes, moved, cash, kind, wholeShares }
   const [exporting, setExporting] = useState(null)
@@ -653,6 +739,15 @@ export default function PortfolioBuilder() {
   const savedTargetYield = positive(active?.target_yield_pct)
   const savedMonthly = positive(active?.target_monthly_income) // USD a month
   const savedCap = positive(active?.max_weight_pct)
+  const savedBalance = positive(active?.starting_balance) // USD
+  const balanceInputFor = useCallback(
+    () => (savedBalance == null ? '' : String(Math.round(savedBalance * moneyRate() * 100) / 100)),
+    [savedBalance],
+  )
+
+  useEffect(() => {
+    setBalanceInput(balanceInputFor())
+  }, [activeId, balanceInputFor])
 
   // The target box in a unit: a monthly amount shows in the display currency.
   const targetInputFor = useCallback((mode) => {
@@ -750,9 +845,10 @@ export default function PortfolioBuilder() {
     setError(null)
     setFormError(null)
     setEditingName(false)
-    setEditingDollar(null)
+    setEditing(null)
     setSortCol(null)
     setBalanceUndo(null)
+    setScaleUndo(null)
     if (activeId) fetchHoldings(activeId)
   }, [activeId, fetchHoldings])
 
@@ -843,8 +939,19 @@ export default function PortfolioBuilder() {
   const createPortfolio = async () => {
     const name = (await dialog.prompt('Portfolio name:'))?.trim()
     if (!name) return
+    const rawBalance = await dialog.prompt(
+      `Starting balance for "${name}" (optional). Holdings can then be added as a percent of it, such as 25%:`,
+      '',
+    )
+    if (rawBalance == null) return
+    const typed = parseMoneyText(rawBalance)
+    if (rawBalance.trim() && !(typed > 0)) {
+      await dialog.alert('The starting balance must be a dollar amount greater than zero, such as 150000.')
+      return
+    }
+    const startingBalance = typed > 0 ? Math.round((typed / moneyRate()) * 100) / 100 : null
     try {
-      const created = await send('/api/builder/portfolios', 'POST', { name })
+      const created = await send('/api/builder/portfolios', 'POST', { name, starting_balance: startingBalance })
       await loadPortfolios()
       selectPortfolio(created.id)
     } catch (e) { await dialog.alert(e.message) }
@@ -888,6 +995,7 @@ export default function PortfolioBuilder() {
         target_yield_pct: savedTargetYield,
         target_monthly_income: savedMonthly,
         max_weight_pct: savedCap,
+        starting_balance: savedBalance,
       })
       await loadPortfolios()
       selectPortfolio(created.id)
@@ -926,14 +1034,59 @@ export default function PortfolioBuilder() {
   }
 
   // ── Holding actions ───────────────────────────────────────────────────────
+  // An amount typed as dollars ("5000", "$5,000") or as a percent of the
+  // starting balance ("25%"): { amount, percent } or { error }.
+  const readAmount = (raw) => {
+    const text = String(raw ?? '').trim()
+    if (text.endsWith('%')) {
+      const pct = parseMoneyText(text.slice(0, -1))
+      if (savedBalance == null) return { error: 'Set a starting balance to enter a percent of it.' }
+      if (!(pct > 0) || pct > 100) return { error: 'Enter a percent of the starting balance between 0% and 100%.' }
+      return { amount: Math.round(savedBalance * pct) / 100, percent: true }
+    }
+    const amount = parseMoneyText(text)
+    if (!(amount > 0)) {
+      return {
+        error: /[a-z]/i.test(text)
+          ? 'Enter an amount such as 5000 or 25%. The symbol goes in the Ticker box.'
+          : 'Enter a dollar amount greater than zero, such as 5000 or 25%.',
+      }
+    }
+    return { amount: Math.round(amount * 100) / 100, percent: false }
+  }
+
+  // A bare dollar amount under 1% of the starting balance is usually a
+  // percent typed without its sign: ask which was meant. Resolves to the
+  // amount to use, or null to cancel.
+  const confirmSmallAmount = async (ticker, amount, raw) => {
+    if (savedBalance == null || amount >= savedBalance / 100) return amount
+    const typed = parseMoneyText(raw)
+    const asPercent = typed > 0 && typed <= 100 ? Math.round(savedBalance * typed) / 100 : null
+    const share = fmtPct((amount / savedBalance) * 100, amount / savedBalance < 0.001 ? 3 : 2)
+    const message = `${fmt$(amount)} of ${ticker} is only ${share} of the ${fmt$(savedBalance)} starting balance.`
+      + (asPercent != null ? ` Did you mean ${typed}% (${fmt$(asPercent)})?` : ' Use it anyway?')
+    return dialog.choose(message, [
+      { label: 'Cancel', value: null },
+      { label: `Keep ${fmt$(amount)}`, value: amount, primary: asPercent == null },
+      ...(asPercent != null ? [{ label: `Use ${typed}% (${fmt$(asPercent)})`, value: asPercent, primary: true }] : []),
+    ])
+  }
+
   const addHolding = async (e) => {
     e.preventDefault()
     if (!activeId || busy) return
     const ticker = tickerInput.trim().toUpperCase()
-    const amount = Number(dollarInput)
-    if (!ticker) { setFormError('Enter a ticker.'); return }
+    const raw = dollarInput.trim()
+    if (!ticker) {
+      // A symbol typed into the Amount box is the usual reason the ticker is blank.
+      setFormError(/[a-z]/i.test(raw) ? 'Put the symbol in the Ticker box.' : 'Enter a ticker.')
+      return
+    }
     if (/\s/.test(ticker)) { setFormError('A ticker cannot contain spaces.'); return }
-    if (!Number.isFinite(amount) || amount <= 0) { setFormError('Enter a dollar amount greater than zero.'); return }
+    const read = readAmount(raw)
+    if (read.error) { setFormError(read.error); return }
+    const amount = read.percent ? read.amount : await confirmSmallAmount(ticker, read.amount, raw)
+    if (amount == null) return
     const existing = holdings.find(h => h.ticker === ticker)
     if (existing && !await dialog.confirm(
       `${ticker} is already in this portfolio at ${fmt$(existing.dollar_amount)}. Change it to ${fmt$(amount)}?`,
@@ -956,24 +1109,66 @@ export default function PortfolioBuilder() {
     refreshAfterWrite(activeId)
   }
 
-  const startDollarEdit = (ticker) => {
+  // One cell of one row is edited at a time: its ticker, amount, or shares.
+  const startEdit = (ticker, field) => {
     committingRef.current = false
-    setEditingDollar(ticker)
+    setEditing({ ticker, field })
   }
-  const cancelDollarEdit = () => {
+  const cancelEdit = () => {
     committingRef.current = true
-    setEditingDollar(null)
+    setEditing(null)
   }
-  const commitDollarEdit = async (ticker, raw) => {
+
+  // A new symbol for a holding, keeping its amount and its row. Onto a symbol
+  // already held, it offers to combine the two.
+  const renameHolding = async (old, raw) => {
+    const next = String(raw ?? '').trim().toUpperCase()
+    if (!next || next === old) return
+    if (/\s/.test(next) || next.length > 20) { setFormError('A ticker cannot contain spaces.'); return }
+    setFormError(null)
+    const pid = activeId
+    const path = `/api/builder/portfolios/${pid}/holdings/${encodeURIComponent(old)}`
+    try {
+      const res = await pf(path, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ ticker: next }) })
+      const body = await res.json().catch(() => ({}))
+      if (res.status === 409 && body.exists) {
+        const moving = holdings.find(h => h.ticker === old)?.dollar_amount ?? 0
+        if (!await dialog.confirm(
+          `${next} is already in this portfolio at ${fmt$(body.dollar_amount)}. `
+          + `Combine the two into one ${next} holding of ${fmt$(body.dollar_amount + moving)}?`,
+        )) return
+        await send(path, 'PATCH', { ticker: next, merge: true })
+      } else if (!res.ok || body.error) {
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+    } catch (e) { await dialog.alert(e.message) }
+    await refreshAfterWrite(pid)
+  }
+
+  const commitEdit = async (ticker, field, raw) => {
     if (committingRef.current) return
     committingRef.current = true
-    setEditingDollar(null)
+    setEditing(null)
     const current = holdings.find(h => h.ticker === ticker)
-    const amount = Math.round(Number(raw) * 100) / 100
     if (!current) return
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setFormError(`${ticker}: the amount must be greater than zero. Use × to remove a holding.`)
-      return
+    if (field === 'ticker') { await renameHolding(ticker, raw); return }
+    let amount
+    if (field === 'shares') {
+      // Shares set the amount at the latest price.
+      const price = tableRows.find(r => r.ticker === ticker)?.current_price
+      const shares = parseMoneyText(raw)
+      if (!(Number(price) > 0)) { setFormError(`${ticker}: there is no price yet, so shares cannot set its amount.`); return }
+      if (!(shares > 0)) { setFormError(`${ticker}: enter a share count greater than zero. Use × to remove a holding.`); return }
+      amount = Math.round(shares * price * 100) / 100
+    } else {
+      const read = readAmount(raw)
+      if (read.error) { setFormError(`${ticker}: ${read.error} Use × to remove a holding.`); return }
+      amount = read.amount
+      if (Math.abs(amount - current.dollar_amount) < 0.005) return
+      if (!read.percent) {
+        amount = await confirmSmallAmount(ticker, amount, raw)
+        if (amount == null) return
+      }
     }
     if (Math.abs(amount - current.dollar_amount) < 0.005) return
     setFormError(null)
@@ -1006,6 +1201,8 @@ export default function PortfolioBuilder() {
 
   // ── Strategies ─────────────────────────────────────────────────────────────
   const openStrategies = () => {
+    // A strategy for this model is sized to its starting balance by default.
+    if (savedBalance != null) setAwBudget(String(savedBalance))
     setAwOpen(true)
     setAwResult(null)
     setAwError(null)
@@ -1116,11 +1313,10 @@ export default function PortfolioBuilder() {
   }, [holdings, data, totalInvested])
 
   const sortedRows = useMemo(() => {
-    if (!sortCol) return tableRows
     const col = COLUMNS.find(c => c.key === sortCol)
     const key = col?.sortKey || sortCol
     const dir = sortAsc ? 1 : -1
-    return [...tableRows].sort((a, b) => {
+    const ordered = !sortCol ? tableRows : [...tableRows].sort((a, b) => {
       if (key === 'ticker') return dir * String(a.ticker).localeCompare(String(b.ticker))
       const av = isNum(a[key]) ? Number(a[key]) : null
       const bv = isNum(b[key]) ? Number(b[key]) : null
@@ -1129,6 +1325,12 @@ export default function PortfolioBuilder() {
       if (av == null) return 1
       if (bv == null) return -1
       return dir * (av - bv)
+    })
+    // The running total follows the rows as shown, so a sort changes it.
+    let running = 0
+    return ordered.map(row => {
+      running += Number(row.dollar_amount) || 0
+      return { ...row, running_total: Math.round(running * 100) / 100 }
     })
   }, [tableRows, sortCol, sortAsc])
 
@@ -1193,14 +1395,39 @@ export default function PortfolioBuilder() {
   })
   const topHolding = tableRows.reduce((top, r) => (!top || r.weight_pct > top.weight_pct ? r : top), null)
 
-  // What the typed (or saved) target means in the other unit, on today's total.
+  // What the typed (or saved) target means in the other unit, on today's
+  // total, or on the starting balance before anything is invested.
   const typedTarget = targetInput.trim() !== '' && Number(targetInput) > 0
     ? (targetMode === 'monthly' ? Number(targetInput) / moneyRate() : Number(targetInput))
     : null
-  const targetEquivalent = typedTarget == null || !(totalInvested > 0) ? null
+  const equivalentBase = totalInvested > 0 ? totalInvested : (savedBalance ?? 0)
+  const targetEquivalent = typedTarget == null || !(equivalentBase > 0) ? null
     : targetMode === 'monthly'
-      ? `= ${fmtPct(monthlyToYieldPct(typedTarget, totalInvested), 2)} yield on ${fmt$(totalInvested)}`
-      : `= ${fmt$(yieldPctToMonthly(typedTarget, totalInvested))}/mo on ${fmt$(totalInvested)}`
+      ? `= ${fmtPct(monthlyToYieldPct(typedTarget, equivalentBase), 2)} yield on ${fmt$(equivalentBase)}`
+      : `= ${fmt$(yieldPctToMonthly(typedTarget, equivalentBase))}/mo on ${fmt$(equivalentBase)}`
+
+  // ── Starting balance ───────────────────────────────────────────────────────
+  const uninvested = savedBalance != null ? savedBalance - totalInvested : null
+  const scaleLive = Boolean(scaleUndo) && scaleUndo.pid === activeId && scaleUndo.changes.every(c => {
+    const held = holdings.find(h => h.ticker === c.ticker)
+    return held && Math.abs(held.dollar_amount - c.to) < 0.005
+  })
+
+  const commitBalance = async () => {
+    if (!activeId) return
+    const raw = balanceInput.trim()
+    const typed = raw === '' ? 0 : parseMoneyText(raw)
+    if (!Number.isFinite(typed) || typed < 0) {
+      setFormError('Enter a starting balance of $0 or more.')
+      setBalanceInput(balanceInputFor())
+      return
+    }
+    // Typed in the display currency; saved, like every amount, in USD.
+    const value = typed > 0 ? Math.round((typed / moneyRate()) * 100) / 100 : null
+    if (value === savedBalance) { setBalanceInput(balanceInputFor()); return }
+    setScaleUndo(null)
+    await saveSettings({ starting_balance: value })
+  }
 
   const saveSettings = async (changes) => {
     const pid = activeId
@@ -1305,6 +1532,31 @@ export default function PortfolioBuilder() {
     }
   }
 
+  // Every holding scaled by the same factor so they add up to the starting
+  // balance: the mix (and so the yield) stays as it is.
+  const scaleToBalance = async () => {
+    if (!activeId || busy || savedBalance == null) return
+    const funded = holdings.filter(h => h.dollar_amount > 0)
+    if (!funded.length || !(totalInvested > 0)) return
+    const factor = savedBalance / totalInvested
+    const cents = funded.map(h => Math.max(Math.round(h.dollar_amount * factor * 100), 1))
+    const largest = cents.indexOf(Math.max(...cents))
+    cents[largest] += Math.round(savedBalance * 100) - cents.reduce((s, c) => s + c, 0)
+    const changes = funded.map((h, i) => ({ ticker: h.ticker, from: h.dollar_amount, to: cents[i] / 100 }))
+    setBalanceUndo(null)
+    if (await writeAmounts(activeId, changes.map(c => ({ ticker: c.ticker, dollar_amount: c.to })))) {
+      setScaleUndo({ pid: activeId, changes })
+    }
+  }
+
+  const undoScale = async () => {
+    if (!scaleLive || busy) return
+    const { pid, changes } = scaleUndo
+    if (await writeAmounts(pid, changes.map(c => ({ ticker: c.ticker, dollar_amount: c.from })))) {
+      setScaleUndo(null)
+    }
+  }
+
   // ── Export ─────────────────────────────────────────────────────────────────
   const exportPortfolio = async (format) => {
     if (!activeId || !holdings.length || exporting) return
@@ -1364,15 +1616,70 @@ export default function PortfolioBuilder() {
       ? tableRows.reduce((s, r) => s + (Number(r.monthly_income) || 0), 0) : null,
   } : null
 
+  // The ticker, amount, and shares of a holding row are edited in place:
+  // click the value, type, then Enter (or click away) saves and Esc cancels.
+  const EDITABLE = {
+    ticker: {
+      field: 'ticker',
+      label: 'ticker',
+      value: row => row.ticker,
+      title: 'Click to change the symbol. The amount stays the same.',
+    },
+    dollar_amount: {
+      field: 'amount',
+      label: 'amount',
+      value: row => row.dollar_amount,
+      title: () => (savedBalance != null
+        ? `Click to edit the amount: dollars, or a percent of the ${fmt$(savedBalance)} starting balance such as 25%.`
+        : 'Click to edit the amount.'),
+    },
+    shares: {
+      field: 'shares',
+      label: 'shares',
+      value: row => (isNum(row.shares) ? Math.round(row.shares * 10000) / 10000 : ''),
+      title: 'Click to set the number of shares. The amount follows at the latest price.',
+    },
+  }
+
+  const renderEditor = (c, row, cls) => {
+    const spec = EDITABLE[c.key]
+    return (
+      <td key={c.key} className={cls}>
+        <input
+          type="text"
+          inputMode={spec.field === 'ticker' ? undefined : 'decimal'}
+          className={`pb-dollar-input ${spec.field === 'ticker' ? 'pb-ticker-input' : ''}`}
+          defaultValue={spec.value(row)}
+          aria-label={`${spec.label} for ${row.ticker}`}
+          onBlur={e => commitEdit(row.ticker, spec.field, e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); commitEdit(row.ticker, spec.field, e.target.value) }
+            if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
+          }}
+          onFocus={e => e.target.select()}
+          autoFocus
+        />
+      </td>
+    )
+  }
+
   const renderCell = (c, row, isTotal = false) => {
     const val = row[c.key]
     const cls = [c.sticky ? 'pb-sticky' : '', c.align === 'left' ? 'pb-left' : c.align === 'center' ? 'pb-center' : ''].join(' ').trim() || undefined
+    const spec = !isTotal && EDITABLE[c.key]
+    // Shares can only set an amount once the holding has a price.
+    const editable = spec && (c.key !== 'shares' || isNum(row.current_price))
+    if (editable && editing?.ticker === row.ticker && editing.field === spec.field) {
+      return renderEditor(c, row, cls)
+    }
     if (c.key === 'ticker') {
       return (
         <td key={c.key} className={cls}>
           {isTotal ? <strong>{val}</strong> : (
             <span className="pb-ticker">
-              {val}
+              <button type="button" className="pb-link-btn pb-ticker-btn" onClick={() => startEdit(row.ticker, 'ticker')} title={spec.title}>
+                {val}
+              </button>
               {row.pending && loading && <span className="pb-pending" title="Being analyzed">…</span>}
             </span>
           )}
@@ -1382,37 +1689,27 @@ export default function PortfolioBuilder() {
     if (c.key === 'grade') {
       return <td key={c.key} className={cls}>{(val || !isTotal) ? <GradeBadge grade={val} /> : '--'}</td>
     }
-    if (c.key === 'dollar_amount' && !isTotal) {
-      if (editingDollar === row.ticker) {
-        return (
-          <td key={c.key} className={cls}>
-            <input
-              type="number"
-              min="0.01"
-              step="any"
-              className="pb-dollar-input"
-              defaultValue={row.dollar_amount}
-              aria-label={`Amount for ${row.ticker}`}
-              onBlur={e => commitDollarEdit(row.ticker, e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') { e.preventDefault(); commitDollarEdit(row.ticker, e.target.value) }
-                if (e.key === 'Escape') { e.preventDefault(); cancelDollarEdit() }
-              }}
-              autoFocus
-            />
-          </td>
-        )
-      }
+    if (editable) {
       return (
         <td key={c.key} className="pb-dollar-cell">
-          <button type="button" className="pb-link-btn" onClick={() => startDollarEdit(row.ticker)} title="Click to edit the amount">
+          <button
+            type="button"
+            className="pb-link-btn"
+            onClick={() => startEdit(row.ticker, spec.field)}
+            title={typeof spec.title === 'function' ? spec.title() : spec.title}
+          >
             {c.fmt(val)}
           </button>
         </td>
       )
     }
     const colorValue = c.abs && isNum(val) ? Math.abs(Number(val)) : val
-    const color = c.band ? bandColor(colorValue, gradingSettings, c.band) : c.signed ? signedColor(val) : undefined
+    let color = c.band ? bandColor(colorValue, gradingSettings, c.band) : c.signed ? signedColor(val) : undefined
+    if (c.key === 'running_total' && savedBalance != null && isNum(val)) {
+      // Green on the row that fills the starting balance, red once past it.
+      const over = Number(val) - savedBalance
+      color = Math.abs(over) < 0.005 ? 'var(--pos)' : over > 0 ? 'var(--neg)' : undefined
+    }
     return (
       <td key={c.key} className={cls} style={color ? { color } : undefined}>
         {c.fmt ? c.fmt(val) : (val ?? '--')}
@@ -1670,6 +1967,8 @@ export default function PortfolioBuilder() {
                 )}
                 <div className="pb-subtitle">
                   {holdings.length} holding{holdings.length === 1 ? '' : 's'} · {fmt$(totalInvested)} invested
+                  {savedBalance != null ? ` of ${fmt$(savedBalance)}` : ''}
+                  {uninvested != null && uninvested >= 0.005 ? ` · ${fmt$(uninvested)} cash` : ''}
                   {pm && isNum(pm.est_annual_income) ? ` · ${fmt$(pm.est_annual_income)}/yr est. income` : ''}
                 </div>
               </div>
@@ -1730,8 +2029,29 @@ export default function PortfolioBuilder() {
               </button>
             </div>
 
-            {/* Income target and how Balance may move money */}
+            {/* Starting balance, income target, and how Balance may move money */}
             <div className="pb-toolbar pb-target-row">
+              <label
+                className="pb-bench"
+                title="The dollars this model starts out with. Holdings can then be added as a percent of it, and Scale fills it exactly. Leave it blank for none."
+              >
+                <span>Starting balance</span>
+                <input
+                  className="pb-bench-input pb-target-input pb-target-money pb-balance-input"
+                  type="text"
+                  inputMode="decimal"
+                  value={balanceInput}
+                  onChange={e => setBalanceInput(e.target.value)}
+                  onBlur={commitBalance}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    if (e.key === 'Escape') setBalanceInput(balanceInputFor())
+                  }}
+                  placeholder="None"
+                  aria-label="Starting balance"
+                />
+              </label>
+              <span className="pb-target-sep" aria-hidden="true" />
               <label
                 className="pb-bench"
                 title="The income you are building this model toward, as a yield or as dollars a month. Saved with the portfolio. Leave it blank for no target."
@@ -1754,7 +2074,7 @@ export default function PortfolioBuilder() {
                   aria-label={targetMode === 'monthly' ? 'Target monthly income' : 'Target yield percent'}
                 />
               </label>
-              <div className="pb-inline-group" role="group" aria-label="Target unit">
+              <div className="pb-controls" role="group" aria-label="Target unit">
                 {[['yield', '% yield'], ['monthly', '$ / month']].map(([mode, label]) => (
                   <button
                     type="button"
@@ -1812,17 +2132,35 @@ export default function PortfolioBuilder() {
               />
               <input
                 className="pb-add-dollars"
-                placeholder="Amount ($)"
-                type="number"
-                min="0.01"
-                step="any"
+                placeholder={savedBalance != null ? 'Amount ($ or %)' : 'Amount ($)'}
+                type="text"
+                inputMode="decimal"
                 value={dollarInput}
                 onChange={e => { setDollarInput(e.target.value); setFormError(null) }}
                 aria-label="Dollar amount"
+                title={savedBalance != null
+                  ? `Dollars, or a percent of the ${fmt$(savedBalance)} starting balance such as 25%.`
+                  : 'Dollars. Set a starting balance to add holdings as a percent of it.'}
               />
               <button type="submit" className="btn btn-primary pb-btn-sm" disabled={busy}>Add</button>
+              {savedBalance != null && dollarInput.trim().endsWith('%') && parseMoneyText(dollarInput.trim().slice(0, -1)) > 0 && (
+                <span className="pb-target-equiv">
+                  = {fmt$(savedBalance * parseMoneyText(dollarInput.trim().slice(0, -1)) / 100)}
+                </span>
+              )}
               {formError && <span className="pb-form-error">{formError}</span>}
             </form>
+
+            {savedBalance != null && holdings.length > 0 && (scaleLive || Math.abs(uninvested) >= 0.005) && (
+              <BalanceNotice
+                balance={savedBalance}
+                invested={totalInvested}
+                undone={!scaleLive}
+                busy={busy}
+                onScale={scaleToBalance}
+                onUndo={undoScale}
+              />
+            )}
 
             {targetStatus && (targetStatus.status !== 'none' || overCap.length > 0 || undoLive) && (
               <TargetYieldNotice
@@ -1879,9 +2217,11 @@ export default function PortfolioBuilder() {
                             title={c.title}
                             aria-sort={sortCol === c.key ? (sortAsc ? 'ascending' : 'descending') : undefined}
                           >
-                            <button type="button" className="pb-sort-btn" onClick={() => handleSort(c.key)}>
-                              {c.label}{sortCol === c.key ? (sortAsc ? ' ▴' : ' ▾') : ''}
-                            </button>
+                            {c.noSort ? <span className="pb-sort-btn pb-no-sort">{c.label}</span> : (
+                              <button type="button" className="pb-sort-btn" onClick={() => handleSort(c.key)}>
+                                {c.label}{sortCol === c.key ? (sortAsc ? ' ▴' : ' ▾') : ''}
+                              </button>
+                            )}
                           </th>
                         ))}
                         <th aria-label="Remove" />
@@ -1897,12 +2237,22 @@ export default function PortfolioBuilder() {
                         </tr>
                       ))}
                     </tbody>
-                    {portfolioCells && (
+                    {(portfolioCells || savedBalance != null) && (
                       <tfoot>
-                        <tr className="pb-total-row">
-                          {visibleColumns.map(c => renderCell(c, portfolioCells, true))}
-                          <td />
-                        </tr>
+                        {portfolioCells && (
+                          <tr className="pb-total-row">
+                            {visibleColumns.map(c => renderCell(c, portfolioCells, true))}
+                            <td />
+                          </tr>
+                        )}
+                        {savedBalance != null && (
+                          <BalanceProgressRow
+                            balance={savedBalance}
+                            invested={totalInvested}
+                            // Ticker and Amount lead every column view; the bar spans the rest.
+                            span={visibleColumns.length - 1}
+                          />
+                        )}
                       </tfoot>
                     )}
                   </table>
