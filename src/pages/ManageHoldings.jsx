@@ -41,9 +41,10 @@ import { gradingSettingsQuery } from '../utils/gradingPreferences'
 import OpenLotsView from '../components/OpenLotsView'
 import LotSortHeader from '../components/LotSortHeader'
 import { nextLotSort, sortByValue, sortLotRows } from '../utils/lotTableSort'
+import { buildSubcategoryTree, indentedName } from '../utils/categoryHierarchy'
 
 const EMPTY_HOLDING = {
-  ticker: '', description: '', category: '',
+  ticker: '', description: '', category: '', subcategory_id: '',
   quantity: '', price_paid: '', current_price: '',
   div: '', div_frequency: 'M', reinvest: 'N',
   ex_div_date: '', div_pay_date: '', purchase_date: '',
@@ -52,6 +53,19 @@ const EMPTY_HOLDING = {
   estim_payment_per_year: '', approx_monthly_income: '',
   cash_not_reinvested: '', total_cash_reinvested: '',
   shares_bought_from_dividend: '',
+}
+
+function subcategoryOptionsForCategory(categories, categoryName) {
+  const category = (categories || []).find(c => c.name === categoryName)
+  if (!category) return []
+  return buildSubcategoryTree(category.subcategories).ordered
+}
+
+function formatHoldingSubcategory(holding) {
+  if (Array.isArray(holding?.subcategory_path) && holding.subcategory_path.length) {
+    return holding.subcategory_path.join(' › ')
+  }
+  return holding?.subcategory || ''
 }
 
 // Payments per year by frequency code. '' is a deliberate "no distributions"
@@ -183,6 +197,10 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   const [looking, setLooking] = useState(false)
   const [lookupMsg, setLookupMsg] = useState(null)
   const [categories, setCategories] = useState([])
+  const subcategoryOptions = useMemo(
+    () => subcategoryOptionsForCategory(categories, form.category),
+    [categories, form.category],
+  )
   const [hasTxns, setHasTxns] = useState(false)
   // A hand-typed Div/Share holds off the market refresh until the fund declares
   // its next distribution. Show when that is, and let it be handed back early.
@@ -212,6 +230,9 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
 
   const set = (field, value) => setForm(prev => {
     const next = { ...prev, [field]: value }
+    // Subcategories are created on the Categories screen and belong to one
+    // parent. Changing the parent clears a child that no longer applies.
+    if (field === 'category') next.subcategory_id = ''
     if (['reinvest', 'div', 'quantity', 'div_frequency', 'current_price'].includes(field)) {
       const div = parseFloat(next.div) || 0
       const qty = parseFloat(next.quantity) || 0
@@ -315,6 +336,11 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     }
     if (clearDivOverride) payload.div_manual_clear = true
     if (clearDatesOverride) payload.div_dates_manual_clear = true
+    if (payload.subcategory_id === '' || payload.subcategory_id == null) {
+      payload.subcategory_id = null
+    } else {
+      payload.subcategory_id = Number(payload.subcategory_id)
+    }
 
     onSave(payload)
   }
@@ -381,6 +407,30 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
                   <option key={c.id} value={c.name}>{c.name}</option>
                 ))}
               </select>
+            </div>
+            <div className="form-group">
+              <label>Sub-category</label>
+              <select
+                value={form.subcategory_id ?? ''}
+                onChange={(e) => set('subcategory_id', e.target.value)}
+                disabled={!form.category || subcategoryOptions.length === 0}
+                style={{ width: '100%' }}
+                title={!form.category
+                  ? 'Choose a category first'
+                  : subcategoryOptions.length === 0
+                    ? 'Create sub-categories on the Categories screen'
+                    : 'Assign an existing sub-category'}
+              >
+                <option value="">— None —</option>
+                {subcategoryOptions.map(s => (
+                  <option key={s.id} value={s.id}>{indentedName(s)}</option>
+                ))}
+              </select>
+              {form.category && subcategoryOptions.length === 0 && (
+                <small style={{ display: 'block', marginTop: '0.35rem', color: 'var(--text-dim-2)', lineHeight: 1.35 }}>
+                  Create sub-categories for this category on the Categories screen, then assign them here.
+                </small>
+              )}
             </div>
           </div>
 
@@ -565,11 +615,15 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
     ticker: ticker || '', transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', acquired_date: '', notes: '',
     // Fields for new ticker creation (lookup data)
     description: '', classification_type: '', current_price: '',
-    div: '', div_frequency: 'M', ex_div_date: '', div_pay_date: '', reinvest: 'N', category: '',
+    div: '', div_frequency: 'M', ex_div_date: '', div_pay_date: '', reinvest: 'N', category: '', subcategory_id: '',
   })
   const [looking, setLooking] = useState(false)
   const [lookupMsg, setLookupMsg] = useState(null)
   const [categories, setCategories] = useState([])
+  const subcategoryOptions = useMemo(
+    () => subcategoryOptionsForCategory(categories, form.category),
+    [categories, form.category],
+  )
   const [editId, setEditId] = useState(null)
   const [error, setError] = useState(null)
   const [successMsg, setSuccessMsg] = useState(null)
@@ -781,6 +835,9 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       for (const f of ['description', 'classification_type', 'current_price', 'div',
                         'div_frequency', 'ex_div_date', 'div_pay_date', 'reinvest', 'category']) {
         if (form[f]) payload[f] = form[f]
+      }
+      if (form.category && form.subcategory_id !== '' && form.subcategory_id != null) {
+        payload.subcategory_id = Number(form.subcategory_id)
       }
     }
 
@@ -1220,7 +1277,7 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
                   {lookupMsg}
                 </div>
               )}
-              <div className="form-row" style={{ gridTemplateColumns: '1fr 2fr 1fr' }}>
+              <div className="form-row" style={{ gridTemplateColumns: '1fr 2fr 1fr 1fr' }}>
                 <div className="form-group">
                   <label>Ticker *</label>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -1245,9 +1302,32 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
                 </div>
                 <div className="form-group">
                   <label>Category</label>
-                  <select value={form.category || ''} onChange={(e) => setForm(prev => ({ ...prev, category: e.target.value }))} style={{ width: '100%' }}>
+                  <select
+                    value={form.category || ''}
+                    onChange={(e) => setForm(prev => ({ ...prev, category: e.target.value, subcategory_id: '' }))}
+                    style={{ width: '100%' }}
+                  >
                     <option value="">— None —</option>
                     {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Sub-category</label>
+                  <select
+                    value={form.subcategory_id ?? ''}
+                    onChange={(e) => setForm(prev => ({ ...prev, subcategory_id: e.target.value }))}
+                    disabled={!form.category || subcategoryOptions.length === 0}
+                    style={{ width: '100%' }}
+                    title={!form.category
+                      ? 'Choose a category first'
+                      : subcategoryOptions.length === 0
+                        ? 'Create sub-categories on the Categories screen'
+                        : 'Assign an existing sub-category'}
+                  >
+                    <option value="">— None —</option>
+                    {subcategoryOptions.map(s => (
+                      <option key={s.id} value={s.id}>{indentedName(s)}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -2129,6 +2209,7 @@ const COLUMNS = [
   { key: 'ticker', label: 'Ticker', width: 80, type: 'string', tip: 'Security ticker symbol' },
   { key: 'description', label: 'Description', width: 180, truncate: true, type: 'string', tip: 'Security name / description' },
   { key: 'category', label: 'Category', width: 96, truncate: true, type: 'string', tip: 'Investment category assigned to this holding' },
+  { key: 'subcategory', label: 'Sub-cat', width: 120, truncate: true, type: 'string', tip: 'Sub-category assigned to this holding. Create sub-categories on the Categories screen, then assign them here.' },
   { key: 'percent_of_account', label: '% Acct', width: 76, truncate: true, type: 'number', compact: true, tip: 'Percent of total account value held in this security' },
   { key: 'quantity', label: 'Shares', width: 76, truncate: true, type: 'number', tip: 'Total shares currently held (base + DRIP shares)' },
   { key: 'purchase_date', label: 'Purchased', type: 'string', width: 92, tip: 'Date of original purchase (or earliest lot date)' },
@@ -2538,6 +2619,8 @@ export default function ManageHoldings() {
   const { openTickerResearch } = useTickerResearch()
   const holdingsRequestRef = useRef(0)
   const [holdings, setHoldings] = useState([])
+  const [categoryCatalog, setCategoryCatalog] = useState([])
+  const [savingSubcategoryFor, setSavingSubcategoryFor] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [repairingDivs, setRepairingDivs] = useState(false)
@@ -2669,6 +2752,7 @@ export default function ManageHoldings() {
     columns: COLUMNS,
     lockedKeys: HOLDINGS_LOCKED_COLS,
     adoptNewKeys: layout => insertMissingKeysAfter(layout, [
+      { key: 'subcategory', after: 'category' },
       { key: 'lifetime_gain_or_loss', after: 'gain_or_loss_percentage' },
       { key: 'lifetime_gain_or_loss_percentage', after: 'lifetime_gain_or_loss' },
       { key: 'monthly_income_reinvested', after: 'approx_monthly_income' },
@@ -2685,6 +2769,17 @@ export default function ManageHoldings() {
       { key: 'grade', after: 'closure_risk' },
     ]),
   })
+
+  const fetchCategoryCatalog = async () => {
+    try {
+      const res = await pf('/api/categories/data')
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'Failed to load categories')
+      setCategoryCatalog(Array.isArray(data.categories) ? data.categories : [])
+    } catch {
+      setCategoryCatalog([])
+    }
+  }
 
   // `silent` re-fetches without flashing the table spinner — used to reconcile
   // a single optimistic edit (e.g. a DRIP toggle) against the backend's
@@ -2724,7 +2819,34 @@ export default function ManageHoldings() {
     setDividendRefreshDate(null)
     fetchHoldings()
     fetchAccrualSummary()
+    fetchCategoryCatalog()
   }, [selection, basisMode])
+
+  const assignHoldingSubcategory = async (holding, subcategoryId) => {
+    const category = categoryCatalog.find(c => c.name === holding.category)
+    if (!category || isAggregate) return
+    const nextId = subcategoryId === '' || subcategoryId == null ? null : Number(subcategoryId)
+    setSavingSubcategoryFor(holding.ticker)
+    setError(null)
+    try {
+      const res = await pf('/api/categories/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category_id: category.id,
+          subcategory_id: nextId,
+          tickers: [holding.ticker],
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to assign sub-category')
+      await fetchHoldings({ silent: true })
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSavingSubcategoryFor(null)
+    }
+  }
 
   // Clear any stale repair preview when the selected portfolio changes,
   // so an Apply can't target a scope the preview wasn't built against.
@@ -2750,6 +2872,7 @@ export default function ManageHoldings() {
   const getSortValue = (h, key) => {
     if (key === '_shares_if_reinvested') return sharesIfReinvested(h)
     if (key === 'percent_of_account') return accountPercent(h, totalCurrentValue)
+    if (key === 'subcategory') return formatHoldingSubcategory(h) || null
     if (key === 'drip_shares_monthly') return h.drip_shares_monthly
     if (key === 'drip_shares_yearly') return h.drip_shares_yearly
     if (key === 'beta') return h._risk?.beta ?? null
@@ -3301,6 +3424,50 @@ export default function ManageHoldings() {
         return <td>{h.description || '-'}</td>
       case 'category':
         return <td>{h.category || '-'}</td>
+      case 'subcategory': {
+        const options = subcategoryOptionsForCategory(categoryCatalog, h.category)
+        if (!h.category) {
+          return <td style={{ color: 'var(--text-dim)' }} title="Assign a category first">-</td>
+        }
+        if (isAggregate) {
+          return <td title={formatHoldingSubcategory(h) || undefined}>{formatHoldingSubcategory(h) || '-'}</td>
+        }
+        if (options.length === 0) {
+          return (
+            <td style={{ color: 'var(--text-dim)' }} title="Create sub-categories on the Categories screen">
+              —
+            </td>
+          )
+        }
+        return (
+          <td>
+            <select
+              value={h.subcategory_id ?? ''}
+              disabled={savingSubcategoryFor === h.ticker}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                e.stopPropagation()
+                assignHoldingSubcategory(h, e.target.value)
+              }}
+              title="Assign an existing sub-category created on the Categories screen"
+              style={{
+                maxWidth: '100%',
+                fontSize: '0.78rem',
+                padding: '0.15rem 0.3rem',
+                background: 'var(--bg)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+                borderRadius: 4,
+              }}
+            >
+              <option value="">— None —</option>
+              {options.map(s => (
+                <option key={s.id} value={s.id}>{indentedName(s)}</option>
+              ))}
+            </select>
+          </td>
+        )
+      }
       case 'percent_of_account':
         return <td>{fmtPct(h.percent_of_account)}</td>
       case 'quantity':
