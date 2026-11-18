@@ -150,6 +150,31 @@ class PositionsPreservedQuantityTest(unittest.TestCase):
         self.assertIn("Used the broker's share count for SPYI", data["message"])
         self.assertEqual(self._transaction_count(), 1)
 
+    def test_taking_the_broker_count_carries_into_owner(self):
+        # Owner is a stored copy of its members; it held the kept 100 shares.
+        conn = self._get_connection()
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
+        conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, current_price, current_value) "
+            "VALUES ('SPYI', 1, 100, 50, 5000, 54, 5400)"
+        )
+        conn.commit()
+        conn.close()
+
+        self._post(self._single_export(), "fidelity", profile_id=2)
+        self.assertEqual(self._quantity(1), 100)
+        response = self._post(
+            self._single_export(),
+            "fidelity",
+            profile_id=2,
+            accept_broker_quantity=json.dumps([{"profile_id": 2, "ticker": "SPYI"}]),
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(self._quantity(2), 10)
+        self.assertEqual(self._quantity(1), 10)
+
     def test_accept_for_another_portfolio_is_refused_without_importing(self):
         response = self._post(
             self._single_export(),

@@ -12535,6 +12535,11 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                     f" Preserved {preserved} existing category assignment"
                     f"{'s' if preserved != 1 else ''}."
                 )
+        # Owner's rows are a stored copy of its members' positions. Without
+        # this, a member's new broker count (a sale, or "Use broker count")
+        # left Owner on the old shares until some later import or refresh,
+        # and the NAV snapshot below recorded Owner from that stale copy.
+        _reconcile_owner_after_member_change(conn, profile_id)
         _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
         return jsonify({
             "message": msg,
