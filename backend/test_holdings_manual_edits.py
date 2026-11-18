@@ -80,7 +80,10 @@ class ManualHoldingEditApiTest(unittest.TestCase):
             CREATE TABLE subcategories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category_id INTEGER,
-                name TEXT
+                name TEXT,
+                profile_id INTEGER,
+                parent_id INTEGER,
+                sort_order INTEGER DEFAULT 0
             );
             CREATE TABLE dividend_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -320,14 +323,72 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertAlmostEqual(row["estim_payment_per_year"], 16.36, places=2)
         self.assertAlmostEqual(row["approx_monthly_income"], 1.36, places=2)
 
+    def test_update_can_assign_existing_subcategory_from_categories_screen(self):
+        self._execute(
+            "INSERT INTO categories (id, name, profile_id) VALUES "
+            "(10, 'Income', 1)"
+        )
+        self._execute(
+            "INSERT INTO subcategories (id, category_id, name, profile_id) "
+            "VALUES (21, 10, 'Monthly', 1), (22, 10, 'Weekly', 1)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, current_price, "
+            "purchase_value, current_value) "
+            "VALUES ('IQQI', 1, 10, 25, 25, 250, 250)"
+        )
+        self._execute(
+            "INSERT INTO ticker_categories "
+            "(ticker, category_id, subcategory_id, profile_id) "
+            "VALUES ('IQQI', 10, NULL, 1)"
+        )
+
+        res = self.client.put(
+            "/api/holdings/IQQI?profile_id=1",
+            json={"category": "Income", "subcategory_id": 21},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        row = self._row(
+            "SELECT category_id, subcategory_id FROM ticker_categories "
+            "WHERE ticker = 'IQQI' AND profile_id = 1"
+        )
+        self.assertEqual(row["category_id"], 10)
+        self.assertEqual(row["subcategory_id"], 21)
+
+        clear_res = self.client.put(
+            "/api/holdings/IQQI?profile_id=1",
+            json={"category": "Income", "subcategory_id": None},
+        )
+        self.assertEqual(clear_res.status_code, 200)
+        cleared = self._row(
+            "SELECT category_id, subcategory_id FROM ticker_categories "
+            "WHERE ticker = 'IQQI' AND profile_id = 1"
+        )
+        self.assertEqual(cleared["category_id"], 10)
+        self.assertIsNone(cleared["subcategory_id"])
+
+        rejected = self.client.put(
+            "/api/holdings/IQQI?profile_id=1",
+            json={"category": "Income", "subcategory_id": 999},
+        )
+        self.assertEqual(rejected.status_code, 200)
+        ignored = self._row(
+            "SELECT category_id, subcategory_id FROM ticker_categories "
+            "WHERE ticker = 'IQQI' AND profile_id = 1"
+        )
+        self.assertEqual(ignored["category_id"], 10)
+        self.assertIsNone(ignored["subcategory_id"])
+
     def test_holdings_read_honors_lifetime_category_subcategory_and_ticker_scope(self):
         self._execute(
             "INSERT INTO categories (id, name, profile_id) VALUES "
             "(10, 'Core', 1), (20, 'Income', 1)"
         )
         self._execute(
-            "INSERT INTO subcategories (id, category_id, name) "
-            "VALUES (21, 20, 'Monthly')"
+            "INSERT INTO subcategories (id, category_id, name, profile_id) "
+            "VALUES (21, 20, 'Monthly', 1)"
         )
         self._execute(
             "INSERT INTO all_account_info "

@@ -9055,6 +9055,84 @@ def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_
     )
 
 
+def _holding_payload_subcategory_id(conn, profile_id, category_id, data):
+    """Resolve an existing subcategory id from a holdings create/update payload.
+
+    Subcategories are created on the Categories screen. Holdings can only assign
+    ones that already belong to the chosen parent category.
+    """
+    if category_id is None:
+        return None
+
+    raw_id = data.get("subcategory_id")
+    if raw_id in ("", None):
+        sub_name = str(data.get("subcategory") or "").strip()
+        if not sub_name:
+            return None
+        row = conn.execute(
+            "SELECT id FROM subcategories "
+            "WHERE category_id = ? AND profile_id = ? AND lower(name) = lower(?) "
+            "ORDER BY id LIMIT 1",
+            (category_id, profile_id, sub_name),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+    try:
+        subcategory_id = int(raw_id)
+    except (TypeError, ValueError):
+        return None
+
+    owner = conn.execute(
+        "SELECT category_id FROM subcategories WHERE id = ? AND profile_id = ?",
+        (subcategory_id, profile_id),
+    ).fetchone()
+    if not owner or int(owner["category_id"]) != int(category_id):
+        return None
+    return subcategory_id
+
+
+def _apply_holding_category_payload(conn, profile_id, ticker, data, *, force=False):
+    """Apply category / subcategory fields from a holdings payload.
+
+    Returns True when an assignment change was attempted. Missing category fields
+    leave the current assignment alone unless ``force`` is set (used when the
+    payload always includes the category selectors, e.g. the holdings editor).
+    Subcategories must already exist on the Categories screen.
+    """
+    if not force and (
+        "category" not in data
+        and "subcategory_id" not in data
+        and "subcategory" not in data
+    ):
+        return False
+
+    cat_name = str(data.get("category") or "").strip()
+    if not cat_name:
+        conn.execute(
+            "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        )
+        return True
+
+    cat_row = conn.execute(
+        "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+        (cat_name, profile_id),
+    ).fetchone()
+    if not cat_row:
+        conn.execute(
+            "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        )
+        return True
+
+    category_id = int(cat_row["id"])
+    subcategory_id = _holding_payload_subcategory_id(
+        conn, profile_id, category_id, data
+    )
+    _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_id)
+    return True
+
+
 def _import_snowball_categories(parsed, profile_id):
     """Import Snowball categories, sub-categories, and ticker assignments."""
     conn = get_connection()
@@ -18707,79 +18785,167 @@ def _fetch_amplify_distribution_snapshot(ticker):
     }
 
 
+_QUANTIFY_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+_QUANTIFY_LIVE_DATA_URL = "https://quantifyfunds.com/wp-json/twm/v1/data"
+_QUANTIFY_CURRENT_TICKERS = {"ISBG", "ISSB", "IQQI"}
+
+
+def _quantify_fund_url(ticker):
+    ticker = (ticker or "").strip().lower()
+    return f"https://quantifyfunds.com/{ticker}/" if ticker else None
+
+
+def _quantify_headers(accept="text/html,*/*", *, referer=None):
+    headers = {
+        "User-Agent": _QUANTIFY_BROWSER_UA,
+        "Accept": accept,
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if referer:
+        headers["Referer"] = referer
+        headers["X-Requested-With"] = "XMLHttpRequest"
+    return headers
+
+
+def _quantify_page_post_id(page_html):
+    """Return the Tidal Website Manager post id embedded in a Quantify fund page."""
+    page_html = str(page_html or "")
+    for table_type in ("distribution-table", "fund-info-table", "daily-nav-table"):
+        match = re.search(
+            rf'data-twm-type=["\']{re.escape(table_type)}["\'][^>]*data-post-id=["\'](\d+)["\']',
+            page_html,
+            re.I,
+        )
+        if not match:
+            match = re.search(
+                rf'data-post-id=["\'](\d+)["\'][^>]*data-twm-type=["\']{re.escape(table_type)}["\']',
+                page_html,
+                re.I,
+            )
+        if match:
+            return match.group(1)
+    return None
+
+
+def _quantify_placeholder_value(value):
+    text = str(value or "").strip().upper()
+    return not text or text in {"-", "—", "-%", "N/A", "NA", "--"}
+
+
+def _quantify_live_rows(session, post_id, table_type, *, referer=None):
+    if not post_id:
+        return []
+    try:
+        response = session.get(
+            _QUANTIFY_LIVE_DATA_URL,
+            params={"type": table_type, "post_id": str(post_id)},
+            timeout=10,
+            headers=_quantify_headers(
+                "application/json, text/javascript, */*; q=0.01",
+                referer=referer,
+            ),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return []
+    return _research_html_table_rows(payload.get("html") or "")
+
+
+def _quantify_label_map(rows):
+    result = {}
+    for row in rows:
+        if len(row) < 2:
+            continue
+        label = re.sub(r"\*+", "", row[0]).strip().lower()
+        value = row[-1].strip()
+        if label and not _quantify_placeholder_value(value):
+            result[label] = value
+    return result
+
+
+def _quantify_map_value(values, *label_prefixes):
+    prefixes = tuple(str(prefix).strip().lower() for prefix in label_prefixes)
+    for label, value in (values or {}).items():
+        if label.startswith(prefixes) and not _quantify_placeholder_value(value):
+            return value
+    return None
+
+
+def _quantify_page_frequency(page_html):
+    match = re.search(
+        r"Distribution Frequency\s+(Weekly|Monthly|Quarterly|Semi-?Annual(?:ly)?|Annual(?:ly)?)",
+        str(page_html or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return {
+        "WEEKLY": "W",
+        "MONTHLY": "M",
+        "QUARTERLY": "Q",
+        "SEMI-ANNUAL": "SA",
+        "SEMIANNUAL": "SA",
+        "SEMI-ANNUALLY": "SA",
+        "SEMIANNUALLY": "SA",
+        "ANNUAL": "A",
+        "ANNUALLY": "A",
+    }.get(match.group(1).strip().upper())
+
+
 def _fetch_quantify_distribution_snapshot(ticker):
-    """Fetch recent official distribution history from Quantify Funds when available."""
-    import html
-    import json
+    """Fetch official distribution history from quantifyfunds.com/{ticker}/.
+
+    New funds such as IQQI may publish the page and empty placeholder rows before
+    the first distribution. Return None in that case so Yahoo remains the
+    fallback until Quantify publishes real amounts/dates.
+    """
     import requests
 
     ticker = (ticker or "").strip().upper()
-    if not ticker:
+    fund_url = _quantify_fund_url(ticker)
+    if not fund_url:
         return None
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    fund_url = f"https://quantifyfunds.com/optionsbasedincome/{ticker.lower()}/"
 
     try:
         session = requests.Session()
-        page = session.get(fund_url, timeout=10, headers=headers)
+        page = session.get(fund_url, timeout=10, headers=_quantify_headers())
         page.raise_for_status()
     except Exception:
         return None
 
     page_body = page.text or ""
-    post_match = re.search(
-        r'data-twm-type="distribution-table"\s+data-post-id="(\d+)"',
-        page_body,
-        flags=re.IGNORECASE,
+    post_id = _quantify_page_post_id(page_body)
+    if not post_id:
+        return None
+
+    rows = _quantify_live_rows(
+        session, post_id, "distribution-table", referer=fund_url
     )
-    if not post_match:
-        return None
-
-    try:
-        resp = session.get(
-            "https://quantifyfunds.com/wp-json/twm/v1/data",
-            params={"type": "distribution-table", "post_id": post_match.group(1)},
-            timeout=10,
-            headers={
-                **headers,
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "Referer": fund_url,
-                "X-Requested-With": "XMLHttpRequest",
-            },
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-    except (Exception, json.JSONDecodeError):
-        return None
-
-    table_html = html.unescape(payload.get("html") or "")
-    if "EX Date" not in table_html or "Payable Date" not in table_html or "Fund Total" not in table_html:
-        return None
-
-    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.S)
     entries = []
-    for row in rows:
-        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.IGNORECASE | re.S)
-        cells = [html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c))).strip() for c in cells]
+    for cells in rows:
         if len(cells) < 4 or cells[0].lower().startswith("ex date"):
             continue
         ex_date, _record_date, pay_date, amount = cells[:4]
+        if _quantify_placeholder_value(ex_date) or _quantify_placeholder_value(amount):
+            continue
         ex_ts = pd.to_datetime(ex_date, format="%m/%d/%Y", errors="coerce")
+        if pd.isna(ex_ts):
+            ex_ts = pd.to_datetime(ex_date, errors="coerce")
         pay_ts = pd.to_datetime(pay_date, format="%m/%d/%Y", errors="coerce")
+        if pd.isna(pay_ts):
+            pay_ts = pd.to_datetime(pay_date, errors="coerce")
         if pd.isna(ex_ts):
             continue
         try:
             amount_value = float(str(amount).replace("$", "").replace(",", "").strip())
         except (TypeError, ValueError):
+            continue
+        if amount_value <= 0:
             continue
         ex_ts = ex_ts.normalize()
         pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
@@ -18789,13 +18955,16 @@ def _fetch_quantify_distribution_snapshot(ticker):
         return None
 
     entries.sort(key=lambda item: item[0])
-    history = pd.Series([item[1] for item in entries], index=pd.DatetimeIndex([item[0] for item in entries]))
-    history = history[~history.index.duplicated(keep="last")]
-    history = history.sort_index()
+    history = pd.Series(
+        [item[1] for item in entries],
+        index=pd.DatetimeIndex([item[0] for item in entries]),
+    )
+    history = history[~history.index.duplicated(keep="last")].sort_index()
 
     pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
     latest_ex = history.index[-1]
     latest_pay = pay_map.get(latest_ex)
+    page_freq = _quantify_page_frequency(page_body)
 
     return {
         "known": True,
@@ -18803,9 +18972,116 @@ def _fetch_quantify_distribution_snapshot(ticker):
         "div": float(history.iloc[-1]),
         "ex_div_date": latest_ex.strftime("%m/%d/%y"),
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
-        "freq": _infer_dividend_frequency_from_history(history) or "W",
+        "freq": page_freq or _infer_dividend_frequency_from_history(history) or "W",
         "history": history,
+        "source": "Quantify Funds",
+        "source_url": fund_url,
     }
+
+
+def _fetch_quantify_etf_profile(ticker):
+    """Official Quantify fund facts (AUM / expense / inception) from the fund page.
+
+    Returns None when the page cannot be fetched so Yahoo remains the fallback.
+    New funds may publish $0.00m Net Assets before launch; treat that as missing
+    so Yahoo can supply assets until Quantify reports a real AUM.
+    """
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    fund_url = _quantify_fund_url(ticker)
+    if not fund_url:
+        return None
+
+    try:
+        session = requests.Session()
+        page = session.get(fund_url, timeout=10, headers=_quantify_headers())
+        page.raise_for_status()
+    except Exception:
+        return None
+
+    page_body = page.text or ""
+    post_id = _quantify_page_post_id(page_body)
+    if not post_id:
+        return None
+
+    fund_info = _quantify_label_map(
+        _quantify_live_rows(session, post_id, "fund-info-table", referer=fund_url)
+    )
+    daily_nav = _quantify_label_map(
+        _quantify_live_rows(session, post_id, "daily-nav-table", referer=fund_url)
+    )
+    if not fund_info and not daily_nav:
+        return None
+
+    page_ticker = (_quantify_map_value(fund_info, "ticker") or "").strip().upper()
+    if page_ticker and page_ticker != ticker:
+        return None
+
+    net_assets = _xfunds_money(_quantify_map_value(daily_nav, "net assets"))
+    if net_assets is not None and net_assets <= 0:
+        net_assets = None
+
+    expense = (
+        _quantify_map_value(fund_info, "net expense ratio")
+        or _quantify_map_value(fund_info, "gross expense ratio")
+    )
+    inception_raw = _quantify_map_value(fund_info, "fund inception")
+    inception_iso = None
+    if inception_raw:
+        parsed = pd.to_datetime(inception_raw, errors="coerce")
+        if not pd.isna(parsed):
+            inception_iso = parsed.strftime("%Y-%m-%d")
+
+    fund_name = None
+    for label, value in fund_info.items():
+        if label.startswith("fund name"):
+            fund_name = value
+            break
+    if not fund_name:
+        title_match = re.search(
+            r"<h1[^>]*>(.*?)</h1>",
+            page_body,
+            flags=re.IGNORECASE | re.S,
+        )
+        if title_match:
+            fund_name = _research_html_text(title_match.group(1)) or None
+
+    nav_price = _xfunds_money(_quantify_map_value(daily_nav, "nav"))
+    closing_price = _xfunds_money(_quantify_map_value(daily_nav, "closing price"))
+    page_freq = _quantify_page_frequency(page_body)
+    frequency_label = {
+        "W": "Weekly",
+        "M": "Monthly",
+        "Q": "Quarterly",
+        "SA": "Semi-Annually",
+        "A": "Annually",
+    }.get(page_freq)
+
+    profile = {
+        "name": fund_name,
+        "fund_type": "ETF",
+        "description": fund_name,
+        "issuer": "Quantify Funds",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(expense),
+        "total_assets": net_assets,
+        "total_assets_label": "Net Assets",
+        "nav_price": nav_price,
+        "nav_label": "NAV",
+        "price": closing_price or nav_price,
+        "inception_date": inception_iso,
+        "dividend_frequency": frequency_label,
+        "source_url": fund_url,
+        "data_source": "Quantify Funds",
+    }
+    useful = (
+        "name", "expense_ratio_pct", "total_assets", "nav_price",
+        "inception_date", "dividend_frequency",
+    )
+    if not any(_research_has_value(profile.get(field)) for field in useful):
+        return None
+    return profile
 
 
 def _fetch_rex_distribution_snapshot(ticker):
@@ -19075,12 +19351,16 @@ def _is_amplify_fund(ticker, description=""):
 
 
 def _is_quantify_fund(ticker, description=""):
-    """Identify Quantify Funds option-income ETFs."""
+    """Identify Quantify Funds option-income ETFs (IncomeSTKd / IncomeQ)."""
     ticker = (ticker or "").strip().upper()
     description_l = (description or "").lower()
-    if "quantify" in description_l or "incomestkd" in description_l:
+    if (
+        "quantify" in description_l
+        or "incomestkd" in description_l
+        or "incomeq" in description_l
+    ):
         return True
-    return ticker in {"ISBG", "ISSB"}
+    return ticker in _QUANTIFY_CURRENT_TICKERS
 
 
 def _is_rex_fund(ticker, description=""):
@@ -19406,10 +19686,10 @@ _FUND_FAMILY_REGISTRY = [
     },
     {
         "name": "Quantify Funds",
-        "keywords": ["quantify", "incomestkd"],
+        "keywords": ["quantify", "incomestkd", "incomeq"],
         "fetcher": "_fetch_quantify_distribution_snapshot",
         "legacy": _is_quantify_fund,
-        "page_url": "https://quantifyfunds.com/optionsbasedincome/{ticker_lower}/",
+        "page_url": "https://quantifyfunds.com/{ticker_lower}/",
     },
     {
         "name": "REX Shares",
@@ -23739,15 +24019,7 @@ def add_holding():
         f"INSERT INTO all_account_info ({', '.join(cols)}) VALUES ({placeholders})",
         vals,
     )
-    # Handle category assignment
-    cat_name = (data.get("category") or "").strip()
-    if cat_name:
-        cat_row = conn.execute(
-            "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
-            (cat_name, profile_id),
-        ).fetchone()
-        if cat_row:
-            _replace_ticker_category(conn, profile_id, ticker, cat_row["id"])
+    _apply_holding_category_payload(conn, profile_id, ticker, data)
 
     _recompute_position_income_fields(conn, profile_id, ticker)
     conn.commit()
@@ -23919,21 +24191,7 @@ def update_holding(ticker):
             f"UPDATE all_account_info SET {', '.join(updates)} WHERE ticker = ? AND profile_id = ?",
             vals,
         )
-    # Handle category assignment
-    if "category" in data:
-        cat_name = (data["category"] or "").strip()
-        # Remove existing assignment
-        conn.execute(
-            "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
-            (ticker, profile_id),
-        )
-        if cat_name:
-            cat_row = conn.execute(
-                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
-                (cat_name, profile_id),
-            ).fetchone()
-            if cat_row:
-                _replace_ticker_category(conn, profile_id, ticker, cat_row["id"])
+    _apply_holding_category_payload(conn, profile_id, ticker, data)
 
     previous_quantity = existing["quantity"] if isinstance(existing, dict) else existing[0]
     previous_annual_income = existing["estim_payment_per_year"] if isinstance(existing, dict) else existing[6]
@@ -27448,16 +27706,7 @@ def add_transaction(ticker):
                     f"UPDATE all_account_info SET {field} = ? WHERE ticker = ? AND profile_id = ?",
                     (data[field], ticker, profile_id),
                 )
-        # Handle category for new ticker
-        cat_name = (data.get("category") or "").strip()
-        if cat_name:
-            cat_row = conn.execute(
-                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
-                (cat_name, profile_id),
-            ).fetchone()
-            if cat_row:
-                cat_id = cat_row["id"] if isinstance(cat_row, dict) else cat_row[0]
-                _replace_ticker_category(conn, profile_id, ticker, cat_id)
+        _apply_holding_category_payload(conn, profile_id, ticker, data)
         conn.commit()
         broker_baseline = None
     else:
@@ -31024,6 +31273,8 @@ def _known_fund_assets(conn, tickers):
                 profile = _fetch_xfunds_etf_profile(symbol)
             elif _is_tappalpha_fund(symbol):
                 profile = _fetch_tappalpha_etf_profile(symbol)
+            elif _is_quantify_fund(symbol):
+                profile = _fetch_quantify_etf_profile(symbol)
         except Exception:
             profile = None
         if isinstance(profile, dict):
@@ -34080,6 +34331,8 @@ def _fetch_provider_etf_profile(ticker, response):
         fetchers.append(_fetch_neos_etf_profile)
     if _is_tappalpha_fund(ticker, provider_hints):
         fetchers.append(_fetch_tappalpha_etf_profile)
+    if _is_quantify_fund(ticker, provider_hints):
+        fetchers.append(_fetch_quantify_etf_profile)
     if _is_tuttle_capital_fund(ticker, provider_hints):
         fetchers.append(_fetch_income_blast_etf_profile)
     if "vistashares" in provider_hints.lower():
@@ -34121,14 +34374,17 @@ def security_research(kind, ticker):
         _is_xfunds_fund(ticker)
         or _is_neos_fund(ticker)
         or _is_tappalpha_fund(ticker)
+        or _is_quantify_fund(ticker)
     ):
         try:
             if _is_xfunds_fund(ticker):
                 preferred_official_profile = _fetch_xfunds_etf_profile(ticker)
             elif _is_neos_fund(ticker):
                 preferred_official_profile = _fetch_neos_etf_profile(ticker)
-            else:
+            elif _is_tappalpha_fund(ticker):
                 preferred_official_profile = _fetch_tappalpha_etf_profile(ticker)
+            else:
+                preferred_official_profile = _fetch_quantify_etf_profile(ticker)
         except Exception:
             preferred_official_profile = None
 
@@ -63245,13 +63501,14 @@ def etf_evaluate(ticker):
         return jsonify(error="Ticker is required."), 400
 
     official_profile = None
-    if _is_neos_fund(ticker) or _is_tappalpha_fund(ticker):
+    if _is_neos_fund(ticker) or _is_tappalpha_fund(ticker) or _is_quantify_fund(ticker):
         try:
-            official_profile = (
-                _fetch_neos_etf_profile(ticker)
-                if _is_neos_fund(ticker)
-                else _fetch_tappalpha_etf_profile(ticker)
-            )
+            if _is_neos_fund(ticker):
+                official_profile = _fetch_neos_etf_profile(ticker)
+            elif _is_tappalpha_fund(ticker):
+                official_profile = _fetch_tappalpha_etf_profile(ticker)
+            else:
+                official_profile = _fetch_quantify_etf_profile(ticker)
         except Exception:
             official_profile = None
 
