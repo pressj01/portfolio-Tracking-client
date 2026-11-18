@@ -90,6 +90,7 @@ const positionValue = t => Number(t.current_value) || 0
 const POSITION_ACCESSORS = {
   ticker: t => t.ticker,
   description: t => t.description || null,
+  shares: t => Number(t.quantity) || 0,
   value: positionValue,
   income: t => Number(t.monthly_income) || 0,
   freq: t => (t.weekly ? 'Weekly' : (t.div_frequency || null)),
@@ -98,6 +99,15 @@ const POSITION_ACCESSORS = {
   // can be clicked. (The per-level pct_l* keys are added per table.)
   pct_portfolio: positionValue,
   pct_category: positionValue,
+}
+
+// Share count as the broker shows it: fractional DRIP shares to 4 places,
+// trailing zeros dropped (44.6153, 25).
+const fmtShares = (quantity) => {
+  const n = Number(quantity)
+  return Number.isFinite(n) && n > 0
+    ? n.toLocaleString(undefined, { maximumFractionDigits: 4 })
+    : '-'
 }
 
 const fmtShare = (part, whole) => {
@@ -118,6 +128,7 @@ function TickerTable({ tickers, shareLevels, sort, onSort, onUnassign, fmt, move
   const columns = [
     { key: 'ticker', label: 'Ticker' },
     { key: 'description', label: 'Description' },
+    { key: 'shares', label: 'Shares', align: 'right', tip: 'Shares held.' },
     { key: 'value', label: 'Value', align: 'right', tip: 'Current market value.' },
     { key: 'income', label: 'Income/mo', display: twoLine('Income', '/mo'), align: 'right', tip: 'Projected monthly income from the shares held now.' },
     { key: 'freq', label: 'Freq', align: 'right', tip: 'How often it pays.' },
@@ -157,6 +168,7 @@ function TickerTable({ tickers, shareLevels, sort, onSort, onUnassign, fmt, move
           <tr key={t.ticker}>
             <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{t.ticker}</td>
             <td title={t.description || undefined} style={{ maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description || '-'}</td>
+            <td style={{ textAlign: 'right' }}>{fmtShares(t.quantity)}</td>
             <td style={{ textAlign: 'right' }}>{fmt(t.current_value)}</td>
             <td style={{ textAlign: 'right' }}>{Number(t.monthly_income) > 0 ? fmt(t.monthly_income) : '-'}</td>
             <td style={{ textAlign: 'right', color: t.weekly ? 'var(--pos-bright)' : 'var(--text-dim-2)' }}>{t.weekly ? 'Weekly' : (t.div_frequency || '-')}</td>
