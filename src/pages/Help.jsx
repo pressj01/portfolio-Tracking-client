@@ -3026,7 +3026,9 @@ function DivCalendarHelp() {
       <h2>Dividend Calendar</h2>
       <p style={{ marginBottom: '1rem' }}>
         The Dividend Calendar has three views. <strong>Month</strong>, the default view, places expected
-        pay dates on a Monday–Sunday calendar. <strong>Agenda</strong> groups the same payments by the
+        pay dates on a Monday–Sunday calendar; the <strong>Week</strong> column at the end of each row
+        totals that week&apos;s payments within the month, so the weeks add up to the month total.
+        <strong> Agenda</strong> groups the same payments by the
         date cash is expected to arrive and shows ex-dividend dates as supporting information.
         The Dashboard reuses the Month layout for the current week.
         <strong>Optimization</strong> projects those payments across the next 12 months so you can

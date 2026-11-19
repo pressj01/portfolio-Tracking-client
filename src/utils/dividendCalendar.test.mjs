@@ -4,6 +4,7 @@ import {
   bankHolidayFor,
   buildPaymentAgenda,
   buildMonthCells,
+  buildMonthWeeks,
   buildWeekCells,
   calendarPaymentStatus,
   isoDate,
@@ -54,6 +55,28 @@ test('buildWeekCells returns the Monday-Sunday containing the given day', () => 
     [], [], [], ['CHPY'], [], [], [],
   ])
   assert.equal(weekPaymentTotal(cells), 109.76)
+})
+
+test('buildMonthWeeks totals each row from in-month days only', () => {
+  const payments = [
+    { ticker: 'CVS', calendar_pay_date: '2026-11-01', payment_income: 13.30 },
+    { ticker: 'BLOX', calendar_pay_date: '2026-11-02', payment_income: 38.76 },
+    { ticker: 'DX', calendar_pay_date: '2026-11-02', payment_income: 17.00 },
+    { ticker: 'XQQI', calendar_pay_date: '2026-11-06', payment_income: 188.31 },
+    { ticker: 'LATE', calendar_pay_date: '2026-11-30', payment_income: 10 },
+    { ticker: 'NEXT', calendar_pay_date: '2026-12-01', payment_income: 99 },
+  ]
+  const weeks = buildMonthWeeks(buildMonthCells('2026-11', payments))
+
+  assert.equal(weeks.length, 6)
+  assert.equal(weeks[0].key, '2026-10-26')
+  assert.equal(weeks[0].firstKey, '2026-11-01')
+  assert.equal(weeks[0].income, 13.30)
+  assert.equal(weeks[1].income, 38.76 + 17.00 + 188.31)
+  assert.equal(weeks[1].paymentCount, 3)
+  assert.equal(weeks[1].paymentDays, 2)
+  assert.equal(weeks[5].income, 10)
+  assert.equal(weeks[5].lastKey, '2026-11-30')
 })
 
 test('monthKeysForWeek includes both months when the week crosses a boundary', () => {

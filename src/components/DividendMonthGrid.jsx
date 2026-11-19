@@ -94,10 +94,56 @@ export function DividendMonthDayCell({ cell, today, showOutsideEvents = false })
   )
 }
 
-export function DividendMonthWeekdays() {
-  return WEEKDAYS.map(day => (
+export function DividendMonthWeekdays({ withWeekTotal = false }) {
+  const headers = WEEKDAYS.map(day => (
     <div key={day} className="dc-month-weekday" role="columnheader">{day}</div>
   ))
+  if (!withWeekTotal) return headers
+  return [
+    ...headers,
+    <div key="week" className="dc-month-weekday dc-month-week-head" role="columnheader">Week</div>,
+  ]
+}
+
+function shortDate(iso) {
+  const [y, m, d] = String(iso || '').split('-').map(Number)
+  if (!y || !m || !d) return ''
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+export function DividendMonthWeekTotal({ week, monthIncome, today }) {
+  const hasIncome = week.income > 0
+  const share = monthIncome > 0 ? Math.min(1, week.income / monthIncome) : 0
+  const isCurrentWeek = Boolean(today && week.days.some(cell => cell.key === today))
+  const range = week.firstKey === week.lastKey
+    ? shortDate(week.firstKey)
+    : `${shortDate(week.firstKey)} – ${shortDate(week.lastKey)}`
+  const summary = hasIncome
+    ? `${week.paymentCount} payment${week.paymentCount !== 1 ? 's' : ''} · ${week.paymentDays} day${week.paymentDays !== 1 ? 's' : ''}`
+    : 'No payments'
+
+  return (
+    <div
+      className={`dc-month-cell dc-month-week-total${isCurrentWeek ? ' current' : ''}${hasIncome ? '' : ' empty'}`}
+      role="gridcell"
+      aria-label={`Week of ${range}: ${formatMoney(week.income)} from ${summary.toLowerCase()}`}
+      title={`${range}\n${formatMoney(week.income)} · ${summary}${hasIncome && monthIncome > 0 ? `\n${(share * 100).toFixed(1)}% of the month` : ''}`}
+    >
+      <div className="dc-month-cell-head">
+        <span className="dc-month-week-range">{range}</span>
+      </div>
+      <strong className="dc-month-week-amount">{hasIncome ? `+${formatMoney(week.income)}` : formatMoney(0)}</strong>
+      <span className="dc-month-week-meta">{summary}</span>
+      {hasIncome && monthIncome > 0 && (
+        <div className="dc-month-week-share">
+          <div className="dc-month-week-bar" aria-hidden="true">
+            <i style={{ width: `${(share * 100).toFixed(1)}%` }} />
+          </div>
+          <span>{Math.round(share * 100)}% of month</span>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function DividendMonthLegend() {
