@@ -5165,6 +5165,75 @@ th.col-drag-target {
   font-size: 0.75rem;
   cursor: pointer;
 }
+.etf-level-control {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+.etf-level-control .etf-level-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.etf-level-control .etf-level-caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: none;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+}
+.etf-level-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  width: 240px;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+}
+.etf-level-menu-head {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint, var(--p-888));
+  margin-top: 0.15rem;
+}
+.etf-level-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+.etf-level-swatch {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+.etf-level-menu-row {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+}
+.etf-level-menu-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  white-space: nowrap;
+}
+.etf-level-menu-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-faint, var(--p-888));
+}
 .etf-draw-color {
   width: 28px;
   height: 24px;
