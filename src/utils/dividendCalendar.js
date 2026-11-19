@@ -222,6 +222,28 @@ export function buildMonthCells(selectedMonth, payments) {
   })
 }
 
+// Split month-grid cells into Monday-Sunday rows with a total for each row.
+// Only days inside the month count, matching what the grid shows, so the
+// weekly totals add up to the month total in the toolbar.
+export function buildMonthWeeks(cells) {
+  const weeks = []
+  for (let start = 0; start < (cells || []).length; start += 7) {
+    const days = cells.slice(start, start + 7)
+    const counted = days.filter(cell => cell.currentMonth)
+    const income = weekPaymentTotal(counted)
+    weeks.push({
+      key: days[0].key,
+      days,
+      income,
+      paymentCount: counted.reduce((sum, cell) => sum + cell.payments.length, 0),
+      paymentDays: counted.filter(cell => cell.payments.length > 0).length,
+      firstKey: counted[0]?.key || days[0].key,
+      lastKey: counted[counted.length - 1]?.key || days[days.length - 1].key,
+    })
+  }
+  return weeks
+}
+
 export function buildWeekCells(todayIso, payments) {
   const today = dateFromIso(todayIso) || new Date()
   const monday = startOfWeekMonday(today)

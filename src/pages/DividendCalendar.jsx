@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { Fragment, useState, useEffect, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
 import LotSortHeader from '../components/LotSortHeader'
@@ -15,11 +15,13 @@ import {
   monthKey,
   shiftMonthKey,
   buildMonthCells,
+  buildMonthWeeks,
 } from '../utils/dividendCalendar'
 import {
   DividendMonthDayCell,
   DividendMonthLegend,
   DividendMonthWeekdays,
+  DividendMonthWeekTotal,
 } from '../components/DividendMonthGrid'
 
 const FILTERS = [
@@ -775,6 +777,7 @@ function DividendMonthView({ events, holdings, payments, loading, today, selecte
     () => buildMonthCells(activeMonth, payments),
     [activeMonth, payments],
   )
+  const weeks = useMemo(() => buildMonthWeeks(cells), [cells])
   const monthDate = dateFromIso(`${activeMonth}-01`) || new Date()
   const monthTitle = monthDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
   const monthIncome = payments.reduce((sum, ev) => sum + calendarPaymentIncome(ev), 0)
@@ -821,10 +824,15 @@ function DividendMonthView({ events, holdings, payments, loading, today, selecte
         <p className="dc-month-empty">No dividend payment data found. Import data first.</p>
       ) : (
         <div className="dc-month-scroll">
-          <div className="dc-month-grid" role="grid" aria-label={`${monthTitle} dividend payments`}>
-            <DividendMonthWeekdays />
-            {cells.map(cell => (
-              <DividendMonthDayCell key={cell.key} cell={cell} today={today} />
+          <div className="dc-month-grid dc-month-grid-weekly" role="grid" aria-label={`${monthTitle} dividend payments`}>
+            <DividendMonthWeekdays withWeekTotal />
+            {weeks.map(week => (
+              <Fragment key={week.key}>
+                {week.days.map(cell => (
+                  <DividendMonthDayCell key={cell.key} cell={cell} today={today} />
+                ))}
+                <DividendMonthWeekTotal week={week} monthIncome={monthIncome} today={today} />
+              </Fragment>
             ))}
           </div>
         </div>

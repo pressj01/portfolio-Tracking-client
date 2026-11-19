@@ -6567,6 +6567,31 @@ th.col-drag-target {
 }
 .dc-month-day-total { color: var(--pos-bright); font-size: .72rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .dc-month-cell-events { display: flex; flex-direction: column; gap: 5px; }
+/* Month view: 8th column carries each week's total. The 7n border rules
+   above assume 7 children per row, so the weekly grid sets borders itself. */
+.dc-month-grid.dc-month-grid-weekly {
+  grid-template-columns: repeat(7, minmax(150px, 1fr)) minmax(136px, .8fr); min-width: 1240px;
+}
+.dc-month-grid-weekly .dc-month-weekday:nth-child(7) { border-right: 1px solid var(--border); }
+.dc-month-grid-weekly .dc-month-week-head { border-right: 0; }
+.dc-month-grid-weekly .dc-month-cell { border-right: 1px solid var(--border); }
+.dc-month-grid-weekly .dc-month-cell.dc-month-week-total {
+  display: flex; flex-direction: column; gap: 3px; border-right: 0; background: var(--surface);
+}
+.dc-month-week-total.current { box-shadow: inset 2px 0 0 var(--accent-bright); }
+.dc-month-week-range { color: var(--text-muted); font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.dc-month-week-amount {
+  color: var(--pos-bright); font-size: .98rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2;
+}
+.dc-month-week-total.empty .dc-month-week-amount { color: var(--text-faint); }
+.dc-month-week-meta { color: var(--text-dim); font-size: .64rem; }
+.dc-month-week-share { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.dc-month-week-share span { color: var(--text-dim); font-size: .6rem; font-variant-numeric: tabular-nums; }
+.dc-month-week-bar { height: 4px; border-radius: 2px; background: var(--panel-dim); overflow: hidden; }
+.dc-month-week-bar i {
+  display: block; height: 100%; border-radius: 2px;
+  background: color-mix(in srgb, var(--pos-bright) 70%, transparent);
+}
 .dc-month-event {
   display: flex; align-items: flex-start; gap: 6px; min-width: 0; padding: 6px;
   border-radius: 6px; border-left: 2px solid var(--purple); background: var(--panel-dim);
