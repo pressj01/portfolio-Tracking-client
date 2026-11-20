@@ -133,6 +133,13 @@ const COLUMNS = [
   { key: 'weight_pct', label: 'Wt %', group: 'position', fmt: v => fmtN(v, 1) },
   { key: 'shares', label: 'Shares', group: 'position', fmt: v => fmtN(v, 2), title: 'Amount ÷ latest close.' },
   { key: 'current_price', label: 'Price', group: 'position', fmt: fmt$, title: 'Latest close.' },
+  {
+    key: 'annual_yield_pct',
+    label: 'Yield %',
+    group: 'position',
+    fmt: v => fmtN(v, 2),
+    title: 'Historical yield: the fund’s recent payments annualized at their current cadence (TappAlpha funds use the issuer rate; Yahoo’s quote is the last resort).',
+  },
   { key: 'grade', label: 'Grade', group: 'grade', align: 'center', sortKey: 'score', title: 'Holding grade, computed exactly as the Dashboard grades a holding.' },
   { key: 'score', label: 'Score', group: 'grade', fmt: v => fmtN(v, 1) },
   { key: 'ulcer_index', label: 'Ulcer', group: 'risk', fmt: v => fmtN(v, 2), band: ['lowerBands', 'ulcerIndex'], title: 'Ulcer Index: depth and length of drawdowns. Lower is better.' },
@@ -147,7 +154,6 @@ const COLUMNS = [
   { key: 'total_return_pct', label: 'Total Ret %', group: 'return', fmt: v => fmtPct(v, 1, true), signed: true, title: 'Return over the window with distributions reinvested.' },
   { key: 'price_change_pct', label: 'Price Δ %', group: 'return', fmt: v => fmtPct(v, 1, true), signed: true, title: 'Price (NAV) change alone, before distributions. A high yield with a falling price is NAV erosion.' },
   { key: 'annual_ret', label: 'Ann Ret %', group: 'return', fmt: v => fmtPct(v, 1, true), signed: true, title: 'Total return, annualized. Blank when the history is too short to annualize.' },
-  { key: 'annual_yield_pct', label: 'Yield %', group: 'income', fmt: v => fmtN(v, 2), title: 'Forward distribution yield: the fund’s recent payments annualized at their current cadence (TappAlpha funds use the issuer rate; Yahoo’s quote is the last resort).' },
   { key: 'annual_income', label: 'Annual Inc', group: 'income', fmt: fmt$ },
   { key: 'monthly_income', label: 'Monthly Inc', group: 'income', fmt: fmt$ },
 ]
@@ -225,6 +231,63 @@ function compareWinners(results) {
 
 // ── Report card ──────────────────────────────────────────────────────────────
 
+const HIGHLIGHT_METRICS = [
+  {
+    key: 'total_return_pct',
+    label: 'Total return',
+    value: row => fmtPct(row.total_return_pct, 1, true),
+    color: row => signedColor(row.total_return_pct),
+    sub: (row, benchmark) => (
+      isNum(row.benchmark_total_return_pct)
+        ? `${benchmark} ${fmtPct(row.benchmark_total_return_pct, 1, true)}`
+        : null
+    ),
+  },
+  {
+    key: 'max_drawdown',
+    label: 'Max drawdown',
+    value: row => (isNum(row.max_drawdown) ? fmtPct(Number(row.max_drawdown) * 100) : '--'),
+    color: row => (isNum(row.max_drawdown) ? 'var(--neg)' : undefined),
+    sub: () => 'Peak-to-trough',
+  },
+  {
+    key: 'beta',
+    label: 'Beta',
+    value: row => fmtN(row.beta),
+    color: () => undefined,
+    sub: (_row, benchmark) => (benchmark ? `vs ${benchmark}` : null),
+  },
+]
+
+function MetricCards({ rows, benchmark, className = '' }) {
+  return (
+    <div className={`pb-metric-cards ${className}`.trim()}>
+      {rows.map(row => (
+        <div key={row.id || row.name} className="pb-metric-port">
+          {(row.name || row.grade) && (
+            <div className="pb-metric-port-head">
+              {row.name && <strong>{row.name}</strong>}
+              {row.grade && <GradeBadge grade={row.grade} />}
+              {isNum(row.score) && <span className="pb-muted">{fmtN(row.score, 1)}</span>}
+            </div>
+          )}
+          <div className="pb-metric-grid">
+            {HIGHLIGHT_METRICS.map(m => (
+              <div key={m.key} className="pb-stat-card pb-metric-card">
+                <div className="pb-stat-val" style={m.color(row) ? { color: m.color(row) } : undefined}>
+                  {m.value(row)}
+                </div>
+                <div className="pb-stat-lbl">{m.key === 'beta' ? `Beta vs ${benchmark}` : m.label}</div>
+                {m.sub(row, benchmark) && <div className="pb-stat-sub">{m.sub(row, benchmark)}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function ReportCard({ pm, benchmark, stale }) {
   const grade = pm.grade || {}
   const breakdown = [...(grade.breakdown || [])].sort(
@@ -240,6 +303,11 @@ function ReportCard({ pm, benchmark, stale }) {
       color: signedColor(pm.total_return_pct),
       sub: isNum(pm.benchmark_total_return_pct) ? `${benchmark} ${fmtPct(pm.benchmark_total_return_pct, 1, true)}` : null,
     },
+    {
+      label: 'Max drawdown',
+      value: isNum(pm.max_drawdown) ? fmtPct(pm.max_drawdown * 100) : '--',
+      color: isNum(pm.max_drawdown) ? 'var(--neg)' : undefined,
+    },
     { label: 'Annualized return / vol', value: `${fmtPct(pm.annual_ret, 1, true)} / ${fmtPct(pm.annual_vol)}` },
     { label: `Beta vs ${benchmark}`, value: fmtN(pm.beta) },
     { label: 'Up / down capture', value: `${fmtN(pm.up_capture, 0)} / ${fmtN(pm.down_capture, 0)}` },
@@ -251,6 +319,17 @@ function ReportCard({ pm, benchmark, stale }) {
         <h3>Portfolio Report Card</h3>
         <span className="pb-muted">Same formula, bands, and weights as the Dashboard grade (Settings › Grading)</span>
       </div>
+      <MetricCards
+        rows={[{
+          id: 'active',
+          total_return_pct: pm.total_return_pct,
+          benchmark_total_return_pct: pm.benchmark_total_return_pct,
+          max_drawdown: pm.max_drawdown,
+          beta: pm.beta,
+        }]}
+        benchmark={benchmark}
+        className="pb-metric-cards-report"
+      />
       <div className="pb-report">
         <div className="pb-grade-ring">
           <GradeBadge grade={grade.overall} large />
@@ -559,6 +638,9 @@ function CompareResults({ result, radarRef, onClose }) {
           Not compared: {result.skipped.map(s => `${s.name} (${s.reason})`).join('; ')}.
         </div>
       )}
+      {res.length > 0 && (
+        <MetricCards rows={res} benchmark={result.benchmark} className="pb-metric-cards-compare" />
+      )}
       {res.length > 0 && <div ref={radarRef} className="pb-chart pb-chart-radar" />}
       {res.length > 0 && (
         <div className="pb-table-wrap">
@@ -608,6 +690,188 @@ function CompareResults({ result, radarRef, onClose }) {
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+const WEIGHT_OPT_MODES = [
+  {
+    key: 'original',
+    label: 'Original weights',
+    title: 'Restore the dollar amounts you set before any weight optimization.',
+  },
+  {
+    key: 'max_score',
+    label: 'Max score',
+    title: 'Shift weight toward holdings that raise the portfolio grade score.',
+  },
+  {
+    key: 'min_drawdown',
+    label: 'Min drawdown',
+    title: 'Reduce peak-to-trough drawdown without giving up most of the upside.',
+  },
+  {
+    key: 'min_beta',
+    label: 'Min beta',
+    title: 'Lower market beta while preserving the portfolio’s ability to capture upside.',
+  },
+  {
+    key: 'max_return',
+    label: 'Max total return',
+    title: 'Shift weight toward holdings that maximize price and total return over the window.',
+  },
+  {
+    key: 'best_balance',
+    label: 'Best overall',
+    title: 'Balance score, drawdown, beta, and total return in one mix. Every ticker already in the portfolio stays in it.',
+  },
+]
+
+function LiveHoldingsPicker({
+  open, name, holdings, selected, search, loading, creating, sourceName, error,
+  destination, activeName, canAddToCurrent,
+  onClose, onNameChange, onSearchChange, onDestinationChange,
+  onToggle, onSelectAll, onSelectNone, onSubmit,
+}) {
+  if (!open) return null
+  const q = search.trim().toUpperCase()
+  const visible = q
+    ? holdings.filter(h => (
+      h.ticker.includes(q) || String(h.name || '').toUpperCase().includes(q)
+    ))
+    : holdings
+  const selectedRows = holdings.filter(h => selected.has(h.ticker))
+  const selectedValue = selectedRows.reduce((s, h) => s + h.dollar_amount, 0)
+  const totalValue = holdings.reduce((s, h) => s + h.dollar_amount, 0)
+  const addToCurrent = destination === 'current' && canAddToCurrent
+  const canSubmit = selected.size > 0 && !loading && !creating && (addToCurrent || Boolean(name.trim()))
+  const submitLabel = creating
+    ? (addToCurrent ? 'Adding…' : 'Creating…')
+    : addToCurrent
+      ? `Add ${selected.size || 0} to ${activeName || 'current'}`
+      : `Create with ${selected.size || 0} holding${selected.size === 1 ? '' : 's'}`
+  return (
+    <div className="pb-modal-overlay" onClick={onClose}>
+      <div
+        className="pb-modal pb-live-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add holdings from account"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="pb-modal-head">
+          <h3>From {sourceName || 'holdings'}</h3>
+          <button type="button" className="pb-port-del pb-modal-close" onClick={onClose} aria-label="Close">&times;</button>
+        </div>
+        <p className="pb-strategy-blurb">
+          Pick any tickers from the selected account at their current market value. Use them to start a new model, or add
+          them into the portfolio you already have open.
+        </p>
+
+        <div className="pb-controls pb-live-dest" role="group" aria-label="Destination">
+          <button
+            type="button"
+            className={`pb-period-btn ${destination === 'current' ? 'pb-period-active' : ''}`}
+            onClick={() => onDestinationChange('current')}
+            disabled={!canAddToCurrent}
+            aria-pressed={destination === 'current'}
+            title={canAddToCurrent
+              ? `Add the selected tickers into ${activeName}`
+              : 'Open or create a model portfolio first to add into it'}
+          >
+            Add to {activeName || 'current portfolio'}
+          </button>
+          <button
+            type="button"
+            className={`pb-period-btn ${destination === 'new' ? 'pb-period-active' : ''}`}
+            onClick={() => onDestinationChange('new')}
+            aria-pressed={destination === 'new'}
+            title="Create a new model portfolio from the selected tickers"
+          >
+            New portfolio
+          </button>
+        </div>
+
+        {destination === 'new' && (
+          <label className="pb-live-name">
+            <span>New portfolio name</span>
+            <input
+              type="text"
+              className="pb-live-name-input"
+              value={name}
+              onChange={e => onNameChange(e.target.value)}
+              placeholder="e.g. Income sleeve"
+              aria-label="New portfolio name"
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+        )}
+        {addToCurrent && (
+          <div className="pb-notice pb-target-met" role="status">
+            Selected tickers will be merged into <strong>{activeName}</strong> at their current market value.
+            Tickers already in that model are updated to the account amount.
+          </div>
+        )}
+
+        <div className="pb-live-tools">
+          <input
+            type="text"
+            className="pb-live-name-input pb-live-search"
+            value={search}
+            onChange={e => onSearchChange(e.target.value)}
+            placeholder="Filter tickers"
+            aria-label="Filter tickers"
+          />
+          <button type="button" className="btn btn-secondary pb-btn-sm" onClick={onSelectAll} disabled={!holdings.length}>Select all</button>
+          <button type="button" className="btn btn-secondary pb-btn-sm" onClick={onSelectNone} disabled={!selected.size}>Select none</button>
+          <span className="pb-muted">
+            {selected.size} of {holdings.length} · {fmt$(selectedValue)}
+            {totalValue > 0 ? ` of ${fmt$(totalValue)}` : ''}
+          </span>
+        </div>
+        {loading ? (
+          <div className="pb-muted">Loading holdings…</div>
+        ) : !holdings.length ? (
+          <div className="pb-notice pb-notice-warn">No priced holdings in the selected account.</div>
+        ) : (
+          <div className="pb-live-list" role="listbox" aria-label="Account holdings" aria-multiselectable="true">
+            {visible.map(h => {
+              const checked = selected.has(h.ticker)
+              const weight = totalValue > 0 ? (h.dollar_amount / totalValue) * 100 : 0
+              return (
+                <label key={h.ticker} className={`pb-live-row ${checked ? 'pb-live-row-on' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggle(h.ticker)}
+                  />
+                  <span className="pb-live-ticker-block">
+                    <span className="pb-live-ticker">{h.ticker}</span>
+                    {h.name ? <span className="pb-holding-name" title={h.name}>{h.name}</span> : null}
+                  </span>
+                  <span className="pb-live-amt">{fmt$(h.dollar_amount)}</span>
+                  <span className="pb-muted">{fmtPct(weight, 1)}</span>
+                </label>
+              )
+            })}
+            {!visible.length && <div className="pb-muted">No tickers match that filter.</div>}
+          </div>
+        )}
+        {error && <div className="pb-form-error">{error}</div>}
+        <div className="pb-modal-actions">
+          <button type="button" className="btn btn-secondary pb-btn-sm" onClick={onClose} disabled={creating}>Cancel</button>
+          <button
+            type="button"
+            className="btn btn-primary pb-btn-sm"
+            onClick={onSubmit}
+            disabled={!canSubmit}
+          >
+            {submitLabel}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -723,6 +987,23 @@ export default function PortfolioBuilder() {
   const [awOverrides, setAwOverrides] = useState({})
   const [rebalanceResult, setRebalanceResult] = useState(null)
   const [rebalanceLoading, setRebalanceLoading] = useState(false)
+
+  // Create from a subset of the selected account's live holdings
+  const [livePickerOpen, setLivePickerOpen] = useState(false)
+  const [liveHoldings, setLiveHoldings] = useState([])
+  const [liveSelected, setLiveSelected] = useState(() => new Set())
+  const [liveSearch, setLiveSearch] = useState('')
+  const [liveName, setLiveName] = useState('')
+  const [liveLoading, setLiveLoading] = useState(false)
+  const [liveCreating, setLiveCreating] = useState(false)
+  const [liveError, setLiveError] = useState(null)
+  const [liveDest, setLiveDest] = useState('new') // 'new' | 'current'
+
+  // Weight optimization toggles (revert to original amounts)
+  const [weightOptMode, setWeightOptMode] = useState('original')
+  const [weightOptOriginal, setWeightOptOriginal] = useState(null) // { pid, amounts: [{ticker, dollar_amount}] }
+  const [weightOptBusy, setWeightOptBusy] = useState(false)
+  const [weightOptError, setWeightOptError] = useState(null)
 
   // Chart containers are reached through refs, never by id: Split View can
   // mount this page in both panes, and an id lookup returns the other pane's
@@ -849,6 +1130,9 @@ export default function PortfolioBuilder() {
     setSortCol(null)
     setBalanceUndo(null)
     setScaleUndo(null)
+    setWeightOptMode('original')
+    setWeightOptOriginal(null)
+    setWeightOptError(null)
     if (activeId) fetchHoldings(activeId)
   }, [activeId, fetchHoldings])
 
@@ -957,19 +1241,93 @@ export default function PortfolioBuilder() {
     } catch (e) { await dialog.alert(e.message) }
   }
 
-  const copyMyHoldings = async () => {
-    const source = currentProfileName || 'My holdings'
-    const name = (await dialog.prompt(
-      `Copy ${source}'s current holdings (at market value) into a new model portfolio named:`,
-      `${source} ${new Date().toLocaleDateString()}`,
-    ))?.trim()
-    if (!name) return
-    try {
-      const created = await send('/api/builder/portfolios', 'POST', { name, from_holdings: true })
-      await loadPortfolios()
-      selectPortfolio(created.id)
-    } catch (e) { await dialog.alert(e.message) }
+  const closeLivePicker = () => {
+    if (liveCreating) return
+    setLivePickerOpen(false)
+    setLiveError(null)
   }
+
+  const openLivePicker = async () => {
+    const source = currentProfileName || 'My holdings'
+    setLivePickerOpen(true)
+    setLiveLoading(true)
+    setLiveError(null)
+    setLiveSearch('')
+    setLiveName(`${source} ${new Date().toLocaleDateString()}`)
+    setLiveDest(activeId ? 'current' : 'new')
+    setLiveHoldings([])
+    setLiveSelected(new Set())
+    try {
+      const data = await send('/api/builder/live-holdings', 'GET')
+      const rows = (data.holdings || []).map(h => ({
+        ticker: String(h.ticker || '').toUpperCase(),
+        name: h.name || null,
+        dollar_amount: Number(h.dollar_amount) || 0,
+      })).filter(h => h.ticker && h.dollar_amount > 0)
+      setLiveHoldings(rows)
+      setLiveSelected(new Set(rows.map(h => h.ticker)))
+      if (!rows.length) setLiveError('No priced holdings in the selected account.')
+    } catch (e) {
+      setLiveError(e.message)
+    } finally {
+      setLiveLoading(false)
+    }
+  }
+
+  const toggleLiveTicker = (ticker) => {
+    setLiveSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(ticker)) next.delete(ticker)
+      else next.add(ticker)
+      return next
+    })
+  }
+
+  const selectedLiveHoldings = () => liveHoldings
+    .filter(h => liveSelected.has(h.ticker))
+    .map(h => ({ ticker: h.ticker, dollar_amount: h.dollar_amount }))
+
+  const submitLiveHoldings = async () => {
+    if (!liveSelected.size || liveCreating) return
+    const picks = selectedLiveHoldings()
+    if (!picks.length) return
+    setLiveCreating(true)
+    setLiveError(null)
+    try {
+      if (liveDest === 'current' && activeId) {
+        await send(`/api/builder/portfolios/${activeId}/holdings`, 'PUT', {
+          holdings: picks,
+          replace: false,
+        })
+        setLivePickerOpen(false)
+        setWeightOptMode('original')
+        setWeightOptOriginal(null)
+        setBalanceUndo(null)
+        setScaleUndo(null)
+        await refreshAfterWrite(activeId)
+      } else {
+        const name = liveName.trim()
+        if (!name) {
+          setLiveError('Enter a name for the new portfolio.')
+          return
+        }
+        const created = await send('/api/builder/portfolios', 'POST', {
+          name,
+          from_holdings: true,
+          tickers: picks.map(h => h.ticker),
+        })
+        setLivePickerOpen(false)
+        await loadPortfolios()
+        selectPortfolio(created.id)
+      }
+    } catch (e) {
+      setLiveError(e.message)
+    } finally {
+      setLiveCreating(false)
+    }
+  }
+
+  const copyMyHoldings = () => openLivePicker()
 
   const deletePortfolio = async (p, e) => {
     e.stopPropagation()
@@ -1557,6 +1915,69 @@ export default function PortfolioBuilder() {
     }
   }
 
+  const applyWeightOptimization = async (mode) => {
+    if (!activeId || busy || weightOptBusy || mode === weightOptMode) return
+    setWeightOptError(null)
+    if (mode === 'original') {
+      if (!weightOptOriginal || weightOptOriginal.pid !== activeId) {
+        setWeightOptMode('original')
+        return
+      }
+      setWeightOptBusy(true)
+      try {
+        if (await writeAmounts(activeId, weightOptOriginal.amounts)) {
+          setWeightOptMode('original')
+          setWeightOptOriginal(null)
+        }
+      } finally {
+        setWeightOptBusy(false)
+      }
+      return
+    }
+    setWeightOptBusy(true)
+    try {
+      const snapshot = weightOptOriginal?.pid === activeId
+        ? weightOptOriginal
+        : { pid: activeId, amounts: holdings.map(h => ({ ticker: h.ticker, dollar_amount: h.dollar_amount })) }
+      // Each goal is measured from the user's original mix, not a prior toggle.
+      if (weightOptOriginal?.pid === activeId) {
+        await send(`/api/builder/portfolios/${activeId}/holdings`, 'PUT', {
+          holdings: weightOptOriginal.amounts,
+          replace: false,
+        })
+      }
+      const result = await send(`/api/builder/portfolios/${activeId}/optimize`, 'POST', {
+        objective: mode,
+        period,
+        benchmark,
+        grading_settings: gradingSettingsPayload(),
+      })
+      const next = (result.holdings || []).map(h => ({
+        ticker: h.ticker,
+        dollar_amount: Number(h.dollar_amount) || 0,
+      }))
+      if (!next.length) throw new Error('Optimizer returned no holdings.')
+      if (!result.improved) {
+        setWeightOptError('No better mix found for that objective in this window.')
+        setWeightOptMode('original')
+        setWeightOptOriginal(null)
+        await refreshAfterWrite(activeId)
+        return
+      }
+      if (await writeAmounts(activeId, next)) {
+        setWeightOptOriginal(snapshot)
+        setWeightOptMode(mode)
+        setBalanceUndo(null)
+        setScaleUndo(null)
+      }
+    } catch (e) {
+      setWeightOptError(e.message)
+      setWeightOptMode(weightOptOriginal?.pid === activeId ? weightOptMode : 'original')
+    } finally {
+      setWeightOptBusy(false)
+    }
+  }
+
   // ── Export ─────────────────────────────────────────────────────────────────
   const exportPortfolio = async (format) => {
     if (!activeId || !holdings.length || exporting) return
@@ -1673,6 +2094,11 @@ export default function PortfolioBuilder() {
       return renderEditor(c, row, cls)
     }
     if (c.key === 'ticker') {
+      const yieldTitle = isNum(row.annual_yield_pct)
+        ? (row.yield_source
+          ? `Historical yield ${fmtN(row.annual_yield_pct, 2)}% · ${row.yield_source}`
+          : `Historical yield ${fmtN(row.annual_yield_pct, 2)}%`)
+        : null
       return (
         <td key={c.key} className={cls}>
           {isTotal ? <strong>{val}</strong> : (
@@ -1680,6 +2106,10 @@ export default function PortfolioBuilder() {
               <button type="button" className="pb-link-btn pb-ticker-btn" onClick={() => startEdit(row.ticker, 'ticker')} title={spec.title}>
                 {val}
               </button>
+              {row.name ? <span className="pb-holding-name" title={row.name}>{row.name}</span> : null}
+              {isNum(row.annual_yield_pct) ? (
+                <span className="pb-holding-yield" title={yieldTitle}>{fmtN(row.annual_yield_pct, 2)}%</span>
+              ) : null}
               {row.pending && loading && <span className="pb-pending" title="Being analyzed">…</span>}
             </span>
           )}
@@ -1880,10 +2310,10 @@ export default function PortfolioBuilder() {
         <button
           type="button"
           className="pb-new-btn pb-copy-btn"
-          onClick={copyMyHoldings}
-          title="Start a model from the selected account's current holdings at market value. It grades the same as the Dashboard."
+          onClick={openLivePicker}
+          title="Start a model from some or all of the selected account's current holdings at market value."
         >
-          Copy my holdings
+          From my holdings…
         </button>
         <div className="pb-port-list">
           {portfolios.map(p => (
@@ -1941,7 +2371,7 @@ export default function PortfolioBuilder() {
             </p>
             <div className="pb-empty-actions">
               <button type="button" className="btn btn-primary" onClick={createPortfolio}>New portfolio</button>
-              <button type="button" className="btn btn-secondary" onClick={copyMyHoldings}>Copy my holdings</button>
+              <button type="button" className="btn btn-secondary" onClick={openLivePicker}>From my holdings…</button>
             </div>
           </div>
         ) : (
@@ -2182,6 +2612,30 @@ export default function PortfolioBuilder() {
             {data && <AnalysisNotes data={data} />}
             {!data && loading && <p className="pb-window-note pb-muted">Grading {holdings.length} holdings…</p>}
 
+            {holdings.length > 1 && (
+              <div className="pb-notice pb-weight-opt" role="group" aria-label="Weight optimization">
+                <span className="pb-weight-opt-label">
+                  <strong>Re-weight</strong>
+                  <span className="pb-muted"> Toggle a goal to shift Wt %; Original restores your amounts.</span>
+                </span>
+                <div className="pb-controls pb-weight-opt-toggles">
+                  {WEIGHT_OPT_MODES.map(m => (
+                    <button
+                      type="button"
+                      key={m.key}
+                      className={`pb-period-btn ${weightOptMode === m.key ? 'pb-period-active' : ''}`}
+                      onClick={() => applyWeightOptimization(m.key)}
+                      disabled={busy || weightOptBusy || loading || (m.key === 'original' && !weightOptOriginal)}
+                      title={m.title}
+                      aria-pressed={weightOptMode === m.key}
+                    >{m.label}</button>
+                  ))}
+                </div>
+                {weightOptBusy && <span className="pb-muted">Optimizing…</span>}
+                {weightOptError && <span className="pb-form-error">{weightOptError}</span>}
+              </div>
+            )}
+
             {holdings.length > 0 ? (
               <>
                 <div className="pb-table-tools">
@@ -2286,6 +2740,29 @@ export default function PortfolioBuilder() {
           <CompareResults result={compareResult} radarRef={radarRef} onClose={() => setCompareResult(null)} />
         )}
       </div>
+
+      <LiveHoldingsPicker
+        open={livePickerOpen}
+        name={liveName}
+        holdings={liveHoldings}
+        selected={liveSelected}
+        search={liveSearch}
+        loading={liveLoading}
+        creating={liveCreating}
+        sourceName={currentProfileName}
+        error={liveError}
+        destination={liveDest}
+        activeName={activeName}
+        canAddToCurrent={Boolean(activeId)}
+        onClose={closeLivePicker}
+        onNameChange={setLiveName}
+        onSearchChange={setLiveSearch}
+        onDestinationChange={setLiveDest}
+        onToggle={toggleLiveTicker}
+        onSelectAll={() => setLiveSelected(new Set(liveHoldings.map(h => h.ticker)))}
+        onSelectNone={() => setLiveSelected(new Set())}
+        onSubmit={submitLiveHoldings}
+      />
 
       {/* ── Strategy modal ───────────────────────────────────────────────── */}
       {awOpen && (

@@ -53945,7 +53945,42 @@ def _builder_live_holdings(conn):
         amount = _builder_clean_amount(r["current_value"])
         if ticker and amount:
             holdings.append({"ticker": ticker, "dollar_amount": amount})
+    _builder_fill_holding_names(holdings, conn=conn)
     return holdings
+
+
+def _builder_fill_holding_names(rows, conn=None):
+    """Attach locally known fund names onto builder holding dicts."""
+    if not rows:
+        return
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_connection()
+    try:
+        names = _resolve_security_descriptions(conn, [r.get("ticker") for r in rows])
+    finally:
+        if owns_conn:
+            conn.close()
+    for row in rows:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        name = names.get(ticker)
+        row["name"] = name if name else None
+
+
+@app.route("/api/builder/live-holdings", methods=["GET"])
+def builder_live_holdings():
+    """Tickers and market values from the selected account (or aggregate).
+
+    Used by Portfolio Builder to pick a subset of real holdings when seeding a
+    new model. Same universe Dashboard grades: positive quantity and value.
+    """
+    conn = get_connection()
+    try:
+        holdings = _builder_live_holdings(conn)
+    finally:
+        conn.close()
+    total = round(sum(h["dollar_amount"] for h in holdings), 2)
+    return jsonify({"holdings": holdings, "total_value": total, "count": len(holdings)})
 
 
 @app.route("/api/builder/portfolios", methods=["GET"])
@@ -53968,9 +54003,10 @@ def builder_list_portfolios():
 def builder_create_portfolio():
     """Create a model portfolio, optionally seeded with holdings.
 
-    ``holdings`` copies a list in one step (Save As). ``from_holdings`` copies
-    the selected account's real positions at their current market value, so
-    the model starts out graded exactly as Dashboard grades the account.
+    ``holdings`` copies a list in one step (Save As / pick from account).
+    ``from_holdings`` copies the selected account's real positions at market
+    value. Optional ``tickers`` with ``from_holdings`` keeps only those names,
+    so a model can start from a subset of the account.
     """
     pid = get_profile_id()
     data = request.get_json(silent=True) or {}
@@ -53986,6 +54022,14 @@ def builder_create_portfolio():
     try:
         if data.get("from_holdings"):
             holdings = _builder_live_holdings(conn)
+            if data.get("tickers") is not None:
+                if not isinstance(data.get("tickers"), list):
+                    return jsonify({"error": "tickers must be a list"}), 400
+                wanted = {
+                    t for t in (_builder_clean_ticker(raw) for raw in data.get("tickers"))
+                    if t
+                }
+                holdings = [h for h in holdings if h["ticker"] in wanted]
             if not holdings:
                 return jsonify({"error": "The selected account has no priced holdings to copy."}), 400
         elif data.get("holdings") is not None:
@@ -55095,6 +55139,7 @@ def _builder_analyze_holdings(holdings, adjusted, price, benchmark, period_range
         y_pct = _builder_finite(y_pct) or 0.0
         row = {
             "ticker": t,
+            "name": None,
             "dollar_amount": round(amt, 2),
             "weight_pct": _builder_finite(amt / total_value * 100) if total_value > 0 else 0.0,
             "shares": None, "current_price": None, "first_date": None,
@@ -55264,6 +55309,7 @@ def _builder_analyze_holdings(holdings, adjusted, price, benchmark, period_range
             }
 
     index = close.index
+    _builder_fill_holding_names(rows)
     return {
         "benchmark": benchmark,
         "portfolio_metrics": metrics,
@@ -55346,12 +55392,132 @@ def builder_analyze(port_id):
     return jsonify(result)
 
 
+@app.route("/api/builder/portfolios/<int:port_id>/optimize", methods=["POST"])
+def builder_optimize(port_id):
+    """Re-weight the model for score, drawdown, beta, or total return.
+
+    Returns suggested dollar amounts (total invested unchanged for graded
+    holdings). The client applies them with PUT holdings and can undo.
+    """
+    import numpy as np
+    from grading import (
+        BUILDER_OPTIMIZE_OBJECTIVES,
+        min_observations_for_window, optimize_portfolio_weights,
+        portfolio_returns_frame,
+    )
+
+    data = request.get_json(silent=True) or {}
+    objective = str(data.get("objective") or "").strip()
+    if objective not in BUILDER_OPTIMIZE_OBJECTIVES:
+        return jsonify({
+            "error": "objective must be one of: " + ", ".join(sorted(BUILDER_OPTIMIZE_OBJECTIVES)),
+        }), 400
+
+    grading_settings, benchmark, period_range = _builder_request_options(data)
+    conn = get_connection()
+    try:
+        port = _builder_portfolio_row(conn, port_id)
+        if port is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        holdings = _builder_load_holdings(conn, port_id)
+        targets = _builder_targets(conn, port_id)
+        max_weight = targets.get("max_weight_pct")
+    finally:
+        conn.close()
+    if not holdings:
+        return jsonify({"error": "No holdings in this portfolio"}), 400
+
+    tickers = [h["ticker"] for h in holdings]
+    try:
+        adjusted, price = _builder_price_frames([*tickers, benchmark], period_range)
+    except Exception as e:
+        return jsonify({"error": f"Price download failed: {e}"}), 502
+    if adjusted.empty:
+        return jsonify({"error": _BUILDER_NO_PRICES}), 503
+
+    yields = _builder_yields(tickers, _builder_last_prices(adjusted, price, tickers))
+    analysis = _builder_analyze_holdings(
+        holdings, adjusted, price, benchmark, period_range, grading_settings, yields)
+    graded_rows = [h for h in analysis["holdings"] if h.get("graded") and h.get("dollar_amount", 0) > 0]
+    if len(graded_rows) < 2:
+        return jsonify({"error": "Need at least two graded holdings to re-weight."}), 400
+
+    graded = [h["ticker"] for h in graded_rows]
+    amounts = {h["ticker"]: float(h["dollar_amount"]) for h in graded_rows}
+    graded_total = sum(amounts.values())
+    returns_df = portfolio_returns_frame(adjusted[graded])
+    window_observations = max(len(adjusted.index) - 1, 0)
+    min_obs = min_observations_for_window(window_observations)
+    if min_obs is None:
+        return jsonify({"error": "The grade window is too short to optimize."}), 400
+
+    bench_close = adjusted[benchmark].dropna() if benchmark in adjusted.columns else None
+    bench_ret = (
+        bench_close.pct_change().dropna()
+        if bench_close is not None and len(bench_close) > 1 else None
+    )
+    weights = np.array([amounts[t] for t in graded], dtype=float)
+    cap = (float(max_weight) / 100.0) if max_weight and float(max_weight) > 0 else 0.40
+    cap = max(0.05, min(cap, 1.0))
+
+    found = optimize_portfolio_weights(
+        returns_df, weights, bench_ret, objective,
+        max_weight=cap, min_obs=min_obs, grading_settings=grading_settings,
+    )
+    if found is None:
+        return jsonify({"error": "Could not optimize this mix."}), 400
+
+    new_amounts = {
+        t: round(float(found["weights"][i]) * graded_total, 2)
+        for i, t in enumerate(graded)
+    }
+    # Keep ungraded / unpriced holdings at their current dollars.
+    apply_holdings = []
+    for h in holdings:
+        ticker = h["ticker"]
+        if ticker in new_amounts:
+            apply_holdings.append({"ticker": ticker, "dollar_amount": max(new_amounts[ticker], 0.01)})
+        else:
+            apply_holdings.append({"ticker": ticker, "dollar_amount": round(float(h["dollar_amount"]), 2)})
+
+    start_m = found.get("start_metrics") or {}
+    after_m = found.get("metrics") or {}
+
+    def _metric_payload(m):
+        if not m:
+            return None
+        return {
+            "score": m.get("shown_score"),
+            "grade": m.get("grade"),
+            "total_return_pct": _builder_finite(m.get("total_return_pct")),
+            "max_drawdown": m.get("max_drawdown"),
+            "beta": m.get("beta"),
+            "up_capture": m.get("up_capture"),
+        }
+
+    return jsonify({
+        "objective": objective,
+        "improved": bool(found.get("improved")),
+        "stopped": found.get("stopped"),
+        "iterations": found.get("iterations"),
+        "holdings": apply_holdings,
+        "before": _metric_payload(start_m),
+        "after": _metric_payload(after_m),
+        "max_weight_pct": round(cap * 100, 2),
+        "period_key": period_range["key"],
+        "benchmark": benchmark,
+    })
+
+
 # ── Portfolio Builder Export ─────────────────────────────────────────────────
 
 # (header, analysis key). The same columns, in the same order, as the Builder's
 # holdings table; the last row is the portfolio as a whole.
 _BUILDER_EXPORT_COLUMNS = [
     ("Ticker", "ticker"),
+    ("Name", "name"),
+    ("Yield %", "annual_yield_pct"),
+    ("Yield Source", "yield_source"),
     ("Amount", "dollar_amount"),
     ("Running Total", "running_total"),
     ("Weight %", "weight_pct"),
@@ -55371,8 +55537,6 @@ _BUILDER_EXPORT_COLUMNS = [
     ("Total Return %", "total_return_pct"),
     ("Price Change %", "price_change_pct"),
     ("Annualized Return %", "annual_ret"),
-    ("Yield %", "annual_yield_pct"),
-    ("Yield Source", "yield_source"),
     ("Annual Income", "annual_income"),
     ("Monthly Income", "monthly_income"),
 ]
@@ -55534,7 +55698,7 @@ def builder_export(port_id):
     header_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
     row_border = Border(bottom=Side(style="thin", color="90CAF9"))
     total_border = Border(top=Side(style="medium", color="1565C0"))
-    text_headers = {"Ticker", "Grade", "Yield Source"}
+    text_headers = {"Ticker", "Name", "Grade", "Yield Source"}
 
     wb = Workbook()
     ws = wb.active
