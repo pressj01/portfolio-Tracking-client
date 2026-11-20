@@ -31,19 +31,39 @@ import {
   DEFAULT_PERCENT_LEVEL_KEYS,
   OFF_HIGH_COLOR,
   PERCENT_LEVEL_OPTIONS,
-  RESISTANCE_COLOR,
-  SUPPORT_COLOR,
   drawdownFromHigh,
   drawdownLabel,
   findSupportResistance,
   percentLevelBase,
   percentLevelLabel,
   levelDateLabel,
+  levelDistanceLabel,
   percentLevels,
+  sanitizePercentLevelColors,
+  sanitizeSrColors,
   spreadLabelPositions,
   srHistoryPeriod,
+  srLevelColor,
 } from '../utils/priceLevels'
 import { OffHighToggle, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
+
+// Support / resistance labels sit in a gutter right of the price plot.
+const SR_LABEL_FONT_SIZE = 11
+const SR_GUTTER_SHIFT = 6
+const PLOTLY_FONT_FAMILY = '"Open Sans", verdana, arial, sans-serif'
+let labelMeasureCtx = null
+
+/** Width in px of the widest line of a Plotly annotation's text, measured bold to be safe. */
+function measureLabelPx(html, fontSize) {
+  const lines = String(html).split(/<br\s*\/?>/i).map(l => l.replace(/<[^>]+>/g, ''))
+  try {
+    labelMeasureCtx = labelMeasureCtx || document.createElement('canvas').getContext('2d')
+    labelMeasureCtx.font = `bold ${fontSize}px ${PLOTLY_FONT_FAMILY}`
+    return Math.max(...lines.map(l => labelMeasureCtx.measureText(l).width))
+  } catch {
+    return Math.max(...lines.map(l => l.length)) * fontSize * 0.7
+  }
+}
 
 // ── Study Templates (TOS-style: add multiple instances of the same type) ─────
 
@@ -2116,10 +2136,20 @@ export default function ETFScreen() {
   useEffect(() => { localStorage.setItem('etf_showPctLevels', String(showPctLevels)) }, [showPctLevels])
   useEffect(() => { localStorage.setItem('etf_pctLevelKeys', JSON.stringify(pctLevelKeys)) }, [pctLevelKeys])
   useEffect(() => { localStorage.setItem('etf_pctLevelBase', pctLevelBase) }, [pctLevelBase])
+  // Per-line % level colors keyed by option (u20, d5…); a key with no entry uses its default.
+  const [pctLevelColors, setPctLevelColors] = useState(() => {
+    try { return sanitizePercentLevelColors(JSON.parse(localStorage.getItem('etf_pctLevelColors'))) } catch { return {} }
+  })
+  useEffect(() => { localStorage.setItem('etf_pctLevelColors', JSON.stringify(pctLevelColors)) }, [pctLevelColors])
   const [showOffHigh, setShowOffHigh] = useState(() => localStorage.getItem('etf_showOffHigh') === 'true')
   useEffect(() => { localStorage.setItem('etf_showOffHigh', String(showOffHigh)) }, [showOffHigh])
   useEffect(() => { localStorage.setItem('etf_showSR', String(showSR)) }, [showSR])
   useEffect(() => { localStorage.setItem('etf_srPerSide', String(srPerSide)) }, [srPerSide])
+  // Per-line S/R colors keyed by label (S1, R2…); a label with no entry uses the side default.
+  const [srColors, setSrColors] = useState(() => {
+    try { return sanitizeSrColors(JSON.parse(localStorage.getItem('etf_srColors'))) } catch { return {} }
+  })
+  useEffect(() => { localStorage.setItem('etf_srColors', JSON.stringify(srColors)) }, [srColors])
 
   const fibClicksRef = useRef(fibClicks)
   fibClicksRef.current = fibClicks
@@ -2748,7 +2778,7 @@ export default function ETFScreen() {
     // Percent levels sit at fixed moves from a reference price; extend the price
     // axis so every selected level is on screen.
     const pctBase = showPctLevels ? percentLevelBase(records, pctLevelBase) : null
-    const pctLevelList = showPctLevels ? percentLevels(pctBase, pctLevelKeys) : []
+    const pctLevelList = showPctLevels ? percentLevels(pctBase, pctLevelKeys, pctLevelColors) : []
     const toAxisY = (price) => (isPct ? toPct(price) : price)
     let yLo = priceMin - yPadBot
     let yHi = priceMax + yPadTop
@@ -2921,6 +2951,10 @@ export default function ETFScreen() {
       })
     }
 
+    // S/R labels sit in a gutter just right of the plot area, so the full text never
+    // covers the newest bars. The right margin widens below to fit the longest label.
+    const gutterAnnotations = []
+    let gutterLines = 1
     if (srLevels) {
       const addSR = (lvl, color) => {
         if (!canPlot(lvl.price)) return
@@ -2939,23 +2973,42 @@ export default function ETFScreen() {
           line: { color, width: 2, dash: lvl.fromHistory ? 'dot' : 'solid' },
         })
         const kind = lvl.label.startsWith('S') ? 'Support' : 'Resistance'
-        const parts = [`<b>${lvl.label}</b> ${kind} ${formatMoney(lvl.price)}`, `${lvl.touches} touch${lvl.touches === 1 ? '' : 'es'}`]
-        if (lvl.testing) parts.push('testing')
-        if (lvl.fromHistory && lvl.lastDate) parts.push(`last touch ${levelDateLabel(lvl.lastDate)}`)
-        levelAnnotations.push(levelLabel(lvl.price, parts.join(' · '), color, 'right'))
+        // How far the last close has to fall (support) or rise (resistance) to reach it.
+        const distance = levelDistanceLabel(lvl.pctFromClose)
+        const touches = `${lvl.touches} touch${lvl.touches === 1 ? '' : 'es'}`
+        const lines = [
+          `<b>${lvl.label}</b> ${kind} ${formatMoney(lvl.price)}${lvl.testing ? ' · testing' : ''}`,
+          distance ? `<b>${distance}</b> · ${touches}` : touches,
+        ]
+        if (lvl.fromHistory && lvl.lastDate) lines.push(`last touch ${levelDateLabel(lvl.lastDate)}`)
+        gutterLines = Math.max(gutterLines, lines.length)
+        gutterAnnotations.push({
+          x: 1, xref: 'paper', xanchor: 'left', xshift: SR_GUTTER_SHIFT,
+          y: annotY(lvl.price), yref: 'y', yanchor: 'middle',
+          text: lines.join('<br>'), align: 'left', showarrow: false,
+          font: { color, size: SR_LABEL_FONT_SIZE },
+          bgcolor: labelBg, bordercolor: color, borderwidth: 1, borderpad: 2,
+        })
       }
-      srLevels.resistance.forEach(l => addSR(l, RESISTANCE_COLOR))
-      srLevels.support.forEach(l => addSR(l, SUPPORT_COLOR))
+      srLevels.resistance.forEach(l => addSR(l, srLevelColor(l.label, srColors)))
+      srLevels.support.forEach(l => addSR(l, srLevelColor(l.label, srColors)))
+    }
+
+    if (gutterAnnotations.length) {
+      const widest = Math.max(...gutterAnnotations.map(a => measureLabelPx(a.text, SR_LABEL_FONT_SIZE)))
+      // gutter shift + label box (text, 2px pad and 1px border each side) + the
+      // original margin, which the vertical modebar sits in.
+      layout.margin = { ...layout.margin, r: layout.margin.r + SR_GUTTER_SHIFT + Math.ceil(widest) + 8 }
     }
 
     // Keep level labels from overlapping: estimate axis units per pixel in the price
-    // pane, then push labels on the same side apart by roughly one label height.
-    if (levelAnnotations.length > 1) {
+    // pane, then push labels in the same column apart by roughly one label height.
+    if (levelAnnotations.length + gutterAnnotations.length > 1) {
       const panePx = (layout.height - layout.margin.t - layout.margin.b) * (priceTop - priceBot)
       let axisLo = yLo
       let axisHi = yHi
       if (chartScale === 'log') {
-        const ys = [...lows, ...highs, ...levelAnnotations.map(a => 10 ** a.y)].filter(v => v > 0)
+        const ys = [...lows, ...highs, ...[...levelAnnotations, ...gutterAnnotations].map(a => 10 ** a.y)].filter(v => v > 0)
         axisLo = Math.log10(Math.min(...ys))
         axisHi = Math.log10(Math.max(...ys))
         const pad = (axisHi - axisLo) * 0.05
@@ -2969,16 +3022,20 @@ export default function ETFScreen() {
           const ys = spreadLabelPositions(group.map(a => a.y), 19 * unitsPerPx, axisHi - 19 * unitsPerPx)
           group.forEach((a, i) => { a.y = ys[i] })
         })
+        // Gutter labels are centered on their line and can run to three lines tall.
+        const gutterGapPx = gutterLines * SR_LABEL_FONT_SIZE * 1.3 + 8
+        const ys = spreadLabelPositions(gutterAnnotations.map(a => a.y), gutterGapPx * unitsPerPx, axisHi - (gutterGapPx / 2) * unitsPerPx)
+        gutterAnnotations.forEach((a, i) => { a.y = ys[i] })
       }
     }
 
     const fibShapes = fibSets.flatMap(f => f.shapes)
     const fibAnnotations = fibSets.flatMap(f => f.annotations)
     layout.shapes = [...regimeShapes, ...levelShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
-    const extraAnnotations = [...levelAnnotations, ...fibAnnotations]
+    const extraAnnotations = [...levelAnnotations, ...gutterAnnotations, ...fibAnnotations]
     if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
     return { data: traces, layout, regimeShapes, levelShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, srLevels, showOffHigh, isDark])
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, srLevels, srColors, showOffHigh, isDark])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -3596,12 +3653,19 @@ export default function ETFScreen() {
               onChangeKeys={setPctLevelKeys}
               base={pctLevelBase}
               onChangeBase={setPctLevelBase}
+              colors={pctLevelColors}
+              onChangeColor={(key, color) => setPctLevelColors(prev => ({ ...prev, [key]: color }))}
+              onResetColors={() => setPctLevelColors({})}
             />
             <SupportResistanceControl
               active={showSR}
               onToggle={() => setShowSR(v => !v)}
               perSide={srPerSide}
               onChangePerSide={setSrPerSide}
+              colors={srColors}
+              onChangeColor={(label, color) => setSrColors(prev => ({ ...prev, [label]: color }))}
+              onResetColors={() => setSrColors({})}
+              levels={srLevels}
             />
             <OffHighToggle active={showOffHigh} onToggle={() => setShowOffHigh(v => !v)} />
           </div>

@@ -23,8 +23,55 @@ export const PERCENT_LEVEL_BASES = [
 
 export const SUPPORT_COLOR = '#26A69A'
 export const RESISTANCE_COLOR = '#EF5350'
+export const MAX_SR_PER_SIDE = 5
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v)
+const HEX_COLOR = /^#[0-9a-f]{6}$/i
+const SR_LABEL = /^[SR][1-5]$/
+
+/** Color for an S/R line: the user's pick for that label (S1, R2…), else the side's default. */
+export function srLevelColor(label, colors) {
+  const custom = colors?.[label]
+  if (typeof custom === 'string' && HEX_COLOR.test(custom)) return custom
+  return String(label).startsWith('R') ? RESISTANCE_COLOR : SUPPORT_COLOR
+}
+
+function sanitizeColorMap(saved, isValidKey) {
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {}
+  const out = {}
+  Object.entries(saved).forEach(([key, color]) => {
+    if (isValidKey(key) && typeof color === 'string' && HEX_COLOR.test(color)) out[key] = color
+  })
+  return out
+}
+
+/** Keep only S1…S5 / R1…R5 entries holding a #rrggbb color from a saved color map. */
+export function sanitizeSrColors(saved) {
+  return sanitizeColorMap(saved, key => SR_LABEL.test(key))
+}
+
+/**
+ * The S/R labels the menu offers colors for, top of the chart to bottom:
+ * R{n}…R1 above price, then S1…S{n} below it.
+ */
+export function srColorLabels(perSide) {
+  const n = Number.isInteger(perSide) ? Math.min(MAX_SR_PER_SIDE, Math.max(1, perSide)) : 3
+  const idx = Array.from({ length: n }, (_, i) => i + 1)
+  return [...idx.slice().reverse().map(i => `R${i}`), ...idx.map(i => `S${i}`)]
+}
+
+/** Percent move from the last close to a level: negative below it, positive above. */
+export function levelDistancePct(price, lastClose) {
+  if (!finite(price) || !finite(lastClose) || lastClose <= 0) return null
+  return (price / lastClose - 1) * 100
+}
+
+/** "-1.45% from close" / "+3.20% from close" / "At close" for an S/R label. */
+export function levelDistanceLabel(pct) {
+  if (!finite(pct)) return ''
+  if (Math.abs(pct) < 0.005) return 'At close'
+  return `${pct > 0 ? '+' : ''}${pct.toFixed(2)}% from close`
+}
 
 /** Reference price for percent levels: last close, or the highest high in the loaded period. */
 export function percentLevelBase(records, base = 'close') {
@@ -40,14 +87,29 @@ export function percentLevelBase(records, base = 'close') {
   return null
 }
 
-/** Levels for the selected keys, ordered from highest price to lowest. */
-export function percentLevels(basePrice, keys) {
+/**
+ * Levels for the selected keys, ordered from highest price to lowest. `colors` maps
+ * an option key to the user's color for it; keys without one keep their default.
+ */
+export function percentLevels(basePrice, keys, colors) {
   if (!finite(basePrice) || basePrice <= 0) return []
   const selected = new Set(keys || [])
   return PERCENT_LEVEL_OPTIONS
     .filter(opt => selected.has(opt.key))
-    .map(opt => ({ ...opt, price: basePrice * (1 + opt.pct / 100) }))
+    .map(opt => ({ ...opt, color: percentLevelColor(opt.key, colors), price: basePrice * (1 + opt.pct / 100) }))
     .sort((a, b) => b.price - a.price)
+}
+
+/** Color for a percent level: the user's pick for that key (u20, d5…), else its default. */
+export function percentLevelColor(key, colors) {
+  const custom = colors?.[key]
+  if (typeof custom === 'string' && HEX_COLOR.test(custom)) return custom
+  return PERCENT_LEVEL_OPTIONS.find(o => o.key === key)?.color ?? '#9E9E9E'
+}
+
+/** Keep only known percent-level keys holding a #rrggbb color from a saved color map. */
+export function sanitizePercentLevelColors(saved) {
+  return sanitizeColorMap(saved, key => PERCENT_LEVEL_OPTIONS.some(o => o.key === key))
 }
 
 export function percentLevelLabel(pct) {
@@ -225,8 +287,8 @@ export function approachedFromAbove(rows, price, tolerance) {
 /**
  * Detect support and resistance levels relative to the last close.
  * Returns { support, resistance, lastClose, tolerance } where each level is
- * { label, price, low, high, touches, lastIndex, lastDate, score, testing, fromHistory },
- * nearest-to-price first.
+ * { label, price, low, high, touches, lastIndex, lastDate, score, testing, fromHistory,
+ * pctFromClose }, nearest-to-price first.
  *
  * A level within `tolerance` of the last close is one price is testing right now: it
  * counts as support when price came down into it and resistance when price rose into
@@ -289,10 +351,11 @@ export function findSupportResistance(records, options = {}) {
     short.forEach(side => fill(chosen[side], older.filter(c => c.side === side)))
   }
 
+  // pctFromClose: how far price has to move from the last close to reach the level.
   const support = chosen.support.sort((a, b) => b.price - a.price)
-    .map((c, i) => ({ ...c, label: `S${i + 1}` }))
+    .map((c, i) => ({ ...c, label: `S${i + 1}`, pctFromClose: levelDistancePct(c.price, lastClose) }))
   const resistance = chosen.resistance.sort((a, b) => a.price - b.price)
-    .map((c, i) => ({ ...c, label: `R${i + 1}` }))
+    .map((c, i) => ({ ...c, label: `R${i + 1}`, pctFromClose: levelDistancePct(c.price, lastClose) }))
 
   return { support, resistance, lastClose, tolerance }
 }

@@ -4261,14 +4261,24 @@ function ETFScreenHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>% Levels</strong> — Dashed lines at fixed percent moves, labeled with the percent and price.
           Choose any of +20%, +10%, +5%, −5%, −10%, −20%, −25%, −40% and −50% from the ▾ menu, and whether they are
-          measured from the <em>last close</em> or the <em>period high</em>. The price axis stretches so every
-          selected level is visible, so turn off the deeper levels if the candles get too compressed.</li>
-        <li><strong>S/R</strong> — Support (S1, S2…, green) below the last close and resistance (R1, R2…, red)
-          above it, nearest first. Levels are found by clustering swing highs and lows in the loaded period;
-          each label shows how many swings touched the level, and the shaded band shows the price zone those
-          swings covered. Choose 1–5 levels per side from the ▾ menu. Changing the period (1Y, 5Y…) changes
-          which swings are used.
+          measured from the <em>last close</em> or the <em>period high</em>. The color square beside each level
+          in the menu changes that line's color; <em>Reset colors</em> puts back the defaults. The price axis
+          stretches so every selected level is visible, so turn off the deeper levels if the candles get too
+          compressed.</li>
+        <li><strong>S/R</strong> — Support (S1, S2…, green by default) below the last close and resistance (R1,
+          R2…, red by default) above it, nearest first. Levels are found by clustering swing highs and lows in
+          the loaded period, and the shaded band shows the price zone those swings covered. Choose 1–5 levels
+          per side from the ▾ menu. Changing the period (1Y, 5Y…) changes which swings are used.
           <ul style={{ paddingLeft: '1.25rem' }}>
+            <li><em>Labels</em> — sit just right of the chart so they never cover the newest bars. Each one
+              shows the level's price, how far the last bar's close has to fall (support, e.g. <em>−1.73% from
+              close</em>) or rise (resistance) to reach it, and the number of <em>touches</em>.</li>
+            <li><em>Touches</em> — how many swing highs and lows (bars where price turned around) sit at the
+              level. Both kinds count, so old resistance that later held as support keeps its count. More
+              touches means a stronger level; the period's highest high and lowest low always count as one.</li>
+            <li><em>Colors</em> — the ▾ menu has a row for each level shown (R1, R2… and S1, S2…) with its price
+              and distance from the close. Click a color square to recolor that line, its band and its label; <em>Reset colors</em>
+              returns to green and red.</li>
             <li><em>Testing</em> — a level within reach of the last close is the one price is testing right
               now. It counts as support if price came down into it and resistance if price rose into it,
               even when the close sits just past it.</li>

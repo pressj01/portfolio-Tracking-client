@@ -1,9 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
+  MAX_SR_PER_SIDE,
   PERCENT_LEVEL_BASES,
   PERCENT_LEVEL_OPTIONS,
+  levelDistanceLabel,
+  percentLevelColor,
   percentLevelLabel,
+  srColorLabels,
+  srLevelColor,
 } from '../utils/priceLevels'
+import { formatMoney } from '../utils/money'
 
 // A toggle button with an attached ▾ menu. The main button turns the overlay on/off
 // with one click; the caret opens its settings.
@@ -45,7 +51,23 @@ function ToggleWithMenu({ label, title, active, onToggle, menuTitle, children })
   )
 }
 
-export function PercentLevelsControl({ active, onToggle, selectedKeys, onChangeKeys, base, onChangeBase }) {
+// A small color input for one level line, in the same style for every menu.
+function LevelColorInput({ value, onChange, label }) {
+  return (
+    <input
+      type="color"
+      className="etf-draw-color etf-level-color"
+      value={value.toLowerCase()}
+      onChange={e => onChange(e.target.value)}
+      aria-label={`${label} line color`}
+      title={`${label} line color`}
+    />
+  )
+}
+
+export function PercentLevelsControl({
+  active, onToggle, selectedKeys, onChangeKeys, base, onChangeBase, colors, onChangeColor, onResetColors,
+}) {
   const selected = new Set(selectedKeys)
   const toggleKey = (key) => {
     const next = selected.has(key) ? selectedKeys.filter(k => k !== key) : [...selectedKeys, key]
@@ -54,12 +76,19 @@ export function PercentLevelsControl({ active, onToggle, selectedKeys, onChangeK
   }
   const upside = PERCENT_LEVEL_OPTIONS.filter(o => o.pct > 0)
   const downside = PERCENT_LEVEL_OPTIONS.filter(o => o.pct < 0)
+  const customized = Object.keys(colors || {}).length > 0
   const renderOption = (opt) => (
-    <label key={opt.key} className="etf-level-option">
-      <input type="checkbox" checked={selected.has(opt.key)} onChange={() => toggleKey(opt.key)} />
-      <span className="etf-level-swatch" style={{ background: opt.color }} />
-      {percentLevelLabel(opt.pct)}
-    </label>
+    <div key={opt.key} className="etf-level-option etf-level-color-row">
+      <LevelColorInput
+        value={percentLevelColor(opt.key, colors)}
+        onChange={color => onChangeColor(opt.key, color)}
+        label={percentLevelLabel(opt.pct)}
+      />
+      <label className="etf-level-option">
+        <input type="checkbox" checked={selected.has(opt.key)} onChange={() => toggleKey(opt.key)} />
+        {percentLevelLabel(opt.pct)}
+      </label>
+    </div>
   )
 
   return (
@@ -77,6 +106,7 @@ export function PercentLevelsControl({ active, onToggle, selectedKeys, onChangeK
       <div className="etf-level-menu-row">
         <button type="button" className="btn btn-sm" onClick={() => { onChangeKeys(PERCENT_LEVEL_OPTIONS.map(o => o.key)); if (!active) onToggle() }}>All</button>
         <button type="button" className="btn btn-sm" onClick={() => onChangeKeys([])}>None</button>
+        <button type="button" className="btn btn-sm" onClick={onResetColors} disabled={!customized}>Reset colors</button>
       </div>
       <label className="etf-level-menu-field">
         <span>Measured from</span>
@@ -100,7 +130,14 @@ export function OffHighToggle({ active, onToggle }) {
   )
 }
 
-export function SupportResistanceControl({ active, onToggle, perSide, onChangePerSide }) {
+export function SupportResistanceControl({
+  active, onToggle, perSide, onChangePerSide, colors, onChangeColor, onResetColors, levels,
+}) {
+  // Current levels by label, so each color row can show its price and distance.
+  const byLabel = {}
+  if (levels) [...levels.support, ...levels.resistance].forEach(l => { byLabel[l.label] = l })
+  const customized = Object.keys(colors || {}).length > 0
+
   return (
     <ToggleWithMenu
       label="S/R"
@@ -112,13 +149,36 @@ export function SupportResistanceControl({ active, onToggle, perSide, onChangePe
       <label className="etf-level-menu-field">
         <span>Levels per side</span>
         <select className="etf-draw-select" value={perSide} onChange={e => onChangePerSide(Number(e.target.value))}>
-          {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
+          {Array.from({ length: MAX_SR_PER_SIDE }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
         </select>
       </label>
+      <div className="etf-level-menu-head">Line colors</div>
+      {srColorLabels(perSide).map(label => {
+        const lvl = byLabel[label]
+        return (
+          <div key={label} className="etf-level-option etf-level-color-row">
+            <LevelColorInput
+              value={srLevelColor(label, colors)}
+              onChange={color => onChangeColor(label, color)}
+              label={label}
+            />
+            <span className="etf-sr-color-label">{label}</span>
+            <span className="etf-sr-color-detail">
+              {lvl
+                ? `${formatMoney(lvl.price)} · ${levelDistanceLabel(lvl.pctFromClose).replace(' from close', '')}`
+                : active ? 'none found' : ''}
+            </span>
+          </div>
+        )
+      })}
+      <div className="etf-level-menu-row">
+        <button type="button" className="btn btn-sm" onClick={onResetColors} disabled={!customized}>Reset colors</button>
+      </div>
       <p className="etf-level-menu-note">
-        Support (S, green) is below the last close; resistance (R, red) is above it.
-        Levels come from clustered swing highs and lows in the loaded period, and the
-        shaded band shows the price zone where those swings sat.
+        Support (S, green by default) is below the last close; resistance (R, red by
+        default) is above it. Each label shows how far the last close has to fall (or
+        rise) to reach the level. Levels come from clustered swing highs and lows in the
+        loaded period, and the shaded band shows the price zone where those swings sat.
       </p>
       <p className="etf-level-menu-note">
         A level price is sitting on is marked <em>testing</em>: support if price fell into
