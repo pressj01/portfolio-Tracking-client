@@ -27,6 +27,18 @@ import {
   smaOverlayTraces,
   tradingSessionRangeBreaks,
 } from '../utils/chartIndicators'
+import {
+  DEFAULT_PERCENT_LEVEL_KEYS,
+  PERCENT_LEVEL_OPTIONS,
+  RESISTANCE_COLOR,
+  SUPPORT_COLOR,
+  findSupportResistance,
+  percentLevelBase,
+  percentLevelLabel,
+  percentLevels,
+  spreadLabelPositions,
+} from '../utils/priceLevels'
+import { PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
 
 // ── Study Templates (TOS-style: add multiple instances of the same type) ─────
 
@@ -2076,6 +2088,28 @@ export default function ETFScreen() {
   const [fibClicks, setFibClicks] = useState([]) // [{x, y}, {x, y}] for fib retracement
   const [fibSets, setFibSets] = useState([]) // array of { shapes, annotations } for each fib drawing
   const plotRef = useRef(null)
+
+  // Price-level overlays: percent up/down levels and support / resistance.
+  const [showPctLevels, setShowPctLevels] = useState(() => localStorage.getItem('etf_showPctLevels') === 'true')
+  const [pctLevelKeys, setPctLevelKeys] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('etf_pctLevelKeys'))
+      if (Array.isArray(saved)) return saved.filter(k => PERCENT_LEVEL_OPTIONS.some(o => o.key === k))
+    } catch { /* ignore */ }
+    return DEFAULT_PERCENT_LEVEL_KEYS
+  })
+  const [pctLevelBase, setPctLevelBase] = useState(() => localStorage.getItem('etf_pctLevelBase') === 'high' ? 'high' : 'close')
+  const [showSR, setShowSR] = useState(() => localStorage.getItem('etf_showSR') === 'true')
+  const [srPerSide, setSrPerSide] = useState(() => {
+    const v = Number(localStorage.getItem('etf_srPerSide'))
+    return Number.isInteger(v) && v >= 1 && v <= 5 ? v : 3
+  })
+  useEffect(() => { localStorage.setItem('etf_showPctLevels', String(showPctLevels)) }, [showPctLevels])
+  useEffect(() => { localStorage.setItem('etf_pctLevelKeys', JSON.stringify(pctLevelKeys)) }, [pctLevelKeys])
+  useEffect(() => { localStorage.setItem('etf_pctLevelBase', pctLevelBase) }, [pctLevelBase])
+  useEffect(() => { localStorage.setItem('etf_showSR', String(showSR)) }, [showSR])
+  useEffect(() => { localStorage.setItem('etf_srPerSide', String(srPerSide)) }, [srPerSide])
+
   const fibClicksRef = useRef(fibClicks)
   fibClicksRef.current = fibClicks
 
@@ -2587,8 +2621,13 @@ export default function ETFScreen() {
     return { mainTraces: mains, subplots: subs, indicatorShapes: shps }
   }, [records, indicators, ivData])
 
-  const { data: techData, layout: techLayout, regimeShapes = [] } = useMemo(() => {
-    if (!records.length) return { data: [], layout: {}, regimeShapes: [] }
+  const srLevels = useMemo(
+    () => (showSR && records.length ? findSupportResistance(records, { maxPerSide: srPerSide }) : null),
+    [showSR, records, srPerSide],
+  )
+
+  const { data: techData, layout: techLayout, regimeShapes = [], levelShapes = [] } = useMemo(() => {
+    if (!records.length) return { data: [], layout: {}, regimeShapes: [], levelShapes: [] }
     const dates = records.map(r => r.date)
     const hasVolume = showVolume && records.some(r => r.volume > 0)
     const lowerCount = subplots.length + (hasVolume ? 1 : 0)
@@ -2669,6 +2708,22 @@ export default function ETFScreen() {
     const yPadTop = priceRange * (yExpandTopNum / 100)
     const yPadBot = priceRange * (yExpandBotNum / 100)
 
+    // Percent levels sit at fixed moves from a reference price; extend the price
+    // axis so every selected level is on screen.
+    const pctBase = showPctLevels ? percentLevelBase(records, pctLevelBase) : null
+    const pctLevelList = showPctLevels ? percentLevels(pctBase, pctLevelKeys) : []
+    const toAxisY = (price) => (isPct ? toPct(price) : price)
+    let yLo = priceMin - yPadBot
+    let yHi = priceMax + yPadTop
+    if (pctLevelList.length) {
+      const lvlYs = pctLevelList.map(l => toAxisY(l.price))
+      const lvlMin = Math.min(...lvlYs)
+      const lvlMax = Math.max(...lvlYs)
+      const span = Math.max(yHi, lvlMax) - Math.min(yLo, lvlMin)
+      if (lvlMin < yLo) yLo = lvlMin - span * 0.03
+      if (lvlMax > yHi) yHi = lvlMax + span * 0.03
+    }
+
     // X-axis range: pad ~1.5 bars before the first bar so it clears the y-axis
     // labels, and N bars into the future on the right (min 1 bar so the last bar
     // isn't flush against the edge).
@@ -2738,7 +2793,7 @@ export default function ETFScreen() {
         tickprefix: isPct ? '' : '$',
         type: chartScale === 'log' ? 'log' : 'linear',
         ticksuffix: isPct ? '%' : '',
-        range: chartScale !== 'log' ? [priceMin - yPadBot, priceMax + yPadTop] : undefined,
+        range: chartScale !== 'log' ? [yLo, yHi] : undefined,
         showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
       },
       legend: { orientation: 'h', y: 1.08, x: 0.5, xanchor: 'center', font: { size: 11 } },
@@ -2764,12 +2819,98 @@ export default function ETFScreen() {
       fillcolor: REGIME_COLORS[run.regime], line: { width: 0 },
     }))
 
+    // Percent / support-resistance overlays. Shapes on a log axis take data values,
+    // annotations take log10 values.
+    const levelShapes = []
+    const levelAnnotations = []
+    const annotY = (price) => (chartScale === 'log' ? Math.log10(price) : toAxisY(price))
+    const labelBg = isDark ? 'rgba(30,30,47,0.85)' : 'rgba(255,255,255,0.88)'
+    const levelLabel = (price, text, color, side) => ({
+      x: side === 'left' ? 0 : 1, xref: 'paper', xanchor: side,
+      xshift: side === 'left' ? 4 : -4,
+      y: annotY(price), yref: 'y', yanchor: 'bottom',
+      text, showarrow: false,
+      font: { color, size: 11 },
+      bgcolor: labelBg, bordercolor: color, borderwidth: 1, borderpad: 2,
+    })
+    const canPlot = (price) => Number.isFinite(price) && (chartScale !== 'log' || price > 0)
+
+    if (pctLevelList.length) {
+      if (pctLevelBase === 'high' && canPlot(pctBase)) {
+        levelShapes.push({
+          type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(pctBase), y1: toAxisY(pctBase),
+          line: { color: '#9E9E9E', width: 1, dash: 'dot' },
+        })
+        levelAnnotations.push(levelLabel(pctBase, `0% (period high) ${formatMoney(pctBase)}`, '#9E9E9E', 'left'))
+      }
+      pctLevelList.forEach(lvl => {
+        if (!canPlot(lvl.price)) return
+        levelShapes.push({
+          type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(lvl.price), y1: toAxisY(lvl.price),
+          line: { color: lvl.color, width: 1.5, dash: 'dash' },
+        })
+        levelAnnotations.push(levelLabel(lvl.price, `${percentLevelLabel(lvl.pct)} ${formatMoney(lvl.price)}`, lvl.color, 'left'))
+      })
+    }
+
+    if (srLevels) {
+      const addSR = (lvl, color) => {
+        if (!canPlot(lvl.price)) return
+        const half = srLevels.tolerance * 0.25
+        const bandLo = Math.min(lvl.low, lvl.price - half)
+        const bandHi = Math.max(lvl.high, lvl.price + half)
+        if (canPlot(bandLo)) {
+          levelShapes.push({
+            type: 'rect', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(bandLo), y1: toAxisY(bandHi),
+            fillcolor: color, opacity: 0.12, line: { width: 0 }, layer: 'below',
+          })
+        }
+        levelShapes.push({
+          type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(lvl.price), y1: toAxisY(lvl.price),
+          line: { color, width: 2, dash: 'solid' },
+        })
+        const kind = lvl.label.startsWith('S') ? 'Support' : 'Resistance'
+        levelAnnotations.push(levelLabel(
+          lvl.price,
+          `<b>${lvl.label}</b> ${kind} ${formatMoney(lvl.price)} · ${lvl.touches} touch${lvl.touches === 1 ? '' : 'es'}`,
+          color, 'right',
+        ))
+      }
+      srLevels.resistance.forEach(l => addSR(l, RESISTANCE_COLOR))
+      srLevels.support.forEach(l => addSR(l, SUPPORT_COLOR))
+    }
+
+    // Keep level labels from overlapping: estimate axis units per pixel in the price
+    // pane, then push labels on the same side apart by roughly one label height.
+    if (levelAnnotations.length > 1) {
+      const panePx = (layout.height - layout.margin.t - layout.margin.b) * (priceTop - priceBot)
+      let axisLo = yLo
+      let axisHi = yHi
+      if (chartScale === 'log') {
+        const ys = [...lows, ...highs, ...levelAnnotations.map(a => 10 ** a.y)].filter(v => v > 0)
+        axisLo = Math.log10(Math.min(...ys))
+        axisHi = Math.log10(Math.max(...ys))
+        const pad = (axisHi - axisLo) * 0.05
+        axisLo -= pad
+        axisHi += pad
+      }
+      const unitsPerPx = panePx > 0 ? (axisHi - axisLo) / panePx : 0
+      if (unitsPerPx > 0) {
+        ;['left', 'right'].forEach(side => {
+          const group = levelAnnotations.filter(a => a.xanchor === side)
+          const ys = spreadLabelPositions(group.map(a => a.y), 19 * unitsPerPx, axisHi - 19 * unitsPerPx)
+          group.forEach((a, i) => { a.y = ys[i] })
+        })
+      }
+    }
+
     const fibShapes = fibSets.flatMap(f => f.shapes)
     const fibAnnotations = fibSets.flatMap(f => f.annotations)
-    layout.shapes = [...regimeShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
-    if (fibAnnotations.length) layout.annotations = [...(layout.annotations || []), ...fibAnnotations]
-    return { data: traces, layout, regimeShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets])
+    layout.shapes = [...regimeShapes, ...levelShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
+    const extraAnnotations = [...levelAnnotations, ...fibAnnotations]
+    if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
+    return { data: traces, layout, regimeShapes, levelShapes }
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, srLevels, isDark])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -3379,6 +3520,21 @@ export default function ETFScreen() {
             </select>
             <input type="color" className="etf-draw-color" value={drawColor} onChange={e => setDrawColor(e.target.value)} title="Line Color" />
             <button className="btn btn-sm btn-danger" onClick={() => { setDrawnShapes([]); setFibSets([]); setFibClicks([]); setDrawMode(null) }}>Clear All</button>
+            <span className="etf-draw-sep">|</span>
+            <PercentLevelsControl
+              active={showPctLevels}
+              onToggle={() => setShowPctLevels(v => !v)}
+              selectedKeys={pctLevelKeys}
+              onChangeKeys={setPctLevelKeys}
+              base={pctLevelBase}
+              onChangeBase={setPctLevelBase}
+            />
+            <SupportResistanceControl
+              active={showSR}
+              onToggle={() => setShowSR(v => !v)}
+              perSide={srPerSide}
+              onChangePerSide={setSrPerSide}
+            />
           </div>
         )}
       </div>
@@ -3707,7 +3863,7 @@ export default function ETFScreen() {
                   onRelayout={(e) => {
                     // Shapes the user did not draw (indicator overlays + Markov regime bands)
                     // must be excluded so they aren't captured as user drawings.
-                    const bgShapes = [...indicatorShapes, ...regimeShapes]
+                    const bgShapes = [...indicatorShapes, ...regimeShapes, ...levelShapes]
                     if (e.shapes) {
                       setDrawnShapes(e.shapes.filter(s => !bgShapes.includes(s)))
                     } else if (e['shapes[0]'] !== undefined || Object.keys(e).some(k => k.startsWith('shapes['))) {

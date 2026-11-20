@@ -4252,6 +4252,23 @@ function ETFScreenHelp() {
         Click an existing drawing to select and delete it.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Level Overlays</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Two one-click toggles at the end of the chart toolbar. Click the button to show or hide the
+        overlay; click the ▾ beside it for settings. Both settings are remembered between sessions.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>% Levels</strong> — Dashed lines at fixed percent moves, labeled with the percent and price.
+          Choose any of +20%, +10%, −10%, −20%, −25%, −40% and −50% from the ▾ menu, and whether they are
+          measured from the <em>last close</em> or the <em>period high</em>. The price axis stretches so every
+          selected level is visible, so turn off the deeper levels if the candles get too compressed.</li>
+        <li><strong>S/R</strong> — Support (S1, S2…, green) below the last close and resistance (R1, R2…, red)
+          above it, nearest first. Levels are found by clustering swing highs and lows in the loaded period;
+          each label shows how many swings touched the level, and the shaded band shows the price zone those
+          swings covered. Choose 1–5 levels per side from the ▾ menu. Changing the period (1Y, 5Y…) changes
+          which swings are used.</li>
+      </ul>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>
       <p style={{ marginBottom: '1rem' }}>
         Add comparison tickers to overlay multiple securities on the same chart. Each additional
