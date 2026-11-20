@@ -4279,11 +4279,12 @@ function ETFScreenHelp() {
               touched. They only reach as far from price as the loaded period's own high-to-low range, and the
               price axis stretches to keep them on screen.</li>
           </ul></li>
-        <li><strong>Off High</strong> — How far the last close has fallen from the highest high in the loaded
-          period, for example <em>−7.9% from period high $777.72 · Oct 10, 2026</em>. A dotted purple line runs
-          from the high bar to the last bar, and a dashed drop line at the last bar spans the fall. When price
-          is at the high it reads <em>At period high</em>. Changing the period (6M, 1Y…) changes which high is
-          used.</li>
+        <li><strong>Off High</strong> — How far the last close has fallen from the highest <em>close</em> in the
+          loaded period, for example <em>−8.1% from highest close $779.09 · Oct 6, 2026</em>. It uses closing
+          prices only, so an intraday spike that didn't hold isn't the yardstick. A dotted purple line runs from
+          that day to the last bar, and a dashed drop line at the last bar spans the fall. When the last close is
+          the highest close it reads <em>At highest close</em>. Changing the period (6M, 1Y…) changes which close
+          is used.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>

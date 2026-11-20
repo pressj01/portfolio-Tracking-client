@@ -57,22 +57,23 @@ export function percentLevelLabel(pct) {
 export const OFF_HIGH_COLOR = '#B388FF'
 
 /**
- * How far the last close sits below the highest high in the loaded period.
- * Returns { high, highIndex, highDate, close, closeIndex, closeDate, pct } with
- * pct <= 0 (e.g. -8.4 for 8.4% below the high), or null without usable bars.
+ * How far the last close sits below the highest close in the loaded period —
+ * closes only, so an intraday spike that didn't hold isn't the yardstick.
+ * Returns { high, highIndex, highDate, close, closeIndex, closeDate, pct } where
+ * `high` is that highest close and pct <= 0 (e.g. -8.1 for 8.1% below it), or null
+ * without usable bars.
  */
 export function drawdownFromHigh(records) {
   if (!Array.isArray(records) || !records.length) return null
   let hi = -1
-  records.forEach((r, i) => {
-    if (finite(r?.high) && (hi < 0 || r.high > records[hi].high)) hi = i
-  })
   let last = -1
-  for (let i = records.length - 1; i >= 0; i -= 1) {
-    if (finite(records[i]?.close)) { last = i; break }
-  }
-  if (hi < 0 || last < 0 || records[hi].high <= 0) return null
-  const high = records[hi].high
+  records.forEach((r, i) => {
+    if (!finite(r?.close)) return
+    if (hi < 0 || r.close > records[hi].close) hi = i
+    last = i
+  })
+  if (hi < 0 || records[hi].close <= 0) return null
+  const high = records[hi].close
   const close = records[last].close
   return {
     high,
@@ -85,10 +86,10 @@ export function drawdownFromHigh(records) {
   }
 }
 
-/** "-8.4% from period high" / "At period high" for the off-high label. */
+/** "-8.1% from highest close" / "At highest close" for the off-high label. */
 export function drawdownLabel(pct) {
   if (!finite(pct)) return ''
-  return pct > -0.05 ? 'At period high' : `${pct.toFixed(1)}% from period high`
+  return pct > -0.05 ? 'At highest close' : `${pct.toFixed(1)}% from highest close`
 }
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))

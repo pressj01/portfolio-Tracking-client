@@ -31,23 +31,32 @@ test('five percent levels sit either side of the base', () => {
   assert.deepEqual(levels.map(l => percentLevelLabel(l.pct)), ['+5%', '-5%'])
 })
 
-test('drawdown measures the last close against the highest high in the period', () => {
+test('drawdown measures the last close against the highest close in the period', () => {
   const records = [bar(100), bar(120, 2), bar(110), bar(105)].map((r, i) => ({ ...r, date: `2026-01-0${i + 1}` }))
   const dd = drawdownFromHigh(records)
-  assert.equal(dd.high, 122)
+  assert.equal(dd.high, 120)
   assert.equal(dd.highIndex, 1)
   assert.equal(dd.highDate, '2026-01-02')
   assert.equal(dd.close, 105)
   assert.equal(dd.closeDate, '2026-01-04')
-  assert.ok(Math.abs(dd.pct - (105 / 122 - 1) * 100) < 1e-9)
-  assert.equal(drawdownLabel(dd.pct), '-13.9% from period high')
+  assert.ok(Math.abs(dd.pct - (105 / 120 - 1) * 100) < 1e-9)
+  assert.equal(drawdownLabel(dd.pct), '-12.5% from highest close')
+})
+
+test('an intraday spike above the highest close is ignored', () => {
+  // Day 2 spikes to 140 intraday but closes at 112; day 3 closes higher at 118.
+  const records = [bar(100), { open: 110, high: 140, low: 108, close: 112 }, bar(118), bar(100)]
+  const dd = drawdownFromHigh(records)
+  assert.equal(dd.high, 118)
+  assert.equal(dd.highIndex, 2)
+  assert.ok(Math.abs(dd.pct - (100 / 118 - 1) * 100) < 1e-9)
 })
 
 test('drawdown at the high reads as at the high, and empty data gives null', () => {
   const records = [bar(100), bar(110, 0), bar(120, 0)]
   const dd = drawdownFromHigh(records)
   assert.equal(dd.pct, 0)
-  assert.equal(drawdownLabel(dd.pct), 'At period high')
+  assert.equal(drawdownLabel(dd.pct), 'At highest close')
   assert.equal(drawdownFromHigh([]), null)
   assert.equal(drawdownFromHigh(null), null)
 })

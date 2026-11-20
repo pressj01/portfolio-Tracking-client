@@ -2879,8 +2879,8 @@ export default function ETFScreen() {
     })
     const canPlot = (price) => Number.isFinite(price) && (chartScale !== 'log' || price > 0)
 
-    // Off High: how far the last close is below the period's highest high. A dotted
-    // line runs from the high bar to the last bar, a dashed drop line at the last bar
+    // Off High: how far the last close is below the period's highest close. A dotted
+    // line runs from that bar to the last bar, a dashed drop line at the last bar
     // spans the fall, and the label sits at the top of the drop.
     const offHigh = showOffHigh ? drawdownFromHigh(records) : null
     if (offHigh && canPlot(offHigh.high) && canPlot(offHigh.close)) {
@@ -2904,8 +2904,7 @@ export default function ETFScreen() {
     }
 
     if (pctLevelList.length) {
-      // Off High already marks the period high, so skip the duplicate 0% line.
-      if (pctLevelBase === 'high' && canPlot(pctBase) && !offHigh) {
+      if (pctLevelBase === 'high' && canPlot(pctBase)) {
         levelShapes.push({
           type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(pctBase), y1: toAxisY(pctBase),
           line: { color: '#9E9E9E', width: 1, dash: 'dot' },
