@@ -29,16 +29,21 @@ import {
 } from '../utils/chartIndicators'
 import {
   DEFAULT_PERCENT_LEVEL_KEYS,
+  OFF_HIGH_COLOR,
   PERCENT_LEVEL_OPTIONS,
   RESISTANCE_COLOR,
   SUPPORT_COLOR,
+  drawdownFromHigh,
+  drawdownLabel,
   findSupportResistance,
   percentLevelBase,
   percentLevelLabel,
+  levelDateLabel,
   percentLevels,
   spreadLabelPositions,
+  srHistoryPeriod,
 } from '../utils/priceLevels'
-import { PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
+import { OffHighToggle, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
 
 // ── Study Templates (TOS-style: add multiple instances of the same type) ─────
 
@@ -2067,6 +2072,10 @@ export default function ETFScreen() {
   const yExpandBotNum = Math.max(0, parseInt(yExpandBot) || 0)
   const xExpandNum = Math.max(0, parseInt(xExpand) || 0)
   const [records, setRecords] = useState([])
+  // What the loaded bars are: { ticker, period, interval } with the bar size the
+  // backend actually used, so S/R history can be fetched at the same bar size.
+  const [recordsSource, setRecordsSource] = useState(null)
+  const [srHistory, setSrHistory] = useState(null) // { key, records }
   const [tickerName, setTickerName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -2107,6 +2116,8 @@ export default function ETFScreen() {
   useEffect(() => { localStorage.setItem('etf_showPctLevels', String(showPctLevels)) }, [showPctLevels])
   useEffect(() => { localStorage.setItem('etf_pctLevelKeys', JSON.stringify(pctLevelKeys)) }, [pctLevelKeys])
   useEffect(() => { localStorage.setItem('etf_pctLevelBase', pctLevelBase) }, [pctLevelBase])
+  const [showOffHigh, setShowOffHigh] = useState(() => localStorage.getItem('etf_showOffHigh') === 'true')
+  useEffect(() => { localStorage.setItem('etf_showOffHigh', String(showOffHigh)) }, [showOffHigh])
   useEffect(() => { localStorage.setItem('etf_showSR', String(showSR)) }, [showSR])
   useEffect(() => { localStorage.setItem('etf_srPerSide', String(srPerSide)) }, [srPerSide])
 
@@ -2404,11 +2415,17 @@ export default function ETFScreen() {
     setLoading(true)
     setError('')
     const intParam = interval ? `&interval=${interval}` : ''
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(ticker.trim())}&period=${period}&mode=ohlcv${intParam}`)
+    const requested = ticker.trim()
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(requested)}&period=${period}&mode=ohlcv${intParam}`)
       .then(r => r.json())
       .then(d => {
-        if (d.error) { setError(d.error); setRecords([]); setTickerName(''); setIvData(null) }
-        else { setRecords(d.records); setTickerName(d.name || d.ticker); setIvData(d.iv || null) }
+        if (d.error) { setError(d.error); setRecords([]); setRecordsSource(null); setTickerName(''); setIvData(null) }
+        else {
+          setRecords(d.records)
+          setRecordsSource({ ticker: requested, period, interval: interval || d.interval || '' })
+          setTickerName(d.name || d.ticker)
+          setIvData(d.iv || null)
+        }
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
@@ -2621,10 +2638,30 @@ export default function ETFScreen() {
     return { mainTraces: mains, subplots: subs, indicatorShapes: shps }
   }, [records, indicators, ivData])
 
-  const srLevels = useMemo(
-    () => (showSR && records.length ? findSupportResistance(records, { maxPerSide: srPerSide }) : null),
-    [showSR, records, srPerSide],
-  )
+  // Longer history at the same bar size, so S/R can still show levels on a side the
+  // loaded period has run out of (e.g. support after price breaks to a new low).
+  const srHistoryKey = useMemo(() => {
+    if (!recordsSource?.interval) return null
+    const histPeriod = srHistoryPeriod(recordsSource.period, recordsSource.interval)
+    return histPeriod ? `${recordsSource.ticker}|${histPeriod}|${recordsSource.interval}` : null
+  }, [recordsSource])
+
+  useEffect(() => {
+    if (!showSR || !srHistoryKey || srHistory?.key === srHistoryKey) return undefined
+    const [histTicker, histPeriod, histInterval] = srHistoryKey.split('|')
+    const ctrl = new AbortController()
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(histTicker)}&period=${histPeriod}&mode=ohlcv&interval=${histInterval}&iv=0`, { signal: ctrl.signal })
+      .then(r => r.json())
+      .then(d => setSrHistory({ key: srHistoryKey, records: Array.isArray(d.records) ? d.records : [] }))
+      .catch(() => { /* aborted or offline: S/R falls back to the loaded period alone */ })
+    return () => ctrl.abort()
+  }, [pf, showSR, srHistoryKey, srHistory])
+
+  const srLevels = useMemo(() => {
+    if (!showSR || !records.length) return null
+    const history = srHistory && srHistory.key === srHistoryKey ? srHistory.records : undefined
+    return findSupportResistance(records, { maxPerSide: srPerSide, history })
+  }, [showSR, records, srPerSide, srHistory, srHistoryKey])
 
   const { data: techData, layout: techLayout, regimeShapes = [], levelShapes = [] } = useMemo(() => {
     if (!records.length) return { data: [], layout: {}, regimeShapes: [], levelShapes: [] }
@@ -2715,8 +2752,15 @@ export default function ETFScreen() {
     const toAxisY = (price) => (isPct ? toPct(price) : price)
     let yLo = priceMin - yPadBot
     let yHi = priceMax + yPadTop
-    if (pctLevelList.length) {
-      const lvlYs = pctLevelList.map(l => toAxisY(l.price))
+    // Support / resistance from older history can sit outside the loaded period's
+    // range too, so its lines and bands get the same treatment.
+    const lvlYs = pctLevelList.map(l => toAxisY(l.price))
+    if (srLevels) {
+      ;[...srLevels.support, ...srLevels.resistance].forEach(l => {
+        if (Number.isFinite(l.low) && Number.isFinite(l.high)) lvlYs.push(toAxisY(l.low), toAxisY(l.high))
+      })
+    }
+    if (lvlYs.length) {
       const lvlMin = Math.min(...lvlYs)
       const lvlMax = Math.max(...lvlYs)
       const span = Math.max(yHi, lvlMax) - Math.min(yLo, lvlMin)
@@ -2835,8 +2879,33 @@ export default function ETFScreen() {
     })
     const canPlot = (price) => Number.isFinite(price) && (chartScale !== 'log' || price > 0)
 
+    // Off High: how far the last close is below the period's highest high. A dotted
+    // line runs from the high bar to the last bar, a dashed drop line at the last bar
+    // spans the fall, and the label sits at the top of the drop.
+    const offHigh = showOffHigh ? drawdownFromHigh(records) : null
+    if (offHigh && canPlot(offHigh.high) && canPlot(offHigh.close)) {
+      const highY = toAxisY(offHigh.high)
+      const lastX = dates[offHigh.closeIndex]
+      levelShapes.push({
+        type: 'line', xref: 'x', x0: dates[offHigh.highIndex], x1: lastX, yref: 'y', y0: highY, y1: highY,
+        line: { color: OFF_HIGH_COLOR, width: 1.5, dash: 'dot' },
+      })
+      if (offHigh.pct < 0) {
+        levelShapes.push({
+          type: 'line', xref: 'x', x0: lastX, x1: lastX, yref: 'y', y0: highY, y1: toAxisY(offHigh.close),
+          line: { color: OFF_HIGH_COLOR, width: 2, dash: 'dash' },
+        })
+      }
+      // Right-anchored so the overlap pass below keeps it clear of the S/R labels.
+      levelAnnotations.push({
+        ...levelLabel(offHigh.high, `<b>${drawdownLabel(offHigh.pct)}</b> ${formatMoney(offHigh.high)} · ${levelDateLabel(offHigh.highDate)}`, OFF_HIGH_COLOR, 'right'),
+        x: lastX, xref: 'x', xshift: -6,
+      })
+    }
+
     if (pctLevelList.length) {
-      if (pctLevelBase === 'high' && canPlot(pctBase)) {
+      // Off High already marks the period high, so skip the duplicate 0% line.
+      if (pctLevelBase === 'high' && canPlot(pctBase) && !offHigh) {
         levelShapes.push({
           type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(pctBase), y1: toAxisY(pctBase),
           line: { color: '#9E9E9E', width: 1, dash: 'dot' },
@@ -2865,16 +2934,16 @@ export default function ETFScreen() {
             fillcolor: color, opacity: 0.12, line: { width: 0 }, layer: 'below',
           })
         }
+        // Levels pulled from older history (before the loaded period ran out) are dotted.
         levelShapes.push({
           type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(lvl.price), y1: toAxisY(lvl.price),
-          line: { color, width: 2, dash: 'solid' },
+          line: { color, width: 2, dash: lvl.fromHistory ? 'dot' : 'solid' },
         })
         const kind = lvl.label.startsWith('S') ? 'Support' : 'Resistance'
-        levelAnnotations.push(levelLabel(
-          lvl.price,
-          `<b>${lvl.label}</b> ${kind} ${formatMoney(lvl.price)} · ${lvl.touches} touch${lvl.touches === 1 ? '' : 'es'}`,
-          color, 'right',
-        ))
+        const parts = [`<b>${lvl.label}</b> ${kind} ${formatMoney(lvl.price)}`, `${lvl.touches} touch${lvl.touches === 1 ? '' : 'es'}`]
+        if (lvl.testing) parts.push('testing')
+        if (lvl.fromHistory && lvl.lastDate) parts.push(`last touch ${levelDateLabel(lvl.lastDate)}`)
+        levelAnnotations.push(levelLabel(lvl.price, parts.join(' · '), color, 'right'))
       }
       srLevels.resistance.forEach(l => addSR(l, RESISTANCE_COLOR))
       srLevels.support.forEach(l => addSR(l, SUPPORT_COLOR))
@@ -2910,7 +2979,7 @@ export default function ETFScreen() {
     const extraAnnotations = [...levelAnnotations, ...fibAnnotations]
     if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
     return { data: traces, layout, regimeShapes, levelShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, srLevels, isDark])
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, srLevels, showOffHigh, isDark])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -3535,6 +3604,7 @@ export default function ETFScreen() {
               perSide={srPerSide}
               onChangePerSide={setSrPerSide}
             />
+            <OffHighToggle active={showOffHigh} onToggle={() => setShowOffHigh(v => !v)} />
           </div>
         )}
       </div>

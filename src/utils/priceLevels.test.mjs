@@ -2,13 +2,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  approachedFromAbove,
   clusterPivots,
+  drawdownFromHigh,
+  drawdownLabel,
   findPivots,
   findSupportResistance,
+  levelDateLabel,
   percentLevelBase,
   percentLevelLabel,
   percentLevels,
   spreadLabelPositions,
+  srHistoryPeriod,
 } from './priceLevels.js'
 
 const bar = (close, spread = 1) => ({ open: close, high: close + spread, low: close - spread, close })
@@ -17,6 +22,34 @@ test('percent levels are computed from the base price and ordered high to low', 
   const levels = percentLevels(100, ['d10', 'u20', 'd50'])
   assert.deepEqual(levels.map(l => l.key), ['u20', 'd10', 'd50'])
   assert.deepEqual(levels.map(l => Number(l.price.toFixed(6))), [120, 90, 50])
+})
+
+test('five percent levels sit either side of the base', () => {
+  const levels = percentLevels(200, ['d5', 'u5'])
+  assert.deepEqual(levels.map(l => l.key), ['u5', 'd5'])
+  assert.deepEqual(levels.map(l => Number(l.price.toFixed(6))), [210, 190])
+  assert.deepEqual(levels.map(l => percentLevelLabel(l.pct)), ['+5%', '-5%'])
+})
+
+test('drawdown measures the last close against the highest high in the period', () => {
+  const records = [bar(100), bar(120, 2), bar(110), bar(105)].map((r, i) => ({ ...r, date: `2026-01-0${i + 1}` }))
+  const dd = drawdownFromHigh(records)
+  assert.equal(dd.high, 122)
+  assert.equal(dd.highIndex, 1)
+  assert.equal(dd.highDate, '2026-01-02')
+  assert.equal(dd.close, 105)
+  assert.equal(dd.closeDate, '2026-01-04')
+  assert.ok(Math.abs(dd.pct - (105 / 122 - 1) * 100) < 1e-9)
+  assert.equal(drawdownLabel(dd.pct), '-13.9% from period high')
+})
+
+test('drawdown at the high reads as at the high, and empty data gives null', () => {
+  const records = [bar(100), bar(110, 0), bar(120, 0)]
+  const dd = drawdownFromHigh(records)
+  assert.equal(dd.pct, 0)
+  assert.equal(drawdownLabel(dd.pct), 'At period high')
+  assert.equal(drawdownFromHigh([]), null)
+  assert.equal(drawdownFromHigh(null), null)
 })
 
 test('percent levels ignore invalid base prices', () => {
@@ -115,4 +148,87 @@ test('chosen support / resistance levels are not crowded together', () => {
       assert.ok(Math.abs(side[i].price - side[i - 1].price) >= tolerance * 2)
     }
   }
+})
+
+// Dated bars so history levels can report when they were last touched.
+const dated = (closes, spread = 0.5, start = Date.UTC(2025, 0, 1)) => closes.map((c, i) => ({
+  ...bar(c, spread),
+  date: new Date(start + i * 86400000).toISOString().slice(0, 10),
+}))
+
+// Oscillate between `lo` and `hi` a few times.
+const swings = (lo, hi, cycles, step = 2) => {
+  const out = []
+  for (let cycle = 0; cycle < cycles; cycle += 1) {
+    for (let v = lo; v <= hi; v += step) out.push(v)
+    for (let v = hi - step; v > lo; v -= step) out.push(v)
+  }
+  return out
+}
+
+test('price breaking to a new period low leaves no support without history', () => {
+  // Range 120-140 for the whole period, then a slide to a fresh low at 105.
+  const closes = [...swings(120, 140, 4), 120, 116, 112, 108, 105]
+  const { support, resistance } = findSupportResistance(dated(closes))
+  assert.equal(support.length, 0)
+  assert.ok(resistance.length >= 1)
+})
+
+test('longer history fills support once the period runs out of it', () => {
+  // Older history: a base around 90-100, then the same 120-140 range and slide.
+  const older = [...swings(90, 100, 4), ...swings(100, 120, 1)]
+  const recent = [...swings(120, 140, 4), 120, 116, 112, 108, 105]
+  const history = dated([...older, ...recent])
+  const period = history.slice(older.length)
+  const { support, resistance } = findSupportResistance(period, { maxPerSide: 2, history })
+  assert.ok(support.length >= 1, 'support filled from history')
+  support.forEach(l => {
+    assert.equal(l.fromHistory, true)
+    assert.ok(l.price < 105, `support ${l.price} sits below the close`)
+    assert.match(l.lastDate, /^\d{4}-\d{2}-\d{2}$/)
+  })
+  assert.ok(Math.abs(support[0].price - 100) < 3, `nearest older support ${support[0].price}`)
+  // Resistance already had levels in the period, so it stays period-only.
+  resistance.forEach(l => assert.equal(l.fromHistory, false))
+})
+
+test('history never reaches further from price than the period range', () => {
+  const ancient = swings(20, 30, 4) // far below anything recent
+  const recent = [...swings(120, 140, 4), 120, 116, 112, 108, 105]
+  const history = dated([...ancient, ...recent])
+  const period = history.slice(ancient.length)
+  const { support } = findSupportResistance(period, { maxPerSide: 3, history })
+  support.forEach(l => assert.ok(l.price > 60, `support ${l.price} is out of reach`))
+})
+
+test('a level price fell into counts as support being tested, even a hair below it', () => {
+  // Floor at ~100 touched several times, rally to 130, then a fall that closes just under the floor.
+  const closes = [...swings(100, 130, 4, 3), 127, 121, 115, 109, 104, 99.2]
+  const { support, resistance, tolerance } = findSupportResistance(dated(closes, 0.4))
+  assert.ok(tolerance > 0.8, `tolerance ${tolerance}`)
+  assert.ok(support.length >= 1)
+  assert.equal(support[0].testing, true)
+  assert.ok(support[0].price > 99.2, 'the floor sits just above the close')
+  resistance.forEach(l => assert.ok(Math.abs(l.price - support[0].price) > tolerance))
+})
+
+test('approach direction reads the last close clearly away from the level', () => {
+  const rows = [110, 108, 101, 100.5, 99.8].map(c => bar(c))
+  assert.equal(approachedFromAbove(rows, 100, 1), true)
+  assert.equal(approachedFromAbove([90, 95, 99.5, 100.2].map(c => bar(c)), 100, 1), false)
+  assert.equal(approachedFromAbove([100, 100.2, 99.9].map(c => bar(c)), 100, 1), null)
+})
+
+test('history periods match the loaded period', () => {
+  assert.equal(srHistoryPeriod('6mo', '1d'), '2y')
+  assert.equal(srHistoryPeriod('1y', '1wk'), '5y')
+  assert.equal(srHistoryPeriod('1d', '5m'), '5d')
+  assert.equal(srHistoryPeriod('5d', '1m'), null)
+  assert.equal(srHistoryPeriod('max', '1mo'), null)
+})
+
+test('level dates read as month day, year (or time for intraday)', () => {
+  assert.equal(levelDateLabel('2026-02-11'), 'Feb 11, 2026')
+  assert.equal(levelDateLabel('2026-11-17 10:30'), 'Nov 17 10:30')
+  assert.equal(levelDateLabel(null), '')
 })

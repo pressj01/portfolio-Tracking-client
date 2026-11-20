@@ -43879,10 +43879,13 @@ def etf_screen_data():
 
             info = _cached_yf_info(tk, dl_ticker)
 
-            # Fetch ATM implied volatility from nearest options expiration
+            # Fetch ATM implied volatility from nearest options expiration.
+            # iv=0 skips it (the chart's longer support/resistance history
+            # fetch only needs the bars).
             iv_data = None
+            want_iv = request.args.get("iv", "1").lower() not in {"0", "false", "no"}
             try:
-                expirations = tk.options
+                expirations = tk.options if want_iv else None
                 if expirations:
                     chain = tk.option_chain(expirations[0])
                     last_close = float(df["Close"].iloc[-1])
@@ -43919,6 +43922,7 @@ def etf_screen_data():
                 "ticker": dl_ticker,
                 "requested_ticker": ticker,
                 "name": info.get("longName") or info.get("shortName") or ticker,
+                "interval": interval,
                 "records": records,
                 "iv": iv_data,
             }
