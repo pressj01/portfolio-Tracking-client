@@ -4254,19 +4254,36 @@ function ETFScreenHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Level Overlays</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Two one-click toggles at the end of the chart toolbar. Click the button to show or hide the
-        overlay; click the ▾ beside it for settings. Both settings are remembered between sessions.
+        One-click toggles at the end of the chart toolbar. Click the button to show or hide the
+        overlay; click the ▾ beside it (where there is one) for settings. All of them are remembered
+        between sessions.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>% Levels</strong> — Dashed lines at fixed percent moves, labeled with the percent and price.
-          Choose any of +20%, +10%, −10%, −20%, −25%, −40% and −50% from the ▾ menu, and whether they are
+          Choose any of +20%, +10%, +5%, −5%, −10%, −20%, −25%, −40% and −50% from the ▾ menu, and whether they are
           measured from the <em>last close</em> or the <em>period high</em>. The price axis stretches so every
           selected level is visible, so turn off the deeper levels if the candles get too compressed.</li>
         <li><strong>S/R</strong> — Support (S1, S2…, green) below the last close and resistance (R1, R2…, red)
           above it, nearest first. Levels are found by clustering swing highs and lows in the loaded period;
           each label shows how many swings touched the level, and the shaded band shows the price zone those
           swings covered. Choose 1–5 levels per side from the ▾ menu. Changing the period (1Y, 5Y…) changes
-          which swings are used.</li>
+          which swings are used.
+          <ul style={{ paddingLeft: '1.25rem' }}>
+            <li><em>Testing</em> — a level within reach of the last close is the one price is testing right
+              now. It counts as support if price came down into it and resistance if price rose into it,
+              even when the close sits just past it.</li>
+            <li><em>Older levels</em> — when the loaded period has fewer levels on a side than you asked for
+              (for example, price has broken to a new 6-month low, so nothing in the period sits below it),
+              the chart looks back over a longer history at the same bar size (6M looks back 2 years, 1Y looks
+              back 5) and fills that side. These lines are dotted and show the date the level was last
+              touched. They only reach as far from price as the loaded period's own high-to-low range, and the
+              price axis stretches to keep them on screen.</li>
+          </ul></li>
+        <li><strong>Off High</strong> — How far the last close has fallen from the highest high in the loaded
+          period, for example <em>−7.9% from period high $777.72 · Oct 10, 2026</em>. A dotted purple line runs
+          from the high bar to the last bar, and a dashed drop line at the last bar spans the fall. When price
+          is at the high it reads <em>At period high</em>. Changing the period (6M, 1Y…) changes which high is
+          used.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>

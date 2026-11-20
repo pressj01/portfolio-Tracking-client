@@ -88,6 +88,18 @@ export function PercentLevelsControl({ active, onToggle, selectedKeys, onChangeK
   )
 }
 
+export function OffHighToggle({ active, onToggle }) {
+  return (
+    <button
+      type="button"
+      className={`btn btn-sm${active ? ' btn-active' : ''}`}
+      onClick={onToggle}
+      title="Show / hide how far the last close is below the period's high"
+      aria-pressed={active}
+    >Off High</button>
+  )
+}
+
 export function SupportResistanceControl({ active, onToggle, perSide, onChangePerSide }) {
   return (
     <ToggleWithMenu
@@ -107,6 +119,12 @@ export function SupportResistanceControl({ active, onToggle, perSide, onChangePe
         Support (S, green) is below the last close; resistance (R, red) is above it.
         Levels come from clustered swing highs and lows in the loaded period, and the
         shaded band shows the price zone where those swings sat.
+      </p>
+      <p className="etf-level-menu-note">
+        A level price is sitting on is marked <em>testing</em>: support if price fell into
+        it, resistance if it rose into it. If the period runs out of levels on a side
+        (say, price breaks to a new low), older levels from a longer history fill in,
+        drawn dotted with the date they were last touched.
       </p>
     </ToggleWithMenu>
   )
