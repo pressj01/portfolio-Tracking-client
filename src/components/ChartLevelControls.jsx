@@ -94,7 +94,7 @@ export function OffHighToggle({ active, onToggle }) {
       type="button"
       className={`btn btn-sm${active ? ' btn-active' : ''}`}
       onClick={onToggle}
-      title="Show / hide how far the last close is below the period's high"
+      title="Show / hide how far the last close is below the period's highest close"
       aria-pressed={active}
     >Off High</button>
   )
