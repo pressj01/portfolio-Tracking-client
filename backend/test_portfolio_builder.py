@@ -56,12 +56,19 @@ class PortfolioBuilderTest(unittest.TestCase):
                 added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE (portfolio_id, ticker)
             );
+            CREATE TABLE security_names (
+                ticker TEXT PRIMARY KEY, name TEXT, source TEXT, updated_at TEXT
+            );
             """
         )
         for ticker, value in self.HELD.items():
             conn.execute(
                 "INSERT INTO all_account_info VALUES (?, 1, 10, ?, ?, '2020-01-02', NULL)",
                 (ticker, value / 10, value),
+            )
+            conn.execute(
+                "INSERT INTO security_names (ticker, name, source, updated_at) VALUES (?, ?, 'test', '2020-01-02')",
+                (ticker, f"{ticker} Fund"),
             )
             conn.execute(
                 "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, "
@@ -360,6 +367,45 @@ class PortfolioBuilderTest(unittest.TestCase):
             "/api/builder/portfolios?profile_id=1", json={"name": "Mine"})
         self.assertEqual(duplicate.status_code, 409)
 
+    def test_live_holdings_lists_account_tickers(self):
+        response = self.client.get("/api/builder/live-holdings?profile_id=1")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200, payload)
+        self.assertEqual(
+            {h["ticker"]: h["dollar_amount"] for h in payload["holdings"]}, self.HELD)
+        self.assertEqual(payload["count"], 3)
+        self.assertAlmostEqual(payload["total_value"], sum(self.HELD.values()), delta=0.01)
+
+    def test_create_from_live_holdings_subset_of_tickers(self):
+        response = self.client.post(
+            "/api/builder/portfolios?profile_id=1",
+            json={"name": "Subset", "from_holdings": True, "tickers": ["AAA", "CCC"]},
+        )
+        self.assertEqual(response.status_code, 201, response.get_json())
+        pid = response.get_json()["id"]
+        holdings = self.client.get(f"/api/builder/portfolios/{pid}/holdings?profile_id=1").get_json()
+        self.assertEqual(
+            {h["ticker"]: h["dollar_amount"] for h in holdings["holdings"]},
+            {"AAA": 1200.0, "CCC": 500.0},
+        )
+
+    def test_optimize_returns_holdings_for_max_score(self):
+        pid = self._portfolio(self.HELD, name="Opt")
+        response = self.client.post(
+            f"/api/builder/portfolios/{pid}/optimize?profile_id=1",
+            json={"objective": "max_score", "period": "1y", "benchmark": "SPY"},
+        )
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200, payload)
+        self.assertEqual(payload["objective"], "max_score")
+        self.assertEqual(
+            {h["ticker"] for h in payload["holdings"]}, set(self.HELD))
+        self.assertAlmostEqual(
+            sum(h["dollar_amount"] for h in payload["holdings"]),
+            sum(self.HELD.values()),
+            delta=0.05,
+        )
+
     def test_rebalance_apply_scales_each_class_to_its_target(self):
         # SPYI and QQQI are both "US Stocks" in the income All Weather template.
         pid = self._portfolio({"SPYI": 3000.0, "QQQI": 1000.0, "TLT": 4000.0, "XYZ": 2000.0})
@@ -570,7 +616,9 @@ class PortfolioBuilderTest(unittest.TestCase):
         rows = list(csv.DictReader(StringIO(response.data.decode("utf-8-sig"))))
 
         self.assertEqual([r["Ticker"] for r in rows], ["AAA", "BBB", "CCC", "Portfolio"])
+        self.assertEqual([r["Name"] for r in rows], ["AAA Fund", "BBB Fund", "CCC Fund", ""])
         for row, holding in zip(rows, analyzed["holdings"]):
+            self.assertEqual(row["Name"], holding["name"])
             self.assertAlmostEqual(float(row["Amount"]), holding["dollar_amount"])
             self.assertAlmostEqual(float(row["Shares"]), holding["shares"])
             self.assertAlmostEqual(float(row["Yield %"]), holding["annual_yield_pct"])
@@ -602,8 +650,12 @@ class PortfolioBuilderTest(unittest.TestCase):
 
         table = list(wb["Holdings"].iter_rows(values_only=True))
         headers = table[0]
-        self.assertEqual(headers[:6], ("Ticker", "Amount", "Running Total", "Weight %", "Shares", "Price"))
+        self.assertEqual(
+            headers[:8],
+            ("Ticker", "Name", "Yield %", "Yield Source", "Amount", "Running Total", "Weight %", "Shares"),
+        )
         self.assertEqual([r[0] for r in table[1:]], ["AAA", "BBB", "CCC", "Portfolio"])
+        self.assertEqual(table[1][headers.index("Name")], "AAA Fund")
         self.assertEqual(table[1][headers.index("Amount")], 1200.0)
         self.assertEqual(table[1][headers.index("Yield %")], 12.0)
 

@@ -851,3 +851,269 @@ def search_grade_options(returns_df, weights_arr, bench_ret, target_score, *,
             continue
         options.append({**found, "kind": kind, "ticker": None if index is None else names[index]})
     return options
+
+
+# ── Weight optimization for model portfolios ─────────────────────────────────
+
+BUILDER_OPTIMIZE_OBJECTIVES = frozenset({
+    "max_score", "min_drawdown", "min_beta", "max_return", "best_balance",
+})
+
+
+def _portfolio_objective_metrics(returns_df, weights, bench_ret, min_obs, grading_settings):
+    """Score / drawdown / beta / total return for one weight mix."""
+    w = np.asarray(weights, dtype=float)
+    total = float(w.sum())
+    if total <= 0:
+        return None
+    w = w / total
+    pm = grade_portfolio(returns_df, w, bench_ret, min_obs=min_obs, grading_settings=grading_settings)
+    port_daily = returns_df.dot(w)
+    growth = float((1.0 + port_daily).prod())
+    return {
+        "score": float(pm.get("score_raw") or 0.0),
+        "shown_score": (pm.get("grade") or {}).get("score"),
+        "grade": (pm.get("grade") or {}).get("overall"),
+        "max_drawdown": pm.get("max_drawdown"),
+        "beta": pm.get("beta"),
+        "up_capture": pm.get("up_capture"),
+        "total_return_pct": (growth - 1.0) * 100.0 if math.isfinite(growth) else None,
+    }
+
+
+def _balanced_objective_value(metrics):
+    """0–1 blend of score, shallow drawdown, low beta, and total return.
+
+    Each leg is clipped to a sensible market range so one extreme metric cannot
+    dominate the search. Missing legs are skipped; None only when nothing can
+    be measured.
+    """
+    if metrics is None:
+        return None
+    parts = []
+    score = metrics.get("score")
+    if score is not None:
+        parts.append(max(0.0, min(1.0, float(score) / 100.0)))
+    mdd = metrics.get("max_drawdown")
+    if mdd is not None:
+        # 0% drawdown → 1.0; -40% → 0.0
+        parts.append(max(0.0, min(1.0, 1.0 + float(mdd) / 0.40)))
+    beta = metrics.get("beta")
+    if beta is not None:
+        # |beta| 0 → 1.0; |beta| 2 → 0.0
+        parts.append(max(0.0, min(1.0, 1.0 - abs(float(beta)) / 2.0)))
+    ret = metrics.get("total_return_pct")
+    if ret is not None:
+        # -20% → 0.0; +40% → 1.0
+        parts.append(max(0.0, min(1.0, (float(ret) + 20.0) / 60.0)))
+    if not parts:
+        return None
+    return float(sum(parts) / len(parts))
+
+
+def _objective_value(metrics, objective):
+    """Scalar to maximize for the named objective. None when not measurable."""
+    if metrics is None:
+        return None
+    if objective == "max_score":
+        return metrics["score"]
+    if objective == "min_drawdown":
+        mdd = metrics.get("max_drawdown")
+        # Shallower is better: maximize the (negative) drawdown toward zero.
+        return None if mdd is None else float(mdd)
+    if objective == "min_beta":
+        beta = metrics.get("beta")
+        # Lower absolute market sensitivity wins.
+        return None if beta is None else -abs(float(beta))
+    if objective == "max_return":
+        ret = metrics.get("total_return_pct")
+        return None if ret is None else float(ret)
+    if objective == "best_balance":
+        return _balanced_objective_value(metrics)
+    return None
+
+
+def _preserves_upside(trial, baseline, slack=0.02):
+    """True when trial still captures nearly the baseline's upside.
+
+    Min-drawdown / min-beta / best-balance mixes must not give up the
+    portfolio's ability to participate in gains: total return and up-capture
+    may slip only by slack.
+    """
+    if baseline is None or trial is None:
+        return False
+    base_ret = baseline.get("total_return_pct")
+    trial_ret = trial.get("total_return_pct")
+    if base_ret is not None and trial_ret is not None:
+        floor = base_ret - abs(base_ret) * slack
+        # Absolute floor so a tiny positive baseline can't force a large relative cut.
+        floor = min(floor, base_ret - 0.25)
+        if trial_ret < floor:
+            return False
+    base_up = baseline.get("up_capture")
+    trial_up = trial.get("up_capture")
+    if base_up is not None and trial_up is not None and base_up > 0:
+        if trial_up < base_up * (1.0 - slack) - 1.0:
+            return False
+    return True
+
+
+def _holding_floors(weights, keep_all, max_weight):
+    """Per-name minimum weight. keep_all forces every held ticker to stay in."""
+    w = np.asarray(weights, dtype=float)
+    floors = np.zeros(len(w), dtype=float)
+    if not keep_all:
+        return floors
+    held_idx = np.flatnonzero(w > 1e-12)
+    n = len(held_idx)
+    if n == 0:
+        return floors
+    # Enough room for every name, and below the per-holding cap.
+    floor = min(0.03, max(0.005, 0.5 / n), max_weight * 0.5)
+    for i in held_idx:
+        floors[i] = min(floor, float(w[i]))
+    # If floors exceed 100%, scale them down so a feasible mix still exists.
+    floor_sum = float(floors.sum())
+    if floor_sum > 1.0 - 1e-9:
+        floors *= (0.99 / floor_sum)
+    return floors
+
+
+def optimize_portfolio_weights(returns_df, weights_arr, bench_ret, objective, *,
+                               max_weight=0.25, min_obs=MIN_RATIO_OBSERVATIONS,
+                               grading_settings=None, max_iterations=80, time_budget=12.0,
+                               upside_slack=0.02):
+    """Re-weight held names for score, drawdown, beta, return, or a blend.
+
+    Only currently held weights move; nothing new is added; no name exceeds
+    max_weight. For min_drawdown, min_beta, and best_balance, candidates that
+    sacrifice upside (total return / up-capture vs the starting mix) are
+    rejected. best_balance also keeps every currently held ticker above a
+    small floor so the mix cannot drop names. Returns None when nothing is
+    held or the objective is unknown.
+    """
+    import time
+
+    if objective not in BUILDER_OPTIMIZE_OBJECTIVES:
+        return None
+    w = np.array(weights_arr, dtype=float)
+    total = float(w.sum())
+    if total <= 0:
+        return None
+    w = w / total
+    held = w > 1e-12
+    if not np.any(held):
+        return None
+
+    settings = normalize_grading_settings(grading_settings)
+    guard_upside = objective in ("min_drawdown", "min_beta", "best_balance")
+    keep_all = objective == "best_balance"
+    floors = _holding_floors(w, keep_all, max_weight)
+    # Respect floors from the first step when a starting weight was tiny.
+    w = np.maximum(w, floors)
+    w = w / w.sum()
+
+    def evaluate(vec):
+        return _portfolio_objective_metrics(returns_df, vec, bench_ret, min_obs, settings)
+
+    baseline = evaluate(w)
+    best_val = _objective_value(baseline, objective)
+    if best_val is None:
+        return {
+            "weights": w,
+            "objective": objective,
+            "metrics": baseline,
+            "start_metrics": baseline,
+            "improved": False,
+            "stopped": "unmeasurable",
+            "iterations": 0,
+        }
+
+    deadline = time.monotonic() + time_budget
+    iterations = 0
+    probe = 0.01
+    stop = "stuck"
+    current = baseline
+
+    while iterations < max_iterations and time.monotonic() <= deadline:
+        iterations += 1
+        slopes = {}
+        for i in np.flatnonzero(held):
+            mixed = (1.0 - probe) * w
+            mixed[i] += probe
+            mixed = np.maximum(mixed, floors)
+            mixed = mixed / mixed.sum()
+            trial = evaluate(mixed)
+            trial_val = _objective_value(trial, objective)
+            if trial_val is None:
+                continue
+            if guard_upside and not _preserves_upside(trial, baseline, upside_slack):
+                continue
+            slopes[i] = (trial_val - best_val) / probe
+        if not slopes:
+            stop = "stuck"
+            break
+        buyers = sorted((i for i in slopes if w[i] < max_weight - 1e-9),
+                        key=lambda i: -slopes[i])
+        sellers = sorted(
+            (j for j in slopes if w[j] > floors[j] + 1e-9),
+            key=lambda j: slopes[j],
+        )
+        pairs, used = [], set()
+        for i in buyers:
+            if len(pairs) >= 3:
+                break
+            if i in used:
+                continue
+            for j in sellers:
+                if slopes[j] >= slopes[i]:
+                    break
+                if j != i and j not in used:
+                    sellable = w[j] - floors[j]
+                    pairs.append((i, j, min(sellable, max_weight - w[i])))
+                    used.update((i, j))
+                    break
+        best_step = None
+        for batch in ([pairs] + ([pairs[:1]] if len(pairs) > 1 else [])) if pairs else []:
+            most = max((limit for _, _, limit in batch), default=0.0)
+            if most <= 1e-12:
+                continue
+            for step in sorted({a for a in (0.005, 0.01, 0.02, 0.04, 0.08) if a < most} | {most}):
+                trial_w = w.copy()
+                for i, j, limit in batch:
+                    amount = min(step, limit)
+                    trial_w[i] += amount
+                    trial_w[j] -= amount
+                trial_w = np.maximum(trial_w, floors)
+                trial_w = trial_w / trial_w.sum()
+                trial = evaluate(trial_w)
+                trial_val = _objective_value(trial, objective)
+                if trial_val is None:
+                    continue
+                if guard_upside and not _preserves_upside(trial, baseline, upside_slack):
+                    continue
+                if trial_val > best_val + 1e-9 and (best_step is None or trial_val > best_step[0]):
+                    best_step = (trial_val, trial_w, trial)
+        if best_step is None:
+            stop = "stuck"
+            break
+        best_val, w, current = best_step
+        stop = "improved"
+
+    start_w = np.array(weights_arr, dtype=float)
+    start_w = start_w / start_w.sum()
+    improved = not np.allclose(w, start_w, atol=1e-8)
+    if improved and stop == "stuck":
+        stop = "converged"
+    elif not improved and stop != "unmeasurable":
+        stop = "unchanged"
+
+    return {
+        "weights": w,
+        "objective": objective,
+        "metrics": current,
+        "start_metrics": baseline,
+        "improved": improved,
+        "stopped": stop,
+        "iterations": iterations,
+    }
