@@ -6407,6 +6407,22 @@ th.col-drag-target {
 .yoc-basis strong {
   color: var(--text);
 }
+.yoc-missing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1.25rem;
+  margin: 0.6rem 1rem 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.yoc-missing-label {
+  color: var(--text);
+  font-weight: 600;
+}
+.yoc-missing strong {
+  color: var(--text);
+}
 .etfc-holdings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
