@@ -2,6 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  PERCENT_LEVEL_OPTIONS,
+  RESISTANCE_COLOR,
+  SUPPORT_COLOR,
   approachedFromAbove,
   clusterPivots,
   drawdownFromHigh,
@@ -9,11 +12,18 @@ import {
   findPivots,
   findSupportResistance,
   levelDateLabel,
+  levelDistanceLabel,
+  levelDistancePct,
   percentLevelBase,
+  percentLevelColor,
   percentLevelLabel,
   percentLevels,
+  sanitizePercentLevelColors,
+  sanitizeSrColors,
   spreadLabelPositions,
+  srColorLabels,
   srHistoryPeriod,
+  srLevelColor,
 } from './priceLevels.js'
 
 const bar = (close, spread = 1) => ({ open: close, high: close + spread, low: close - spread, close })
@@ -240,4 +250,61 @@ test('level dates read as month day, year (or time for intraday)', () => {
   assert.equal(levelDateLabel('2026-02-11'), 'Feb 11, 2026')
   assert.equal(levelDateLabel('2026-11-17 10:30'), 'Nov 17 10:30')
   assert.equal(levelDateLabel(null), '')
+})
+
+test('each level carries its percent distance from the last close', () => {
+  const closes = []
+  for (let cycle = 0; cycle < 4; cycle += 1) {
+    for (let i = 0; i <= 10; i += 1) closes.push(90 + i * 2)
+    for (let i = 9; i >= 1; i -= 1) closes.push(90 + i * 2)
+  }
+  for (let i = 0; i <= 5; i += 1) closes.push(90 + i * 2)
+  const { support, resistance, lastClose } = findSupportResistance(closes.map(c => bar(c, 0.5)))
+  ;[...support, ...resistance].forEach(l => {
+    assert.ok(Math.abs(l.pctFromClose - (l.price / lastClose - 1) * 100) < 1e-9)
+  })
+  assert.ok(support[0].pctFromClose < 0)
+  assert.ok(resistance[0].pctFromClose > 0)
+})
+
+test('level distance is signed and labeled from the close', () => {
+  assert.ok(Math.abs(levelDistancePct(98, 100) + 2) < 1e-9)
+  assert.ok(Math.abs(levelDistancePct(110, 100) - 10) < 1e-9)
+  assert.equal(levelDistancePct(100, 0), null)
+  assert.equal(levelDistancePct(null, 100), null)
+  assert.equal(levelDistanceLabel(-1.4567), '-1.46% from close')
+  assert.equal(levelDistanceLabel(20.32), '+20.32% from close')
+  assert.equal(levelDistanceLabel(0.001), 'At close')
+  assert.equal(levelDistanceLabel(null), '')
+})
+
+test('S/R colors fall back to the side default and drop bad saved entries', () => {
+  assert.equal(srLevelColor('S1', {}), SUPPORT_COLOR)
+  assert.equal(srLevelColor('R3', undefined), RESISTANCE_COLOR)
+  assert.equal(srLevelColor('S2', { S2: '#ffcc00' }), '#ffcc00')
+  assert.equal(srLevelColor('R1', { R1: 'red' }), RESISTANCE_COLOR)
+  assert.deepEqual(
+    sanitizeSrColors({ S1: '#123abc', R2: '#FFEE58', S9: '#000000', R1: 'blue', x: '#111111' }),
+    { S1: '#123abc', R2: '#FFEE58' },
+  )
+  assert.deepEqual(sanitizeSrColors(null), {})
+  assert.deepEqual(sanitizeSrColors(['#123abc']), {})
+})
+
+test('color rows run from the highest resistance down to the lowest support', () => {
+  assert.deepEqual(srColorLabels(3), ['R3', 'R2', 'R1', 'S1', 'S2', 'S3'])
+  assert.deepEqual(srColorLabels(1), ['R1', 'S1'])
+  assert.deepEqual(srColorLabels(9), ['R5', 'R4', 'R3', 'R2', 'R1', 'S1', 'S2', 'S3', 'S4', 'S5'])
+})
+
+test('percent levels take the user color for a key and keep defaults for the rest', () => {
+  const levels = percentLevels(100, ['u10', 'd5'], { u10: '#123456', d5: 'nope' })
+  const byKey = Object.fromEntries(levels.map(l => [l.key, l.color]))
+  assert.equal(byKey.u10, '#123456')
+  assert.equal(byKey.d5, PERCENT_LEVEL_OPTIONS.find(o => o.key === 'd5').color)
+  assert.equal(percentLevelColor('d50', {}), PERCENT_LEVEL_OPTIONS.find(o => o.key === 'd50').color)
+  assert.deepEqual(
+    sanitizePercentLevelColors({ u20: '#abcdef', d99: '#000000', d10: 'red', S1: '#111111' }),
+    { u20: '#abcdef' },
+  )
 })

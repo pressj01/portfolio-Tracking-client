@@ -5210,11 +5210,6 @@ th.col-drag-target {
   gap: 0.4rem;
   cursor: pointer;
 }
-.etf-level-swatch {
-  width: 14px;
-  height: 3px;
-  border-radius: 2px;
-}
 .etf-level-menu-row {
   display: flex;
   gap: 0.3rem;
@@ -5226,6 +5221,25 @@ th.col-drag-target {
   justify-content: space-between;
   gap: 0.5rem;
   margin-top: 0.2rem;
+  white-space: nowrap;
+}
+.etf-level-color-row {
+  gap: 0.45rem;
+  cursor: default;
+}
+.etf-draw-color.etf-level-color {
+  width: 24px;
+  height: 18px;
+  flex: none;
+}
+.etf-sr-color-label {
+  font-weight: 600;
+  min-width: 1.6rem;
+}
+.etf-sr-color-detail {
+  margin-left: auto;
+  color: var(--text-faint, var(--p-888));
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .etf-level-menu-note {
