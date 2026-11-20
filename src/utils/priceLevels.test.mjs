@@ -14,6 +14,7 @@ import {
   levelDateLabel,
   levelDistanceLabel,
   levelDistancePct,
+  normalizeSrSides,
   percentLevelBase,
   percentLevelColor,
   percentLevelLabel,
@@ -24,6 +25,7 @@ import {
   srColorLabels,
   srHistoryPeriod,
   srLevelColor,
+  srLevelsForSides,
 } from './priceLevels.js'
 
 const bar = (close, spread = 1) => ({ open: close, high: close + spread, low: close - spread, close })
@@ -307,4 +309,24 @@ test('percent levels take the user color for a key and keep defaults for the res
     sanitizePercentLevelColors({ u20: '#abcdef', d99: '#000000', d10: 'red', S1: '#111111' }),
     { u20: '#abcdef' },
   )
+})
+
+test('S/R can show only support or only resistance', () => {
+  const levels = { support: [{ label: 'S1' }], resistance: [{ label: 'R1' }], lastClose: 100, tolerance: 1 }
+  assert.deepEqual(srLevelsForSides(levels, 'both'), levels)
+  assert.deepEqual(srLevelsForSides(levels, 'support').resistance, [])
+  assert.deepEqual(srLevelsForSides(levels, 'support').support, levels.support)
+  assert.deepEqual(srLevelsForSides(levels, 'resistance').support, [])
+  assert.deepEqual(srLevelsForSides(levels, 'resistance').resistance, levels.resistance)
+  assert.equal(srLevelsForSides(levels, 'resistance').tolerance, 1)
+  assert.equal(srLevelsForSides(null, 'support'), null)
+  assert.deepEqual(srLevelsForSides(levels, 'bogus'), levels)
+  assert.equal(normalizeSrSides('support'), 'support')
+  assert.equal(normalizeSrSides(null), 'both')
+})
+
+test('color rows only list the side(s) being shown', () => {
+  assert.deepEqual(srColorLabels(2, 'support'), ['S1', 'S2'])
+  assert.deepEqual(srColorLabels(2, 'resistance'), ['R2', 'R1'])
+  assert.deepEqual(srColorLabels(2, 'both'), ['R2', 'R1', 'S1', 'S2'])
 })

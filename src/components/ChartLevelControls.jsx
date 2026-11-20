@@ -3,6 +3,7 @@ import {
   MAX_SR_PER_SIDE,
   PERCENT_LEVEL_BASES,
   PERCENT_LEVEL_OPTIONS,
+  SR_SIDE_OPTIONS,
   levelDistanceLabel,
   percentLevelColor,
   percentLevelLabel,
@@ -131,7 +132,7 @@ export function OffHighToggle({ active, onToggle }) {
 }
 
 export function SupportResistanceControl({
-  active, onToggle, perSide, onChangePerSide, colors, onChangeColor, onResetColors, levels,
+  active, onToggle, perSide, onChangePerSide, sides, onChangeSides, colors, onChangeColor, onResetColors, levels,
 }) {
   // Current levels by label, so each color row can show its price and distance.
   const byLabel = {}
@@ -152,8 +153,14 @@ export function SupportResistanceControl({
           {Array.from({ length: MAX_SR_PER_SIDE }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
         </select>
       </label>
+      <label className="etf-level-menu-field">
+        <span>Show</span>
+        <select className="etf-draw-select" value={sides} onChange={e => onChangeSides(e.target.value)}>
+          {SR_SIDE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </label>
       <div className="etf-level-menu-head">Line colors</div>
-      {srColorLabels(perSide).map(label => {
+      {srColorLabels(perSide, sides).map(label => {
         const lvl = byLabel[label]
         return (
           <div key={label} className="etf-level-option etf-level-color-row">
