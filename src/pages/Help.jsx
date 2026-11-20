@@ -4254,49 +4254,184 @@ function ETFScreenHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Level Overlays</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        One-click toggles at the end of the chart toolbar. Click the button to show or hide the
-        overlay; click the ▾ beside it (where there is one) for settings. All of them are remembered
-        between sessions.
+        Three toggles at the end of the chart toolbar draw reference prices across the chart: <strong>% Levels</strong>,
+        <strong> S/R</strong> (support and resistance) and <strong>Off High</strong>. Click a button to show or hide its
+        overlay, and click the ▾ beside it for settings. Each one answers a different question about where price
+        is now:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>% Levels</strong> — Dashed lines at fixed percent moves, labeled with the percent and price.
-          Choose any of +20%, +10%, +5%, −5%, −10%, −20%, −25%, −40% and −50% from the ▾ menu, and whether they are
-          measured from the <em>last close</em> or the <em>period high</em>. The labels sit left of the chart,
-          beyond the price numbers, so they never cover any bars. The color square beside each level in the menu
-          changes that line's color; <em>Reset colors</em> puts back the defaults. The price axis stretches so
-          every selected level is visible, so turn off the deeper levels if the candles get too compressed.</li>
-        <li><strong>S/R</strong> — Support (S1, S2…, green by default) below the last close and resistance (R1,
-          R2…, red by default) above it, nearest first. Levels are found by clustering swing highs and lows in
-          the loaded period, and the shaded band shows the price zone those swings covered. Choose 1–5 levels
-          per side from the ▾ menu, and use <em>Show</em> to draw <em>Both</em> sides, <em>Support only</em> or
-          <em> Resistance only</em>. Changing the period (1Y, 5Y…) changes which swings are used.
-          <ul style={{ paddingLeft: '1.25rem' }}>
-            <li><em>Labels</em> — sit just right of the chart so they never cover the newest bars. Each one
-              shows the level's price, how far the last bar's close has to fall (support, e.g. <em>−1.73% from
-              close</em>) or rise (resistance) to reach it, and the number of <em>touches</em>.</li>
-            <li><em>Touches</em> — how many swing highs and lows (bars where price turned around) sit at the
-              level. Both kinds count, so old resistance that later held as support keeps its count. More
-              touches means a stronger level; the period's highest high and lowest low always count as one.</li>
-            <li><em>Colors</em> — the ▾ menu has a row for each level shown (R1, R2… and S1, S2…) with its price
-              and distance from the close. Click a color square to recolor that line, its band and its label; <em>Reset colors</em>
-              returns to green and red.</li>
-            <li><em>Testing</em> — a level within reach of the last close is the one price is testing right
-              now. It counts as support if price came down into it and resistance if price rose into it,
-              even when the close sits just past it.</li>
-            <li><em>Older levels</em> — when the loaded period has fewer levels on a side than you asked for
-              (for example, price has broken to a new 6-month low, so nothing in the period sits below it),
-              the chart looks back over a longer history at the same bar size (6M looks back 2 years, 1Y looks
-              back 5) and fills that side. These lines are dotted and show the date the level was last
-              touched. They only reach as far from price as the loaded period's own high-to-low range, and the
-              price axis stretches to keep them on screen.</li>
-          </ul></li>
-        <li><strong>Off High</strong> — How far the last close has fallen from the highest <em>close</em> in the
-          loaded period, for example <em>−8.1% from highest close $779.09 · Oct 6, 2026</em>. It uses closing
-          prices only, so an intraday spike that didn't hold isn't the yardstick. A dotted purple line runs from
-          that day to the last bar, and a dashed drop line at the last bar spans the fall. When the last close is
-          the highest close it reads <em>At highest close</em>. Changing the period (6M, 1Y…) changes which close
-          is used.</li>
+        <li><strong>% Levels</strong>: where would price be after a fixed move, such as a 10% drop?</li>
+        <li><strong>S/R</strong>: where has price turned around before, and how far away are those prices?</li>
+        <li><strong>Off High</strong>: how far has price already fallen from its best close in the period?</li>
       </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The labels sit outside the chart, % levels on the left past the price numbers and S/R on the right, so
+        they never cover a bar. The chart narrows a little to make room. Every setting, including colors, is
+        remembered between sessions. The levels are reference points drawn from past prices, not predictions or
+        trade instructions. The screenshot at the top of this page has all three turned on: % levels on the left,
+        S1–S3 support and R1–R3 resistance on the right, and the Off High label with its dashed drop line at the
+        last bar.
+      </p>
+
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>% Levels</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Dashed lines at fixed percent moves from a reference price, each labeled with the percent and the price it
+        works out to. With QQQ closing at $620.61, the −10% line sits at $558.55: the price QQQ would reach after a
+        10% drop from here. They are plain arithmetic, useful for sizing a move in dollars or picking a stop or a
+        target. They say nothing about where price is likely to go.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Which levels:</strong> tick any of +20%, +10%, +5%, −5%, −10%, −20%, −25%, −40% and −50% in the ▾
+          menu. <em>All</em> and <em>None</em> set every box at once.</li>
+        <li><strong>Measured from:</strong> the <em>last close</em> (the default), or the <em>period high</em>, the
+          highest high in the loaded period. Measured from the period high, a gray dotted 0% line marks the high
+          itself, and the −10% and −20% lines mark the usual correction and bear-market thresholds.</li>
+        <li><strong>Colors:</strong> the color square beside each level changes that line and its label.
+          <em> Reset colors</em> puts back the defaults (blues above, yellows through magenta below).</li>
+        <li>The price axis stretches so every ticked level is on screen. If the candles get squeezed, untick the
+          deeper levels.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/price-levels-percent.png"
+        alt="% Levels menu open over a QQQ chart, with a color square and checkbox for each level"
+        caption="The % Levels menu: a color square and checkbox for each level, All / None / Reset colors, and what the levels are measured from. The labels sit left of the price axis."
+      />
+
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>Support and Resistance (S/R)</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Support</strong> is a price below the last close where buying has stepped in before: a floor that
+        price bounced off. <strong>Resistance</strong> is a price above it where selling has stepped in: a ceiling
+        that price turned down from. The chart finds them in the loaded period's own price swings. Every bar where
+        price made a turn (a <em>swing high</em> or <em>swing low</em>) is collected, and turns at nearly the same
+        price are grouped into one level. The solid line is the level's average price, and the shaded band behind
+        it is the range those turns covered. Supports are numbered S1, S2… and resistances R1, R2…, nearest first.
+        The exact steps are under <em>How the Levels Are Calculated</em> below.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>Each label, right of the chart, reads like this:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>S2 Support $597.35</strong>: the level and its price.</li>
+        <li><strong>−3.75% from close</strong>: how far the last bar's close has to fall to reach a support (a
+          negative number), or rise to reach a resistance (a positive one).</li>
+        <li><strong>5 touches</strong>: how many swing highs and lows make up the level, that is, how many times
+          price turned around there. Both kinds count, so a level that stopped a rally and later held a pullback
+          has touches from each. More touches means a level the market has respected more often. The period's
+          highest high and lowest low always count as a touch, so a level can show <em>1 touch</em>.</li>
+        <li><strong>testing</strong>: price is sitting on this level right now (within about two-thirds of a typical
+          bar's range). It counts as support if price came down into it and as resistance if price rose into it,
+          even when the close is just past it. That is why a support being tested can show a small <em>+</em>
+          distance: the close has slipped just under it.</li>
+        <li><strong>last touch Feb 11, 2026</strong> on a <em>dotted</em> line: an older level. When the loaded
+          period has fewer levels on a side than you asked for (say price has just broken to a new low, so nothing
+          in the period sits below it), the chart looks back over a longer history at the same bar size (6M looks
+          back 2 years, 1Y looks back 5) and fills that side from there. These only reach as far from price as
+          the period's own high-to-low range.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/price-levels-sr.png"
+        alt="QQQ chart with three resistance levels above the close and three support levels below it, labeled right of the chart"
+        caption="S/R on QQQ: R1–R3 in red above the close and S1–S3 in green below it. The shaded bands show where each level's swings sat, and each label gives the distance from the close and the number of touches."
+      />
+      <p style={{ marginBottom: '0.5rem' }}>In the S/R ▾ menu:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Levels per side:</strong> how many supports and resistances to draw, 1 to 5.</li>
+        <li><strong>Show:</strong> <em>Both</em> (the default), <em>Support only</em> or <em>Resistance only</em>. The
+          hidden side's lines, bands and labels go away, and the price axis no longer stretches for them. The
+          levels keep their numbers, so S1 is still the nearest support.</li>
+        <li><strong>Line colors:</strong> a row for each level being shown, with its price and distance from the
+          close. Click a color square to recolor that line, its band and its label. <em>Reset colors</em> goes back
+          to green and red.</li>
+        <li>Changing the period (6M, 1Y, 5Y…) changes which swings are used, so the levels change with it.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/price-levels-sr-support-only.png"
+        alt="S/R menu set to Support only, with the line-color rows for S1, S2 and S3"
+        caption="Show set to Support only: just S1–S3 are drawn, and the menu lists each one's color, price and distance from the close."
+      />
+
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>Off High</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        How far the last close sits below the highest <em>close</em> in the loaded period: its drawdown from the
+        period's best close. The label reads, for example, <em>−18.3% from highest close $759.66 · Oct 6, 2026</em>:
+        the size of the fall, the highest close, and the day it happened. A dotted purple line runs from that day to
+        the last bar, and a dashed purple line at the last bar spans the fall.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>It uses closing prices only, so an intraday spike that didn't hold is not the yardstick.</li>
+        <li>When the last close is the highest close, it reads <em>At highest close</em>.</li>
+        <li>The period sets the window: on 6M it is the drop from the 6-month high close, on 5Y from the 5-year
+          high close.</li>
+        <li>Turn on % Levels measured from the period high too, to compare the drop with the −10% and −20% lines.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/price-levels-off-high.png"
+        alt="Off High on QQQ: a dotted line from the October 6 highest close to the last bar and a dashed drop line spanning an 18.3% fall"
+        caption="Off High on QQQ: down 18.3% from its highest close of the year, $759.66 on Oct 6."
+      />
+
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>How the Levels Are Calculated</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Every overlay is worked out from the bars loaded on the chart: the period (1M, 6M, 1Y…) and the bar size
+        (daily, weekly, 5-minute…) you picked. Each bar has an open, high, low and close. Change either one and the
+        levels are recalculated from the new bars. Here is exactly which prices each one uses.
+      </p>
+
+      <p style={{ marginBottom: '0.4rem' }}><strong>% Levels</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>The reference price is either the <strong>close of the last bar</strong> (<em>Last close</em>) or the
+          <strong> highest high of any bar</strong> in the period (<em>Period high</em>, which includes intraday spikes).</li>
+        <li>Each level is that price × (1 + the percent). From a $620.61 close: −10% = $620.61 × 0.90 = $558.55, and
+          +5% = $620.61 × 1.05 = $651.64.</li>
+      </ul>
+
+      <p style={{ marginBottom: '0.4rem' }}><strong>Off High</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>It finds the <strong>highest close</strong> among the loaded bars (highs are ignored) and compares the
+          <strong> last bar's close</strong> to it.</li>
+        <li>Off High = (last close ÷ highest close − 1) × 100. QQQ: ($620.61 ÷ $759.66 − 1) × 100 = −18.3%.</li>
+      </ul>
+
+      <p style={{ marginBottom: '0.4rem' }}><strong>Support and resistance</strong>, step by step:</p>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Find the turning points.</strong> A <em>swing high</em> is a bar whose <strong>high</strong> is above
+          the highs of a few bars on each side of it, a peak price turned down from. A <em>swing low</em> is a bar whose
+          <strong> low</strong> is below the lows of the bars on each side, a trough price turned up from. How many bars
+          on each side depends on how many bars are loaded: about one-fortieth of them, at least 2 and at most 8. On a
+          1-year daily chart (about 251 bars) that is 6, so a swing high must be the highest high of 13 bars in a row.
+          When two bars tie at a flat top or bottom, only the first counts.</li>
+        <li><strong>Always include the extremes.</strong> The period's highest high and lowest low are added even if
+          they fall too close to either end of the chart to be confirmed as swings. The one exception is an extreme in
+          the last few bars that price is still sitting on, such as today's low during a sell-off. That is the move in
+          progress, not a level anything has bounced off yet.</li>
+        <li><strong>Set the tolerance.</strong> How close two swings must be to count as the same level: the larger of
+          0.6 × the 14-bar <em>average true range</em> (the typical size of a bar, gaps included) and 0.4% of the last
+          close.</li>
+        <li><strong>Group the swings.</strong> All swing prices, highs and lows together, are sorted and grouped: a swing
+          within the tolerance of a group's average price joins that group. Each group is a candidate level.
+          <ul style={{ paddingLeft: '1.25rem' }}>
+            <li>The level's <strong>price</strong> (the solid line) is the average of its swing prices.</li>
+            <li>Its <strong>band</strong> (the shading) runs from its lowest swing to its highest swing, and is at
+              least half a tolerance tall.</li>
+            <li>Its <strong>touches</strong> are the number of swings in the group.</li>
+          </ul></li>
+        <li><strong>Score the levels.</strong> Score = touches + 1.5 × how recent the latest touch is (0 for the first bar
+          of the chart, 1 for the last). A level touched 3 times last month outranks one touched 3 times a year ago.</li>
+        <li><strong>Decide the side.</strong> A level at or below the last close is support, and one above it is
+          resistance. A level within the tolerance of the last close is marked <em>testing</em>, and its side comes from
+          the direction price arrived from: the most recent close that was clearly away from the level (more than the
+          tolerance) tells which. If that close was above, it is support; if below, resistance.</li>
+        <li><strong>Pick the strongest, keep them apart.</strong> On each side, levels are taken highest score first, up
+          to <em>Levels per side</em>, skipping any that would sit within 2 tolerances of a level already chosen. Two
+          weaker copies of the same zone never crowd out a distinct one.</li>
+        <li><strong>Number them by distance.</strong> S1 is the chosen support nearest the last close, then S2 and S3
+          further down. R1 is the nearest resistance above, then R2 and R3 further up.</li>
+        <li><strong>Distance from close</strong> = (level price ÷ last close − 1) × 100. S3 at $555.60 from a $620.61
+          close: ($555.60 ÷ $620.61 − 1) × 100 = −10.48%.</li>
+        <li><strong>Fill in from older history if a side runs short.</strong> If the period gives fewer levels on a side
+          than you asked for, the same steps run over a longer stretch of bars at the same bar size (1M looks back 6
+          months, 3M 1 year, 6M and YTD 2 years, 1Y and 2Y 5 years, 5Y 10 years, 10Y everything; a 1-day chart looks back 5 days and a 5-day chart a month, except 5 days
+          of 1-minute bars, which have no longer history). Only levels no further from the last close than the loaded period's own high-to-low range
+          are used. They are drawn dotted with the date of their last touch.</li>
+      </ol>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>
       <p style={{ marginBottom: '1rem' }}>
@@ -5485,26 +5620,63 @@ function PortfolioBuilderHelp() {
       <h2>Portfolio Builder</h2>
       <p style={{ marginBottom: '1rem' }}>
         Portfolio Builder lets you create, name, and grade model portfolios without touching your real
-        holdings. Build one from scratch, copy your current holdings as a starting point, generate a
-        strategy template, and compare models side by side. Every model is graded with exactly the same
-        formula as the <strong>Dashboard</strong> grade: the same calendar windows, the same scoring bands
-        and weights from Settings › Grading, and the same rules for young or missing price histories. Copy
-        your holdings, pick the Dashboard's period with SPY as the benchmark, and the Builder shows the
-        Dashboard's grade.
+        holdings. Build one from scratch, start from some or all of an account's current holdings, generate a
+        strategy template, re-weight it toward a goal, and compare models side by side. Every model is graded
+        with exactly the same formula as the <strong>Dashboard</strong> grade: the same calendar windows, the same
+        scoring bands and weights from Settings › Grading, and the same rules for young or missing price
+        histories. Copy your holdings, pick the Dashboard's period with SPY as the benchmark, and the Builder
+        shows the Dashboard's grade.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/portfolio-builder/Screenshot 2026-05-09 122850.jpg" alt="Portfolio Builder" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
-      </div>
+      <HelpScreenshot
+        src="./help-screenshots/portfolio-builder/builder-overview.png"
+        alt="Portfolio Builder with a six-fund model: starting balance, target yield, Re-weight goals, and the holdings table with fund names and yields"
+        caption="A model portfolio: the sidebar of saved models and From my holdings…, the starting balance and target row, the Re-weight goals, and the holdings table with each fund's name and historical yield under its ticker."
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What's New</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>From my holdings…</strong> picks any of the selected account's holdings, at market value, to
+          start a new model or add to the open one. It replaces <em>Copy my holdings</em>, which always took all of them.</li>
+        <li><strong>Re-weight</strong> shifts the open model's weights toward a goal (best score, smallest drawdown,
+          lowest beta, highest total return, or a balance of all four), and <strong>Original weights</strong> puts your
+          amounts back.</li>
+        <li><strong>Metric cards</strong> for total return, max drawdown, and beta head the report card and each
+          portfolio in Compare.</li>
+        <li><strong>Fund names and yield</strong> show under each ticker, with a new <strong>Yield %</strong> column.</li>
+      </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Managing Portfolios</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Saved portfolios appear in the <strong>left sidebar</strong> with their holding count and total. Click one to open it; the Builder reopens the last one you used.</li>
-        <li><strong>Copy my holdings</strong> creates a model from the selected account's (or aggregate's) current positions at market value.</li>
+        <li><strong>+ New Portfolio</strong> starts an empty model and asks for its starting balance. <strong>From my holdings…</strong> starts one from your real positions (see below).</li>
         <li>Click the portfolio title to <strong>rename</strong> it (Enter saves, Esc cancels).</li>
         <li>Use <strong>Save As</strong> to duplicate the current portfolio under a new name, and <strong>Clear</strong> to remove every holding.</li>
         <li>Delete a portfolio with the <strong>×</strong> next to it in the sidebar.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>From My Holdings</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>From my holdings…</strong> (in the sidebar, and on the empty page) opens a list of the account
+        selected in the navbar, or every account in an aggregate, with each holding's name, current market value,
+        and share of the account. It lists the same positions the Dashboard grades: anything with shares and a value
+        above zero.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Every holding starts ticked. Untick the ones to leave out, or use <strong>Filter tickers</strong> (it matches
+          the ticker or the fund name), <strong>Select all</strong> and <strong>Select none</strong>. The line beside
+          them shows how many are ticked and their dollar total.</li>
+        <li><strong>New portfolio</strong> creates a model from the ticked holdings at their current market value. Give it
+          a name; it defaults to the account and today's date.</li>
+        <li><strong>Add to</strong> <em>the open model</em> merges the ticked holdings into the model you have open. A
+          ticker that is already in the model takes the account's amount; the rest of the model is left alone.</li>
+        <li>Nothing in the account changes: the model only copies tickers and dollar amounts.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/portfolio-builder/builder-from-holdings.png"
+        alt="From my holdings picker listing an account's holdings with checkboxes, values and weights"
+        caption="From my holdings… on a demo account: pick the tickers, then add them to the open model or create a new one."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Holdings</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
@@ -5531,13 +5703,62 @@ function PortfolioBuilderHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Position:</strong> amount, weight, shares, and latest price.</li>
+        <li><strong>Ticker:</strong> the symbol, with the fund's name beside or under it and its historical yield in
+          blue. Hover the yield to see where it came from.</li>
+        <li><strong>Position:</strong> amount, running total, weight, shares, latest price, and <strong>Yield %</strong>.</li>
+        <li><strong>Yield %</strong> is the fund's historical yield: its recent distributions annualized at their current
+          cadence (a monthly payer's latest payments × 12, for example), divided by the latest price. TappAlpha funds use
+          the issuer's published rate, and Yahoo's quoted yield is the last resort, because it badly understates many
+          option-income funds. It is the same yield used for the income estimates and the target.</li>
         <li><strong>Grade:</strong> each holding's grade and score, computed as the Dashboard grades a holding.</li>
         <li><strong>Risk:</strong> Ulcer Index, Sharpe, Sortino, Calmar, Omega, max drawdown, downside and upside capture, and volatility. Colors follow your grading bands: green is excellent, blue good, amber fair, red poor.</li>
         <li><strong>Return:</strong> total return with distributions reinvested, the price (NAV) change alone, and the annualized return. A high yield beside a falling price is NAV erosion.</li>
-        <li><strong>Income:</strong> forward yield and estimated annual and monthly income. The yield annualizes the fund's recent distributions at their current cadence (the issuer's rate for TappAlpha funds), because Yahoo's quoted yield badly understates many option-income funds.</li>
+        <li><strong>Income:</strong> forward yield and estimated annual and monthly income.</li>
         <li>The <strong>Portfolio</strong> row at the bottom shows the same measures for the whole model. Use the column chips to show only the risk or the return-and-income columns, and click a header to sort.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Re-weight</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Re-weight</strong> bar above the table (shown once a model has two or more holdings) moves dollars
+        between the holdings you already have to push the model toward one goal. Click a goal; the amounts, weights and
+        share counts change, and the grade, report card and charts update. Click another goal to try it instead; each
+        goal starts from your own amounts, not from the last goal's result.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Max score:</strong> the mix with the highest portfolio grade score.</li>
+        <li><strong>Min drawdown:</strong> the smallest peak-to-trough fall over the window.</li>
+        <li><strong>Min beta:</strong> the least sensitivity to the benchmark.</li>
+        <li><strong>Max total return:</strong> the highest total return, distributions reinvested, over the window.</li>
+        <li><strong>Best overall:</strong> an even blend of the four: score, a shallow drawdown, a low beta, and total
+          return, each scaled 0–1 so no one measure takes over.</li>
+        <li><strong>Original weights</strong> puts back the amounts you had before the first goal you clicked.</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}>How it works and what it won't do:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>It tries small shifts of weight from one holding to another, keeps each shift that improves the goal, and
+          stops when nothing more helps, measured over the period and benchmark selected on the page, with your grading
+          settings.</li>
+        <li>It never adds a ticker. The total invested stays the same. No holding goes above <strong>Max per holding</strong>,
+          or 40% when that box is empty.</li>
+        <li><em>Min drawdown</em>, <em>Min beta</em> and <em>Best overall</em> won't give up the model's upside: a mix that
+          loses more than about 2% of the total return or upside capture is skipped. <em>Best overall</em> also keeps every
+          holding in the model with at least a small slice.</li>
+        <li><em>Max score</em> and <em>Max total return</em> can shrink a holding to almost nothing. The ticker stays in the
+          table so you can see it was squeezed out.</li>
+        <li>Holdings without enough price history to grade, or without a price, keep their amounts. It needs at least two
+          graded holdings.</li>
+        <li>If no mix beats the current one, the bar says <em>No better mix found for that objective in this window</em>
+          and nothing changes.</li>
+        <li><strong>Original weights</strong> is only available until you open another model or leave the page, so check
+          the result, then keep it, try another goal, or go back. Re-weighting is saved like any other edit.</li>
+        <li>The best mix for the past window is not a forecast. A different period can give a very different answer, and
+          shifting toward a goal can lower the yield. Compare the Yield % and income before and after.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/portfolio-builder/builder-reweight.png"
+        alt="Re-weight bar with Best overall active and the holdings table after re-weighting"
+        caption="Best overall on the sample model moved $3,000 from JEPQ to SCHD: the grade rose from B- (82.9) to B (84.2), and the yield fell from 5.82% to 5.50%."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Starting Balance</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -5557,7 +5778,7 @@ function PortfolioBuilderHelp() {
         <li>A monthly target stays a dollar amount: if you add or remove money, the yield it needs changes with the total.</li>
         <li>A line under the Add row shows where the model stands: its yield and monthly income, how far above or below the target it is, and any holding above the max per holding.</li>
         <li>When the income is below the target, <strong>Balance to target</strong> moves dollars out of the lower-yielding holdings and into the higher-yielding ones, just far enough to reach it. No holding is removed, holdings with the same yield keep their proportions to each other, and each share count follows its new amount. <strong>Undo</strong> puts the amounts back.</li>
-        <li><strong>Max per holding</strong> limits how much of the portfolio Balance may put in any one holding (for example 25%). With it set, Balance never builds a holding past it, and if a holding is already over it, <strong>Apply max per holding</strong> brings it down and spreads the difference over the others, keeping as much yield as the cap allows and never dropping below the target. A cap lowers the highest yield the holdings can reach, and it needs enough holdings to hold every dollar (four holdings for a 25% cap).</li>
+        <li><strong>Max per holding</strong> limits how much of the portfolio Balance (and Re-weight) may put in any one holding (for example 25%). With it set, Balance never builds a holding past it, and if a holding is already over it, <strong>Apply max per holding</strong> brings it down and spreads the difference over the others, keeping as much yield as the cap allows and never dropping below the target. A cap lowers the highest yield the holdings can reach, and it needs enough holdings to hold every dollar (four holdings for a 25% cap).</li>
         <li><strong>Whole shares</strong> makes Balance buy whole shares at the latest price instead of fractional amounts. Every holding keeps at least one share, and what no share fits into is left over as cash, so the total invested drops by less than one share&apos;s price. The yield lands on the target or a little above it.</li>
         <li>A target above what the holdings can reach cannot be met by shifting dollars: the line says how high they can go, and you add a higher-yielding fund, raise the max per holding, or lower the target. A holding with no price is left untouched.</li>
         <li>A high target can concentrate the model in one or two funds. Check the grade, the largest-holding figure, and the Price Δ column after balancing: a higher yield is not a higher return.</li>
@@ -5565,28 +5786,50 @@ function PortfolioBuilderHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Exporting</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        <strong>Export Excel</strong> downloads a workbook with the holdings table (every column, plus the
-        Portfolio row) and a Summary sheet: period, window, benchmark, total value, income, yield, the
-        target as both a yield and monthly income and the gap to it, the max per holding, grade, and return. <strong>Export CSV</strong> downloads the holdings
-        table alone. Both use the period and benchmark selected on the page, and amounts are in your display
-        currency.
+        <strong>Export Excel</strong> downloads a workbook with the holdings table (every column, including the fund
+        name, yield and where the yield came from, plus the Portfolio row) and a Summary sheet: period, window,
+        benchmark, total value, income, yield, the target as both a yield and monthly income and the gap to it, the max
+        per holding, grade, and return. <strong>Export CSV</strong> downloads the holdings table alone. Both use the
+        period and benchmark selected on the page, and amounts are in your display currency.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Report Card and Charts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The report card shows the overall grade, each factor's measured value, its 0–100 score, letter,
-        and share of the grade, plus income, total return against the benchmark, beta, and capture. NAV
-        Health is not part of the portfolio grade, matching the Dashboard. The charts show cumulative
-        total return against the benchmark, risk versus return for every holding, the portfolio, and the
-        benchmark, the correlation of daily returns, and the portfolio's drawdown.
+        Three metric cards head the report card, the quickest read on how the model behaved over the window:
       </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Total return:</strong> the model's return with distributions reinvested, with the benchmark's beneath
+          it (for example <em>SPY +8.5%</em>).</li>
+        <li><strong>Max drawdown:</strong> the deepest peak-to-trough fall in the model's value over the window.</li>
+        <li><strong>Beta vs</strong> <em>the benchmark</em>: how much the model tends to move when the benchmark moves.
+          1.00 moves with it, 0.64 about two-thirds as much, and above 1 more than it.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below them, the report card shows the overall grade, each factor's measured value, its 0–100 score, letter, and
+        share of the grade, plus income, total return against the benchmark, beta, and capture. NAV Health is not part
+        of the portfolio grade, matching the Dashboard. The charts show cumulative total return against the benchmark,
+        risk versus return for every holding, the portfolio, and the benchmark, the correlation of daily returns, and
+        the portfolio's drawdown.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/portfolio-builder/builder-report-card.png"
+        alt="Portfolio Report Card with total return, max drawdown and beta cards above the factor scores"
+        caption="The report card: total return (with SPY's beneath), max drawdown and beta cards above the factor scores."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparing Portfolios</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Check <strong>2 or more portfolios</strong> under Compare in the sidebar.</li>
         <li>Click <strong>Compare</strong>. They are graded over the selected period and benchmark, exactly as each one's own page grades it.</li>
+        <li>Each portfolio gets its own row of metric cards (total return, max drawdown, and beta) with its grade and score,
+          so the headline numbers sit side by side.</li>
         <li>A radar chart shows each factor score, and the table marks the best (▲) and worst (▼) value for each measure. Monthly income is only ranked when the portfolios are the same size.</li>
       </ol>
+      <HelpScreenshot
+        src="./help-screenshots/portfolio-builder/builder-compare.png"
+        alt="Comparison of two sample models with metric cards, a factor-score radar chart and a ranked table"
+        caption="Compare: metric cards for each model, the factor-score radar, and the table with the best (▲) and worst (▼) value for each measure."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Strategies</h3>
       <p style={{ marginBottom: '1rem' }}>
