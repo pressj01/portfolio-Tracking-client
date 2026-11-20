@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { annualDistributionEstimate } from './approxYield.js'
-import { buildYieldOnCostSeries } from './yieldOnCost.js'
+import { buildYieldOnCostSeries, yieldOnCostGapReason } from './yieldOnCost.js'
 
 const pay = (date, amount) => ({ date, amount })
 const close = (actual, expected, tolerance = 1e-9) => assert.ok(
@@ -96,4 +96,74 @@ test('yield on cost follows the true trailing year through an extra payment', ()
   close(at('2022-06-22'), ((0.0193 + 0.0160 + 0.0337 + 0.0183) / cost) * 100, 1e-4)
   // 2022-09-21: Sep 2021 has rolled off; the December quarter is still counted whole.
   close(at('2022-09-21'), ((0.0197 + 0.0193 + 0.0160 + 0.0337) / cost) * 100, 1e-4)
+})
+
+// Builds a comparer series payload: one priced row per date, with div_ratio
+// set so div_ratio × close recovers each payment exactly.
+const comparerSeries = (dates, closeFor, payments = []) => ({
+  dates,
+  closes: dates.map(closeFor),
+  div_ratio: dates.map(d => {
+    const payment = payments.find(p => p.date === d)
+    return payment ? payment.amount / closeFor(d) : 0
+  }),
+})
+
+const weekdays = (start, end) => {
+  const out = []
+  for (let t = new Date(`${start}T00:00:00Z`); t <= new Date(`${end}T00:00:00Z`); t.setUTCDate(t.getUTCDate() + 1)) {
+    const dow = t.getUTCDay()
+    if (dow !== 0 && dow !== 6) out.push(t.toISOString().slice(0, 10))
+  }
+  return out
+}
+
+test('yield on cost: weekly fund = latest ten payments × 52 over the first in-window close', () => {
+  // TDAX's last ten weekly payouts as of 2026-11-20, against its 2026-01-07
+  // first close of $23.97 — the chart read 20.00%.
+  const amounts = [0.087, 0.087, 0.087, 0.087, 0.087, 0.099, 0.099, 0.099, 0.099, 0.091]
+  const payDates = ['2026-09-16', '2026-09-23', '2026-09-30', '2026-10-07', '2026-10-14',
+    '2026-10-21', '2026-10-28', '2026-11-04', '2026-11-10', '2026-11-18']
+  const payments = payDates.map((date, i) => pay(date, amounts[i]))
+  const dates = weekdays('2026-09-01', '2026-11-20')
+  const series = comparerSeries(dates, d => (d === dates[0] ? 23.97 : 21), payments)
+  const result = buildYieldOnCostSeries(series, { frequency: 'W', visibleStart: '2026-09-01' })
+  close(result.cost, 23.97)
+  close(result.annual, (amounts.reduce((a, b) => a + b, 0) / 10) * 52)
+  close(result.yieldPct, 20.0017, 1e-3)
+})
+
+test('a fund that launched inside the window and has not paid is named, not dropped', () => {
+  const dates = weekdays('2026-11-18', '2026-11-20')
+  const series = comparerSeries(dates, () => 25)
+  const options = { frequency: null, visibleStart: '2026-01-07', visibleEnd: '2026-11-20' }
+  assert.equal(buildYieldOnCostSeries(series, options), null)
+  assert.equal(yieldOnCostGapReason(series, options), 'no distributions yet (trading since 2026-11-18)')
+})
+
+test('an older fund with no payment in a short window reads as a window gap, not a new fund', () => {
+  // The backend relabels the pre-window close onto the window's first day.
+  const dates = weekdays('2026-10-20', '2026-11-20')
+  const series = comparerSeries(dates, () => 50)
+  const options = { frequency: 'Q', visibleStart: '2026-10-20', visibleEnd: '2026-11-20' }
+  assert.equal(buildYieldOnCostSeries(series, options), null)
+  assert.equal(yieldOnCostGapReason(series, options), 'no distributions in this window')
+})
+
+test('a single payment waits for a cadence unless the frequency is known', () => {
+  const dates = weekdays('2026-10-23', '2026-11-20')
+  const series = comparerSeries(dates, () => 20, [pay('2026-11-13', 0.4)])
+  const unknown = { frequency: null, visibleStart: '2026-01-07', visibleEnd: '2026-11-20' }
+  assert.equal(buildYieldOnCostSeries(series, unknown), null)
+  assert.match(yieldOnCostGapReason(series, unknown), /^one distribution so far \(2026-11-13\)/)
+  const monthly = buildYieldOnCostSeries(series, { ...unknown, frequency: 'M' })
+  close(monthly.yieldPct, (0.4 * 12 / 20) * 100)
+})
+
+test('no in-window prices is its own reason', () => {
+  const dates = weekdays('2026-01-05', '2026-01-09')
+  const series = comparerSeries(dates, () => 20, [pay('2026-01-07', 0.1)])
+  const options = { frequency: 'W', visibleStart: '2026-06-01', visibleEnd: '2026-06-30' }
+  assert.equal(buildYieldOnCostSeries(series, options), null)
+  assert.equal(yieldOnCostGapReason(series, options), 'no prices in this window')
 })

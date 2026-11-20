@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react'
 import Plot from './ThemedPlot'
-import { buildYieldOnCostSeries } from '../utils/yieldOnCost'
+import { buildYieldOnCostSeries, yieldOnCostGapReason } from '../utils/yieldOnCost'
 import { formatMoney } from '../utils/money'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, resolveCssColor, themedPlotlyLayout } from '../utils/chartTheme'
@@ -25,19 +25,22 @@ export default function YieldOnCostChart({
   const { isDark } = useTheme()
   const theme = chartTheme(isDark)
 
-  const built = useMemo(() => entries
-    .map(entry => ({
-      ...entry,
+  const { built, missing } = useMemo(() => {
+    const charted = []
+    const skipped = []
+    entries.forEach(entry => {
+      const options = { frequency: entry.frequency, visibleStart, visibleEnd }
       // Resolved here so the line, the legend entry, and the swatch in the
       // basis row below all agree on the fund's color.
-      color: resolveCssColor(entry.color, isDark),
-      yoc: buildYieldOnCostSeries(entry.series, {
-        frequency: entry.frequency,
-        visibleStart,
-        visibleEnd,
-      }),
-    }))
-    .filter(entry => entry.yoc), [entries, visibleStart, visibleEnd, isDark])
+      const color = resolveCssColor(entry.color, isDark)
+      const yoc = buildYieldOnCostSeries(entry.series, options)
+      if (yoc) charted.push({ ...entry, color, yoc })
+      // A fund with no yield to plot still gets named, with the reason, so it
+      // doesn't just disappear from the chart.
+      else skipped.push({ symbol: entry.symbol, color, reason: yieldOnCostGapReason(entry.series, options) })
+    })
+    return { built: charted, missing: skipped }
+  }, [entries, visibleStart, visibleEnd, isDark])
 
   const chart = useMemo(() => {
     // Each line now carries its full history so MAX stays pannable, but Plotly
@@ -167,7 +170,9 @@ export default function YieldOnCostChart({
           distribution changes the run rate and is flat between payments. Because the cost is the
           window's first close, changing the period or the dates re-prices every line: on{' '}
           <strong>MAX</strong> all tickers share one start date so they compare directly, while on{' '}
-          <strong>ALL</strong> each uses its own inception price.
+          <strong>ALL</strong> each uses its own inception price. A ticker that hasn't paid a
+          distribution in the window — a fund that only just launched, say — has no yield to plot
+          and is listed under <strong>Not charted</strong> with the reason.
         </p>
         {/* Both readings always show: the wrapper doesn't decide which applies.
             A stock can be a non-growing high yielder and an ETF can be a
@@ -184,10 +189,23 @@ export default function YieldOnCostChart({
     </details>
   )
 
+  const missingNote = missing.length > 0 && (
+    <div className="yoc-missing-row">
+      <span className="yoc-missing-label">Not charted:</span>
+      {missing.map(({ symbol, color, reason }) => (
+        <span key={symbol} className="yoc-missing">
+          <span className="etfc-series-swatch" style={{ background: color }} />
+          <strong>{symbol}</strong> — {reason}
+        </span>
+      ))}
+    </div>
+  )
+
   if (!built.length) {
     return (
       <>
         {help}
+        {missingNote}
         <div className={emptyClassName}>
           No distributions in this window, so there is no yield on cost to chart.
           Widen the date range or pick an income-paying fund.
@@ -199,6 +217,7 @@ export default function YieldOnCostChart({
   return (
     <>
       {help}
+      {missingNote}
       <Plot
         data={chart.data}
         layout={themedPlotlyLayout(chart.layout, isDark, { surface: true })}

@@ -143,3 +143,42 @@ export function buildYieldOnCostSeries(series = {}, {
     visibleMax: Number.isFinite(visibleMax) ? visibleMax : null,
   }
 }
+
+/**
+ * Why a fund drew no line — the short reason the chart prints in place of it.
+ * Call it for a series buildYieldOnCostSeries returned null for; it walks the
+ * same early returns in the same order.
+ *
+ * Without this, a ticker simply vanished from the chart. Comparing a batch of
+ * new option-income funds, two of four went missing with nothing to say they
+ * had launched weeks earlier and not paid yet, which read as a broken chart.
+ */
+export function yieldOnCostGapReason(series = {}, {
+  frequency = null,
+  visibleStart = null,
+  visibleEnd = null,
+} = {}) {
+  const dates = (series?.dates || []).map(dateKey)
+  const closes = series?.closes || []
+  const inWindow = day => (
+    (!visibleStart || day >= visibleStart) && (!visibleEnd || day <= visibleEnd)
+  )
+  const pricedDays = dates.filter((_, i) => Number(closes[i]) > 0)
+  if (!pricedDays.some(inWindow)) return 'no prices in this window'
+
+  // The backend relabels a fund's pre-window close to the window's first day,
+  // so a series that only begins after the window opens is a fund that began
+  // trading inside it — not one that skipped a payment.
+  const firstDay = pricedDays[0]
+  const launchedInWindow = Boolean(visibleStart && firstDay > visibleStart)
+  const payments = distributionsFromSeries(series)
+  if (!payments.length) {
+    return launchedInWindow
+      ? `no distributions yet (trading since ${firstDay})`
+      : 'no distributions in this window'
+  }
+  if (payments.length === 1 && !frequency) {
+    return `one distribution so far (${payments[0].date}); a second sets its pay cadence`
+  }
+  return 'no distributions in this window'
+}
