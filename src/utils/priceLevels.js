@@ -50,14 +50,41 @@ export function sanitizeSrColors(saved) {
   return sanitizeColorMap(saved, key => SR_LABEL.test(key))
 }
 
+// Which side(s) of the last close the S/R overlay draws.
+export const SR_SIDE_OPTIONS = [
+  { value: 'both', label: 'Both' },
+  { value: 'support', label: 'Support only' },
+  { value: 'resistance', label: 'Resistance only' },
+]
+
+/** A saved S/R side choice, or 'both' when it is missing or unknown. */
+export function normalizeSrSides(value) {
+  return SR_SIDE_OPTIONS.some(o => o.value === value) ? value : 'both'
+}
+
+/** Detected S/R levels with the side the user hid emptied out (null stays null). */
+export function srLevelsForSides(levels, sides) {
+  if (!levels) return null
+  const show = normalizeSrSides(sides)
+  return {
+    ...levels,
+    support: show === 'resistance' ? [] : levels.support,
+    resistance: show === 'support' ? [] : levels.resistance,
+  }
+}
+
 /**
  * The S/R labels the menu offers colors for, top of the chart to bottom:
- * R{n}…R1 above price, then S1…S{n} below it.
+ * R{n}…R1 above price, then S1…S{n} below it — only the side(s) being shown.
  */
-export function srColorLabels(perSide) {
+export function srColorLabels(perSide, sides = 'both') {
   const n = Number.isInteger(perSide) ? Math.min(MAX_SR_PER_SIDE, Math.max(1, perSide)) : 3
+  const show = normalizeSrSides(sides)
   const idx = Array.from({ length: n }, (_, i) => i + 1)
-  return [...idx.slice().reverse().map(i => `R${i}`), ...idx.map(i => `S${i}`)]
+  return [
+    ...(show === 'support' ? [] : idx.slice().reverse().map(i => `R${i}`)),
+    ...(show === 'resistance' ? [] : idx.map(i => `S${i}`)),
+  ]
 }
 
 /** Percent move from the last close to a level: negative below it, positive above. */

@@ -4261,14 +4261,15 @@ function ETFScreenHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>% Levels</strong> — Dashed lines at fixed percent moves, labeled with the percent and price.
           Choose any of +20%, +10%, +5%, −5%, −10%, −20%, −25%, −40% and −50% from the ▾ menu, and whether they are
-          measured from the <em>last close</em> or the <em>period high</em>. The color square beside each level
-          in the menu changes that line's color; <em>Reset colors</em> puts back the defaults. The price axis
-          stretches so every selected level is visible, so turn off the deeper levels if the candles get too
-          compressed.</li>
+          measured from the <em>last close</em> or the <em>period high</em>. The labels sit left of the chart,
+          beyond the price numbers, so they never cover any bars. The color square beside each level in the menu
+          changes that line's color; <em>Reset colors</em> puts back the defaults. The price axis stretches so
+          every selected level is visible, so turn off the deeper levels if the candles get too compressed.</li>
         <li><strong>S/R</strong> — Support (S1, S2…, green by default) below the last close and resistance (R1,
           R2…, red by default) above it, nearest first. Levels are found by clustering swing highs and lows in
           the loaded period, and the shaded band shows the price zone those swings covered. Choose 1–5 levels
-          per side from the ▾ menu. Changing the period (1Y, 5Y…) changes which swings are used.
+          per side from the ▾ menu, and use <em>Show</em> to draw <em>Both</em> sides, <em>Support only</em> or
+          <em> Resistance only</em>. Changing the period (1Y, 5Y…) changes which swings are used.
           <ul style={{ paddingLeft: '1.25rem' }}>
             <li><em>Labels</em> — sit just right of the chart so they never cover the newest bars. Each one
               shows the level's price, how far the last bar's close has to fall (support, e.g. <em>−1.73% from
