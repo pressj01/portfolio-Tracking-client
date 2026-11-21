@@ -1,22 +1,42 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
+  ALL_PERCENT_LEVEL_KEYS,
+  CUSTOM_PERCENT_LEVELS,
+  MAX_CUSTOM_DOWNSIDE_PCT,
+  MAX_CUSTOM_UPSIDE_PCT,
   MAX_SR_PER_SIDE,
   PERCENT_LEVEL_BASES,
   PERCENT_LEVEL_OPTIONS,
   SR_SIDE_OPTIONS,
+  customPercentLevelPct,
   levelDistanceLabel,
   percentLevelColor,
   percentLevelLabel,
   srColorLabels,
   srLevelColor,
 } from '../utils/priceLevels'
+import { ALL_PATTERN_KEYS, PATTERN_GROUPS, PATTERN_TYPES } from '../utils/chartPatterns'
 import { formatMoney } from '../utils/money'
 
 // A toggle button with an attached ▾ menu. The main button turns the overlay on/off
 // with one click; the caret opens its settings.
-function ToggleWithMenu({ label, title, active, onToggle, menuTitle, children }) {
+function ToggleWithMenu({ label, title, active, onToggle, menuTitle, menuClassName = '', children }) {
   const [open, setOpen] = useState(false)
+  const [openRight, setOpenRight] = useState(false)
   const wrapRef = useRef(null)
+  const menuRef = useRef(null)
+
+  // The menu hangs left from the button's right edge; when the toolbar wraps and the
+  // button sits near the window's left edge, that would run off screen, so it opens
+  // rightward from the button instead.
+  useLayoutEffect(() => {
+    if (!open || !menuRef.current) return
+    if (menuRef.current.getBoundingClientRect().left < 8) setOpenRight(true)
+  }, [open])
+  const toggleOpen = () => {
+    setOpenRight(false)
+    setOpen(o => !o)
+  }
 
   useEffect(() => {
     if (!open) return undefined
@@ -42,12 +62,18 @@ function ToggleWithMenu({ label, title, active, onToggle, menuTitle, children })
       <button
         type="button"
         className={`btn btn-sm etf-level-caret${active ? ' btn-active' : ''}`}
-        onClick={() => setOpen(o => !o)}
+        onClick={toggleOpen}
         title={menuTitle}
         aria-haspopup="true"
         aria-expanded={open}
       >▾</button>
-      {open && <div className="etf-level-menu" role="menu">{children}</div>}
+      {open && (
+        <div
+          ref={menuRef}
+          className={`etf-level-menu ${menuClassName}${openRight ? ' etf-level-menu--right' : ''}`}
+          role="menu"
+        >{children}</div>
+      )}
     </span>
   )
 }
@@ -66,8 +92,55 @@ function LevelColorInput({ value, onChange, label }) {
   )
 }
 
+// The custom row for one side: color, checkbox, and a box to type the size of the move.
+// The draft text is kept apart from the saved value so a half-typed "7." stays put;
+// leaving the box shows the saved size again.
+function CustomLevelRow({ def, pct, checked, onToggle, onChangePct, color, onChangeColor }) {
+  const sign = def.side === 'up' ? '+' : '-'
+  const size = String(Math.abs(pct))
+  const max = def.side === 'up' ? MAX_CUSTOM_UPSIDE_PCT : MAX_CUSTOM_DOWNSIDE_PCT
+  const [draft, setDraft] = useState(size)
+  const focused = useRef(false)
+  useEffect(() => { if (!focused.current) setDraft(size) }, [size])
+  const invalid = customPercentLevelPct(def.key, draft) == null
+  const label = `Custom ${percentLevelLabel(pct)}`
+
+  return (
+    <div className="etf-level-option etf-level-color-row etf-level-custom-row">
+      <LevelColorInput value={color} onChange={onChangeColor} label={label} />
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        aria-label={`Show the ${label} level`}
+        title={`Show the ${label} level`}
+      />
+      <span className="etf-level-custom-sign">{sign}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        className={`etf-level-custom-input${invalid ? ' is-invalid' : ''}`}
+        value={draft}
+        onFocus={() => { focused.current = true }}
+        onBlur={() => { focused.current = false; setDraft(size) }}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          const next = customPercentLevelPct(def.key, e.target.value)
+          if (next != null && next !== pct) onChangePct(next)
+        }}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+        aria-label={`Custom ${def.side === 'up' ? 'upside' : 'downside'} percent`}
+        title={`Type a ${def.side === 'up' ? 'rise' : 'drop'} of more than 0% and up to ${max}%`}
+      />
+      <span>%</span>
+      <span className="etf-level-custom-tag">Custom</span>
+    </div>
+  )
+}
+
 export function PercentLevelsControl({
   active, onToggle, selectedKeys, onChangeKeys, base, onChangeBase, colors, onChangeColor, onResetColors,
+  customPcts, onChangeCustomPct,
 }) {
   const selected = new Set(selectedKeys)
   const toggleKey = (key) => {
@@ -91,6 +164,25 @@ export function PercentLevelsControl({
       </label>
     </div>
   )
+  // Typing a new size turns that custom level on, as checking its box would.
+  const renderCustom = (side) => {
+    const def = CUSTOM_PERCENT_LEVELS.find(c => c.side === side)
+    return (
+      <CustomLevelRow
+        key={def.key}
+        def={def}
+        pct={customPcts?.[def.key] ?? def.pct}
+        checked={selected.has(def.key)}
+        onToggle={() => toggleKey(def.key)}
+        onChangePct={(pct) => {
+          onChangeCustomPct(def.key, pct)
+          if (!selected.has(def.key)) toggleKey(def.key)
+        }}
+        color={percentLevelColor(def.key, colors)}
+        onChangeColor={color => onChangeColor(def.key, color)}
+      />
+    )
+  }
 
   return (
     <ToggleWithMenu
@@ -102,10 +194,12 @@ export function PercentLevelsControl({
     >
       <div className="etf-level-menu-head">Upside</div>
       {upside.map(renderOption)}
+      {renderCustom('up')}
       <div className="etf-level-menu-head">Downside</div>
       {downside.map(renderOption)}
+      {renderCustom('down')}
       <div className="etf-level-menu-row">
-        <button type="button" className="btn btn-sm" onClick={() => { onChangeKeys(PERCENT_LEVEL_OPTIONS.map(o => o.key)); if (!active) onToggle() }}>All</button>
+        <button type="button" className="btn btn-sm" onClick={() => { onChangeKeys(ALL_PERCENT_LEVEL_KEYS); if (!active) onToggle() }}>All</button>
         <button type="button" className="btn btn-sm" onClick={() => onChangeKeys([])}>None</button>
         <button type="button" className="btn btn-sm" onClick={onResetColors} disabled={!customized}>Reset colors</button>
       </div>
@@ -128,6 +222,102 @@ export function OffHighToggle({ active, onToggle }) {
       title="Show / hide how far the last close is below the period's highest close"
       aria-pressed={active}
     >Off High</button>
+  )
+}
+
+export function HighLowToggle({ active, onToggle }) {
+  return (
+    <button
+      type="button"
+      className={`btn btn-sm${active ? ' btn-active' : ''}`}
+      onClick={onToggle}
+      title="Show / hide labels on the highest and lowest bars of the loaded period"
+      aria-pressed={active}
+    >Hi/Lo</button>
+  )
+}
+
+// Chart patterns: one checkbox per pattern, each with its line color and, while the
+// overlay is on, how many were found in the loaded period.
+export function PatternsControl({ active, onToggle, selectedKeys, onChangeKeys, counts }) {
+  const selected = new Set(selectedKeys)
+  const toggleKey = (key) => {
+    const next = selected.has(key) ? selectedKeys.filter(k => k !== key) : [...selectedKeys, key]
+    onChangeKeys(next)
+    if (!active && next.length) onToggle()
+  }
+  return (
+    <ToggleWithMenu
+      label="Patterns"
+      title="Show / hide chart patterns found in the loaded period"
+      menuTitle="Choose which chart patterns to look for"
+      menuClassName="etf-pattern-menu"
+      active={active}
+      onToggle={onToggle}
+    >
+      {PATTERN_GROUPS.map(group => (
+        <React.Fragment key={group}>
+          <div className="etf-level-menu-head">{group}</div>
+          {PATTERN_TYPES.filter(t => t.group === group).map(t => (
+            <label key={t.key} className="etf-level-option etf-pattern-option">
+              <span className="etf-pattern-swatch" style={{ background: t.color }} aria-hidden="true" />
+              <input type="checkbox" checked={selected.has(t.key)} onChange={() => toggleKey(t.key)} />
+              <span>{t.label}</span>
+              {active && counts?.[t.key] > 0 && (
+                <span className="etf-pattern-count" title="Found in the loaded period">{counts[t.key]}</span>
+              )}
+              {active && !counts?.[t.key] && selected.has(t.key) && (
+                <span className="etf-pattern-count is-none" title="Not found in the loaded period">not found</span>
+              )}
+            </label>
+          ))}
+        </React.Fragment>
+      ))}
+      <div className="etf-level-menu-row">
+        <button type="button" className="btn btn-sm" onClick={() => { onChangeKeys([...ALL_PATTERN_KEYS]); if (!active) onToggle() }}>All</button>
+        <button type="button" className="btn btn-sm" onClick={() => onChangeKeys([])}>None</button>
+      </div>
+      <p className="etf-level-menu-note">
+        Found automatically in the loaded period and redrawn whenever the ticker, period
+        or bar size changes. Solid lines: the pattern broke out the way it points. Dotted:
+        still forming. Dashed: it broke the other way. Hover a label for details.
+      </p>
+    </ToggleWithMenu>
+  )
+}
+
+// The line above the chart (never over it) while Patterns is on: the ticked patterns
+// that were not found in the loaded period. It lists ticked patterns only, so
+// unticking one drops it from the line, and with none missing the line is gone.
+export function PatternsStatus({ selectedKeys, counts }) {
+  const ticked = PATTERN_TYPES.filter(t => selectedKeys.includes(t.key))
+  const missing = ticked.filter(t => !counts?.[t.key])
+  if (!missing.length) return null
+  const noneFound = missing.length === ticked.length
+  if (noneFound && ticked.length > 3) {
+    return (
+      <div className="etf-pattern-status" role="status">
+        <span>
+          <strong>None of the {ticked.length} ticked patterns were found in the loaded period.</strong>
+          {' '}A longer period or a different bar size may show some.
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="etf-pattern-status" role="status">
+      <span>
+        <strong>{missing.length === 1 ? 'Pattern not found' : 'Patterns not found'} in the loaded period:</strong>
+        {' '}
+        {missing.map((t, i) => (
+          <span key={t.key} className="etf-pattern-chip">
+            <span className="etf-pattern-swatch" style={{ background: t.color }} aria-hidden="true" />
+            {t.label}{i < missing.length - 1 ? ',' : '.'}
+          </span>
+        ))}
+        {noneFound && ' A longer period or a different bar size may show some.'}
+      </span>
+    </div>
   )
 }
 

@@ -4254,21 +4254,24 @@ function ETFScreenHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Level Overlays</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Three toggles at the end of the chart toolbar draw reference prices across the chart: <strong>% Levels</strong>,
-        <strong> S/R</strong> (support and resistance) and <strong>Off High</strong>. Click a button to show or hide its
-        overlay, and click the ▾ beside it for settings. Each one answers a different question about where price
-        is now:
+        Four toggles at the end of the chart toolbar mark reference prices on the chart: <strong>% Levels</strong>,
+        <strong> S/R</strong> (support and resistance), <strong>Off High</strong> and <strong>Hi/Lo</strong>. Click a
+        button to show or hide its overlay; % Levels and S/R also have a ▾ beside them for settings. (The
+        <strong> Patterns</strong> button after them is covered under <em>Chart Patterns</em> below.) Each one answers
+        a different question about where price is now:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>% Levels</strong>: where would price be after a fixed move, such as a 10% drop?</li>
         <li><strong>S/R</strong>: where has price turned around before, and how far away are those prices?</li>
         <li><strong>Off High</strong>: how far has price already fallen from its best close in the period?</li>
+        <li><strong>Hi/Lo</strong>: what were the highest and lowest prices in the period, and on which day?</li>
       </ul>
       <p style={{ marginBottom: '0.75rem' }}>
-        The labels sit outside the chart, % levels on the left past the price numbers and S/R on the right, so
-        they never cover a bar. The chart narrows a little to make room. Every setting, including colors, is
+        The % level and S/R labels sit outside the chart, % levels on the left past the price numbers and S/R on
+        the right, so they never cover a bar. The chart narrows a little to make room. The Off High and Hi/Lo labels
+        sit inside the chart, next to the bars they describe. Every setting, including colors, is
         remembered between sessions. The levels are reference points drawn from past prices, not predictions or
-        trade instructions. The screenshot at the top of this page has all three turned on: % levels on the left,
+        trade instructions. The screenshot at the top of this page has the first three turned on: % levels on the left,
         S1–S3 support and R1–R3 resistance on the right, and the Off High label with its dashed drop line at the
         last bar.
       </p>
@@ -4276,25 +4279,33 @@ function ETFScreenHelp() {
       <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>% Levels</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Dashed lines at fixed percent moves from a reference price, each labeled with the percent and the price it
-        works out to. With QQQ closing at $620.61, the −10% line sits at $558.55: the price QQQ would reach after a
+        works out to. With QQQ closing at $645.04, the −10% line sits at $580.54: the price QQQ would reach after a
         10% drop from here. They are plain arithmetic, useful for sizing a move in dollars or picking a stop or a
         target. They say nothing about where price is likely to go.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Which levels:</strong> tick any of +20%, +10%, +5%, −5%, −10%, −20%, −25%, −40% and −50% in the ▾
           menu. <em>All</em> and <em>None</em> set every box at once.</li>
+        <li><strong>Custom levels:</strong> the <em>Custom</em> row at the end of each list takes a percent you type,
+          up to +1000% above and −99% below. Type 12.5 in the upside row for a +12.5% line, or 30 in the downside row
+          for −30%. Typing a number ticks the row's box; untick it to hide the line and keep the number. A custom
+          level that matches a ticked preset (say, a custom +10% with +10% ticked) replaces it, drawn in the custom
+          row's color.</li>
+        <li><strong>Remembered:</strong> the ticked levels, the custom percents, the colors and the Measured from
+          choice stay as you left them the next time you open the app.</li>
         <li><strong>Measured from:</strong> the <em>last close</em> (the default), or the <em>period high</em>, the
           highest high in the loaded period. Measured from the period high, a gray dotted 0% line marks the high
           itself, and the −10% and −20% lines mark the usual correction and bear-market thresholds.</li>
         <li><strong>Colors:</strong> the color square beside each level changes that line and its label.
-          <em> Reset colors</em> puts back the defaults (blues above, yellows through magenta below).</li>
+          <em> Reset colors</em> puts back the defaults (blues above, yellows through magenta below, indigo and pink
+          for the custom rows).</li>
         <li>The price axis stretches so every ticked level is on screen. If the candles get squeezed, untick the
           deeper levels.</li>
       </ul>
       <HelpScreenshot
         src="./help-screenshots/etf-screen/price-levels-percent.png"
-        alt="% Levels menu open over a QQQ chart, with a color square and checkbox for each level"
-        caption="The % Levels menu: a color square and checkbox for each level, All / None / Reset colors, and what the levels are measured from. The labels sit left of the price axis."
+        alt="% Levels menu open over a QQQ chart, with a color square and checkbox for each level and a custom +12.5% and −30% row"
+        caption="The % Levels menu: a color square and checkbox for each level, a Custom row at the end of each list (here +12.5% and −30%), All / None / Reset colors, and what the levels are measured from. The labels sit left of the price axis."
       />
 
       <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>Support and Resistance (S/R)</h4>
@@ -4368,6 +4379,27 @@ function ETFScreenHelp() {
         caption="Off High on QQQ: down 18.3% from its highest close of the year, $759.66 on Oct 6."
       />
 
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>Hi/Lo</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Labels the highest and lowest prices of the loaded period. A green <em>High</em> label sits on an arrow
+        above the bar that made the high, and a red <em>Low</em> label sits below the bar that made the low. Each
+        label shows the price and the day, for example <em>High $762.86 · Oct 6, 2026</em>.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>On a candle chart it uses each bar's <strong>high</strong> and <strong>low</strong>, the tips of the
+          wicks, so it matches the H and L shown above the chart for that bar.</li>
+        <li>On a line chart or the % scale, where only closes are drawn, it uses the highest and lowest
+          <strong> close</strong> instead, and the labels read <em>High close</em> and <em>Low close</em>.</li>
+        <li>The period sets the window: on 6M it marks the 6-month high and low, on 5Y the 5-year high and low.
+          If the same price was reached more than once, the label points to the first time.</li>
+        <li>On intraday bars the label shows the time of the bar as well as the day.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/price-levels-high-low.png"
+        alt="Hi/Lo on a one-year QQQ candle chart: a green High label above the Oct 6 bar and a red Low label below the Mar 30 bar"
+        caption="Hi/Lo on a one-year QQQ candle chart: the high, $762.86 on Oct 6, and the low, $555.60 on Mar 30."
+      />
+
       <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>How the Levels Are Calculated</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Every overlay is worked out from the bars loaded on the chart: the period (1M, 6M, 1Y…) and the bar size
@@ -4379,8 +4411,8 @@ function ETFScreenHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>The reference price is either the <strong>close of the last bar</strong> (<em>Last close</em>) or the
           <strong> highest high of any bar</strong> in the period (<em>Period high</em>, which includes intraday spikes).</li>
-        <li>Each level is that price × (1 + the percent). From a $620.61 close: −10% = $620.61 × 0.90 = $558.55, and
-          +5% = $620.61 × 1.05 = $651.64.</li>
+        <li>Each level is that price × (1 + the percent). From a $645.04 close: −10% = $645.04 × 0.90 = $580.54, and
+          +5% = $645.04 × 1.05 = $677.29. A custom level works the same way: −30% = $645.04 × 0.70 = $451.53.</li>
       </ul>
 
       <p style={{ marginBottom: '0.4rem' }}><strong>Off High</strong></p>
@@ -4388,6 +4420,13 @@ function ETFScreenHelp() {
         <li>It finds the <strong>highest close</strong> among the loaded bars (highs are ignored) and compares the
           <strong> last bar's close</strong> to it.</li>
         <li>Off High = (last close ÷ highest close − 1) × 100. QQQ: ($620.61 ÷ $759.66 − 1) × 100 = −18.3%.</li>
+      </ul>
+
+      <p style={{ marginBottom: '0.4rem' }}><strong>Hi/Lo</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>High = the largest bar <strong>high</strong> among the loaded bars; Low = the smallest bar
+          <strong> low</strong>. A bar with no high or low counts its close.</li>
+        <li>On line charts and the % scale, both use <strong>closes</strong> only.</li>
       </ul>
 
       <p style={{ marginBottom: '0.4rem' }}><strong>Support and resistance</strong>, step by step:</p>
@@ -4432,6 +4471,82 @@ function ETFScreenHelp() {
           of 1-minute bars, which have no longer history). Only levels no further from the last close than the loaded period's own high-to-low range
           are used. They are drawn dotted with the date of their last touch.</li>
       </ol>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart Patterns</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Patterns</strong> button at the end of the chart toolbar looks for classic chart patterns in the
+        loaded bars and draws each one it finds on the chart. Nothing needs to be marked by hand: change the ticker,
+        the period or the bar size and the search runs again, adding the patterns in the new bars and removing the
+        ones that are no longer there. The patterns are textbook shapes found in past prices, not predictions or
+        trade instructions, and a confirmed pattern can still fail.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Turning patterns on and off:</strong> click <em>Patterns</em> to show or hide them all. Click the
+          ▾ beside it to tick or untick each pattern on its own; <em>All</em> and <em>None</em> set every box at once.
+          While Patterns is on, each row shows how many of that pattern were found, or <em>not found</em> for a
+          ticked pattern with none. Your choices are remembered between sessions.</li>
+        <li><strong>Patterns not found:</strong> when a ticked pattern isn't in the loaded period, a line above the
+          chart says so, for example <em>Patterns not found in the loaded period: Bear Flag, Bear Pennant</em>. It sits
+          above the chart, never on it, so it covers nothing. Untick a pattern and it leaves the line at once. When
+          every ticked pattern was found, or none is ticked, the line goes away. If none of the ticked patterns were
+          found, a longer period or a different bar size may show some.</li>
+        <li><strong>Reading the drawing:</strong> each pattern has its own color, shown beside its name in the menu.
+          Solid lines mean the pattern is <em>confirmed</em>: price broke out the way the pattern points. Dotted lines
+          mean it is still <em>forming</em>: the shape is there but no breakout yet. Dashed lines mark an ascending
+          triangle that <em>broke down</em> instead of up. A label names each pattern; hover it for the dates, the
+          measurements and, once confirmed, the measured move.</li>
+        <li><strong>Measured move:</strong> the usual textbook projection: the pattern's height (or a flag's pole)
+          added to the breakout price, or taken away for a bearish pattern. It is arithmetic on the shape, not a
+          forecast.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/chart-patterns-menu.png"
+        alt="Patterns menu for a one-year QQQ chart, with each pattern's color, a checkbox, and a count or 'not found' beside it"
+        caption="The Patterns menu for a one-year QQQ chart: each pattern's color, a count beside each one found, and not found beside the ticked ones that weren't."
+      />
+
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>The Patterns</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Sizes are measured against the ticker's <strong>typical bar range</strong> (the median high-to-low range of
+        the loaded bars, counting gaps from the prior close), and in percent rather than dollars, so the same rules
+        work for a $20 stock and a $500 one, on daily, weekly or intraday bars.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Head &amp; Shoulders</strong> (bearish reversal): three peaks after a rise, the middle one (the
+          head, <em>H</em>) clearly highest, the two shoulders (<em>LS</em>, <em>RS</em>) at similar heights and
+          similar distances in time on either side. The neckline runs through the two dips between them. It is
+          confirmed when a bar closes below the neckline after the right shoulder, and dropped if price climbs above
+          the head first.</li>
+        <li><strong>Inverse Head &amp; Shoulders</strong> (bullish reversal): the same shape upside down after a fall:
+          three dips, the middle one lowest, confirmed by a close above the neckline.</li>
+        <li><strong>V Bottom</strong> (bullish reversal): a steep fall of at least 6 typical bar ranges, then a climb
+          back at least three quarters of the way in no more than about one and a half times as many bars, with few
+          bars lingering near the low. It shows as forming once half the fall has been won back.</li>
+        <li><strong>Ascending Triangle</strong> (usually bullish): at least two tops at about the same price (a flat
+          ceiling) and at least two rising lows beneath them, closing in on the ceiling. It is listed as
+          <em> uptrend</em> or <em>downtrend</em> by the direction price moved before the triangle began, so each kind
+          can be turned on and off on its own. It is confirmed by a close above the ceiling, and marked
+          <em> broke down</em> after a close below the rising line.</li>
+        <li><strong>Bull Flag / Bear Flag</strong> (continuation): a pole, a steep move of at least 4 typical bar
+          ranges in at most 20 bars, followed by 5 to 30 bars drifting sideways or against the pole inside a
+          parallel channel, giving back no more than half the pole. It is confirmed when a bar closes outside the
+          channel in the pole's direction (up for a bull flag, down for a bear flag).</li>
+        <li><strong>Bull Pennant / Bear Pennant</strong> (continuation): the same pole, followed by a small range that
+          narrows, its upper line falling and lower line rising toward each other, then a close out of it in the
+          pole's direction.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/chart-patterns.png"
+        alt="JPMorgan weekly chart with a V bottom, a head and shoulders and an inverse head and shoulders drawn on it"
+        caption="Two years of weekly JPM bars: a V bottom, then a head and shoulders and an inverse head and shoulders, each with its neckline. The line above the chart names the ticked patterns that weren't found."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Why a pattern you can see isn't marked:</strong> the rules are strict on purpose, so a shape that is
+        close but misses one rule (shoulders too uneven, a flag that gave back more than half its pole, a triangle
+        whose lows don't rise) is left out. Patterns also depend on the bar size: a head and shoulders on daily bars
+        may be too small to count on weekly bars, and a large one on weekly bars may be too noisy to see on daily
+        bars. Try another period or bar size.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>
       <p style={{ marginBottom: '1rem' }}>

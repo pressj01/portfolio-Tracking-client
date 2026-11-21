@@ -5232,6 +5232,84 @@ th.col-drag-target {
   height: 18px;
   flex: none;
 }
+.etf-level-custom-row {
+  gap: 0.3rem;
+}
+.etf-level-custom-row input[type="checkbox"] {
+  margin: 0 0.1rem 0 0;
+  cursor: pointer;
+}
+.etf-level-custom-sign {
+  width: 0.6rem;
+  text-align: center;
+}
+.etf-level-custom-input {
+  width: 3.6rem;
+  padding: 1px 5px;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--p-2a2a3d);
+  border: 1px solid var(--p-444);
+  border-radius: 4px;
+}
+.etf-level-custom-input:focus {
+  outline: none;
+  border-color: var(--accent, #4f8ef7);
+}
+.etf-level-custom-input.is-invalid {
+  border-color: var(--red, #ef5350);
+}
+.etf-level-menu.etf-level-menu--right {
+  left: 0;
+  right: auto;
+}
+.etf-level-menu.etf-pattern-menu {
+  width: 310px;
+}
+.etf-pattern-count.is-none {
+  font-size: 0.7rem;
+  font-style: italic;
+}
+.etf-pattern-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  align-items: center;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  background: var(--p-2a2a3d);
+  color: var(--text);
+}
+.etf-pattern-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-right: 0.45rem;
+}
+.etf-pattern-option {
+  gap: 0.4rem;
+}
+.etf-pattern-swatch {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  flex: none;
+}
+.etf-pattern-count {
+  margin-left: auto;
+  min-width: 1.2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint, var(--p-888));
+}
+.etf-level-custom-tag {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-faint, var(--p-888));
+}
 .etf-sr-color-label {
   font-weight: 600;
   min-width: 1.6rem;

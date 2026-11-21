@@ -2,15 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  ALL_PERCENT_LEVEL_KEYS,
+  CUSTOM_PERCENT_LEVELS,
   PERCENT_LEVEL_OPTIONS,
   RESISTANCE_COLOR,
   SUPPORT_COLOR,
   approachedFromAbove,
   clusterPivots,
+  customPercentLevelPct,
   drawdownFromHigh,
   drawdownLabel,
   findPivots,
   findSupportResistance,
+  isPercentLevelKey,
   levelDateLabel,
   levelDistanceLabel,
   levelDistancePct,
@@ -19,6 +23,8 @@ import {
   percentLevelColor,
   percentLevelLabel,
   percentLevels,
+  periodHighLow,
+  sanitizeCustomPercentLevels,
   sanitizePercentLevelColors,
   sanitizeSrColors,
   spreadLabelPositions,
@@ -309,6 +315,89 @@ test('percent levels take the user color for a key and keep defaults for the res
     sanitizePercentLevelColors({ u20: '#abcdef', d99: '#000000', d10: 'red', S1: '#111111' }),
     { u20: '#abcdef' },
   )
+})
+
+test('custom level sizes take the sign of their row and reject unusable input', () => {
+  assert.equal(customPercentLevelPct('uc', '12.5'), 12.5)
+  assert.equal(customPercentLevelPct('uc', '-12.5'), 12.5)
+  assert.equal(customPercentLevelPct('dc', '30'), -30)
+  assert.equal(customPercentLevelPct('dc', '-30%'), -30)
+  assert.equal(customPercentLevelPct('dc', ' 7.555 '), -7.56)
+  assert.equal(customPercentLevelPct('dc', 99), -99)
+  assert.equal(customPercentLevelPct('dc', 100), null)
+  assert.equal(customPercentLevelPct('uc', 1001), null)
+  assert.equal(customPercentLevelPct('uc', ''), null)
+  assert.equal(customPercentLevelPct('uc', '0'), null)
+  assert.equal(customPercentLevelPct('uc', 'abc'), null)
+  assert.equal(customPercentLevelPct('u10', 10), null)
+})
+
+test('saved custom sizes keep good entries and fall back to defaults', () => {
+  const defaults = Object.fromEntries(CUSTOM_PERCENT_LEVELS.map(c => [c.key, c.pct]))
+  assert.deepEqual(sanitizeCustomPercentLevels(null), defaults)
+  assert.deepEqual(sanitizeCustomPercentLevels([1, 2]), defaults)
+  assert.deepEqual(sanitizeCustomPercentLevels({ uc: 33, dc: 'junk', zz: 5 }), { uc: 33, dc: defaults.dc })
+  // A downside size saved without its sign still lands below the base.
+  assert.deepEqual(sanitizeCustomPercentLevels({ uc: 7, dc: 12 }), { uc: 7, dc: -12 })
+})
+
+test('checked custom levels draw at their typed size in their own color', () => {
+  const levels = percentLevels(100, ['uc', 'd10', 'dc'], { dc: '#010203' }, { uc: 7.5, dc: -33 })
+  assert.deepEqual(levels.map(l => [l.key, l.pct, Number(l.price.toFixed(2))]), [
+    ['uc', 7.5, 107.5],
+    ['d10', -10, 90],
+    ['dc', -33, 67],
+  ])
+  assert.equal(levels.find(l => l.key === 'dc').color, '#010203')
+  assert.equal(levels.find(l => l.key === 'uc').color, CUSTOM_PERCENT_LEVELS.find(c => c.key === 'uc').color)
+  // Unchecked custom rows don't draw.
+  assert.deepEqual(percentLevels(100, ['u10'], {}, { uc: 7.5 }).map(l => l.key), ['u10'])
+})
+
+test('a custom level matching a checked preset replaces it', () => {
+  const levels = percentLevels(100, ['u10', 'uc', 'd5'], {}, { uc: 10 })
+  assert.deepEqual(levels.map(l => l.key), ['uc', 'd5'])
+})
+
+test('period high and low come from the bar wicks by default', () => {
+  const records = [
+    { date: '2026-01-02', open: 10, high: 12, low: 9, close: 11 },
+    { date: '2026-01-05', open: 11, high: 15, low: 10, close: 13 },
+    { date: '2026-01-06', open: 13, high: 14, low: 7, close: 8 },
+    { date: '2026-01-07', open: 8, high: 9, low: 8, close: 9 },
+  ]
+  assert.deepEqual(periodHighLow(records), {
+    high: { price: 15, index: 1, date: '2026-01-05' },
+    low: { price: 7, index: 2, date: '2026-01-06' },
+  })
+  // Line and % charts draw closes, so their labels read closes.
+  assert.deepEqual(periodHighLow(records, 'close'), {
+    high: { price: 13, index: 1, date: '2026-01-05' },
+    low: { price: 8, index: 2, date: '2026-01-06' },
+  })
+})
+
+test('period high and low: earlier bar wins a tie, missing wicks fall back to the close', () => {
+  const records = [
+    { date: '2026-01-02', high: 20, low: 5, close: 10 },
+    { date: '2026-01-05', close: 25 },
+    { date: '2026-01-06', high: 25, low: 5, close: 12 },
+  ]
+  const hl = periodHighLow(records)
+  assert.equal(hl.high.index, 1)
+  assert.equal(hl.high.price, 25)
+  assert.equal(hl.low.index, 0)
+  assert.equal(periodHighLow([]), null)
+  assert.equal(periodHighLow([{ date: '2026-01-02', close: null }]), null)
+})
+
+test('custom keys are percent-level keys and keep saved colors', () => {
+  assert.equal(isPercentLevelKey('uc'), true)
+  assert.equal(isPercentLevelKey('dc'), true)
+  assert.equal(isPercentLevelKey('d10'), true)
+  assert.equal(isPercentLevelKey('S1'), false)
+  assert.deepEqual(sanitizePercentLevelColors({ uc: '#abcdef', dc: 'bad' }), { uc: '#abcdef' })
+  assert.deepEqual(ALL_PERCENT_LEVEL_KEYS.slice(-2), ['uc', 'dc'])
 })
 
 test('S/R can show only support or only resistance', () => {

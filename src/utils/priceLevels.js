@@ -14,7 +14,61 @@ export const PERCENT_LEVEL_OPTIONS = [
   { key: 'd50', pct: -50, color: '#E040FB' },
 ]
 
+// One level per side whose size the user types in. `pct` is the size a fresh install
+// starts with; the user's own number is saved separately (see sanitizeCustomPercentLevels).
+export const CUSTOM_PERCENT_LEVELS = [
+  { key: 'uc', side: 'up', pct: 15, color: '#7986CB' },
+  { key: 'dc', side: 'down', pct: -15, color: '#F06292' },
+]
+// A -100% level is a price of zero, which a log axis can't draw.
+export const MAX_CUSTOM_UPSIDE_PCT = 1000
+export const MAX_CUSTOM_DOWNSIDE_PCT = 99
+
 export const DEFAULT_PERCENT_LEVEL_KEYS = ['u20', 'u10', 'u5', 'd5', 'd10', 'd20']
+
+/** True for a preset (u20, d5…) or custom (uc, dc) percent-level key. */
+export function isPercentLevelKey(key) {
+  return PERCENT_LEVEL_OPTIONS.some(o => o.key === key) || CUSTOM_PERCENT_LEVELS.some(c => c.key === key)
+}
+
+/** Every percent-level key, presets then the custom rows: what "All" turns on. */
+export const ALL_PERCENT_LEVEL_KEYS = [
+  ...PERCENT_LEVEL_OPTIONS.map(o => o.key),
+  ...CUSTOM_PERCENT_LEVELS.map(c => c.key),
+]
+
+/**
+ * A typed custom level size as a signed percent for its row's side, or null when it
+ * isn't usable. The row already shows the sign, so "30", "-30" and "30%" all mean a
+ * 30% move in that row's direction. Rounded to 2 decimals.
+ */
+export function customPercentLevelPct(key, value) {
+  const def = CUSTOM_PERCENT_LEVELS.find(c => c.key === key)
+  if (!def) return null
+  const n = typeof value === 'number' ? value : Number(String(value ?? '').replace(/[%+\s]/g, ''))
+  if (!Number.isFinite(n)) return null
+  const size = Math.round(Math.abs(n) * 100) / 100
+  const max = def.side === 'up' ? MAX_CUSTOM_UPSIDE_PCT : MAX_CUSTOM_DOWNSIDE_PCT
+  if (size <= 0 || size > max) return null
+  return def.side === 'up' ? size : -size
+}
+
+/** Saved custom level sizes ({ uc, dc }); a missing or unusable entry gets its default. */
+export function sanitizeCustomPercentLevels(saved) {
+  const src = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  const out = {}
+  CUSTOM_PERCENT_LEVELS.forEach(c => { out[c.key] = customPercentLevelPct(c.key, src[c.key]) ?? c.pct })
+  return out
+}
+
+/** The preset options plus the custom rows at the user's sizes. */
+export function percentLevelOptions(custom) {
+  const sizes = sanitizeCustomPercentLevels(custom)
+  return [
+    ...PERCENT_LEVEL_OPTIONS,
+    ...CUSTOM_PERCENT_LEVELS.map(c => ({ key: c.key, pct: sizes[c.key], color: c.color, custom: true })),
+  ]
+}
 
 export const PERCENT_LEVEL_BASES = [
   { value: 'close', label: 'Last close' },
@@ -117,26 +171,31 @@ export function percentLevelBase(records, base = 'close') {
 /**
  * Levels for the selected keys, ordered from highest price to lowest. `colors` maps
  * an option key to the user's color for it; keys without one keep their default.
+ * `custom` holds the typed sizes for the custom rows ({ uc, dc }). A checked custom
+ * level that lands on a checked preset replaces it, so one line is drawn in the
+ * custom row's color.
  */
-export function percentLevels(basePrice, keys, colors) {
+export function percentLevels(basePrice, keys, colors, custom) {
   if (!finite(basePrice) || basePrice <= 0) return []
   const selected = new Set(keys || [])
-  return PERCENT_LEVEL_OPTIONS
-    .filter(opt => selected.has(opt.key))
+  const chosen = percentLevelOptions(custom).filter(opt => selected.has(opt.key))
+  const customPcts = new Set(chosen.filter(opt => opt.custom).map(opt => opt.pct))
+  return chosen
+    .filter(opt => opt.custom || !customPcts.has(opt.pct))
     .map(opt => ({ ...opt, color: percentLevelColor(opt.key, colors), price: basePrice * (1 + opt.pct / 100) }))
     .sort((a, b) => b.price - a.price)
 }
 
-/** Color for a percent level: the user's pick for that key (u20, d5…), else its default. */
+/** Color for a percent level: the user's pick for that key (u20, d5, uc…), else its default. */
 export function percentLevelColor(key, colors) {
   const custom = colors?.[key]
   if (typeof custom === 'string' && HEX_COLOR.test(custom)) return custom
-  return PERCENT_LEVEL_OPTIONS.find(o => o.key === key)?.color ?? '#9E9E9E'
+  return (PERCENT_LEVEL_OPTIONS.find(o => o.key === key) ?? CUSTOM_PERCENT_LEVELS.find(c => c.key === key))?.color ?? '#9E9E9E'
 }
 
 /** Keep only known percent-level keys holding a #rrggbb color from a saved color map. */
 export function sanitizePercentLevelColors(saved) {
-  return sanitizeColorMap(saved, key => PERCENT_LEVEL_OPTIONS.some(o => o.key === key))
+  return sanitizeColorMap(saved, isPercentLevelKey)
 }
 
 export function percentLevelLabel(pct) {
@@ -173,6 +232,33 @@ export function drawdownFromHigh(records) {
     closeDate: records[last].date ?? null,
     pct: Math.min(0, (close / high - 1) * 100),
   }
+}
+
+export const PERIOD_HIGH_COLOR = '#66BB6A'
+export const PERIOD_LOW_COLOR = '#EF5350'
+
+/**
+ * The bars holding the loaded period's high and low, for the Hi/Lo labels.
+ * `basis` 'bar' reads each bar's high and low (the candle wicks, falling back to the
+ * close when a bar has none); 'close' reads closes only, for line and % charts where
+ * the drawn line is the closes. On a tie the earlier bar wins.
+ * Returns { high: { price, index, date }, low: { price, index, date } }, or null
+ * without usable bars.
+ */
+export function periodHighLow(records, basis = 'bar') {
+  if (!Array.isArray(records) || !records.length) return null
+  const closesOnly = basis === 'close'
+  let high = null
+  let low = null
+  records.forEach((r, i) => {
+    const close = r?.close
+    const h = !closesOnly && finite(r?.high) ? r.high : close
+    const l = !closesOnly && finite(r?.low) ? r.low : close
+    const date = r?.date ?? null
+    if (finite(h) && (!high || h > high.price)) high = { price: h, index: i, date }
+    if (finite(l) && (!low || l < low.price)) low = { price: l, index: i, date }
+  })
+  return high && low ? { high, low } : null
 }
 
 /** "-8.1% from highest close" / "At highest close" for the off-high label. */
