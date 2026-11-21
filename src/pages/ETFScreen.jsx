@@ -51,7 +51,8 @@ import {
   srLevelColor,
   srLevelsForSides,
 } from '../utils/priceLevels'
-import { HighLowToggle, OffHighToggle, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
+import { HighLowToggle, OffHighToggle, PatternsControl, PatternsStatus, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
+import { findChartPatterns, sanitizePatternKeys } from '../utils/chartPatterns'
 
 // % level and support / resistance labels sit in gutters either side of the price plot.
 const LEVEL_LABEL_FONT_SIZE = 11
@@ -2160,6 +2161,13 @@ export default function ETFScreen() {
   useEffect(() => { localStorage.setItem('etf_showOffHigh', String(showOffHigh)) }, [showOffHigh])
   const [showHighLow, setShowHighLow] = useState(() => localStorage.getItem('etf_showHighLow') === 'true')
   useEffect(() => { localStorage.setItem('etf_showHighLow', String(showHighLow)) }, [showHighLow])
+  // Chart patterns: the overlay switch and which pattern types it draws (all by default).
+  const [showPatterns, setShowPatterns] = useState(() => localStorage.getItem('etf_showPatterns') === 'true')
+  useEffect(() => { localStorage.setItem('etf_showPatterns', String(showPatterns)) }, [showPatterns])
+  const [patternKeys, setPatternKeys] = useState(() => {
+    try { return sanitizePatternKeys(JSON.parse(localStorage.getItem('etf_patternKeys'))) } catch { return sanitizePatternKeys(null) }
+  })
+  useEffect(() => { localStorage.setItem('etf_patternKeys', JSON.stringify(patternKeys)) }, [patternKeys])
   useEffect(() => { localStorage.setItem('etf_showSR', String(showSR)) }, [showSR])
   useEffect(() => { localStorage.setItem('etf_srPerSide', String(srPerSide)) }, [srPerSide])
   // Which side(s) of the last close S/R draws: both, support only, or resistance only.
@@ -2715,6 +2723,22 @@ export default function ETFScreen() {
   // Only the side(s) the user chose to show; S1/R1 labels keep their ranking either way.
   const srShown = useMemo(() => srLevelsForSides(srLevels, srSides), [srLevels, srSides])
 
+  // Chart patterns in the loaded bars: found for every type (so the menu can count
+  // them), drawn for the types that are ticked. New bars re-run the search.
+  const chartPatterns = useMemo(
+    () => (showPatterns && records.length ? findChartPatterns(records) : []),
+    [showPatterns, records],
+  )
+  const patternCounts = useMemo(() => {
+    const counts = {}
+    chartPatterns.forEach(p => { counts[p.key] = (counts[p.key] || 0) + 1 })
+    return counts
+  }, [chartPatterns])
+  const patternsShown = useMemo(
+    () => chartPatterns.filter(p => patternKeys.includes(p.key)),
+    [chartPatterns, patternKeys],
+  )
+
   const { data: techData, layout: techLayout, regimeShapes = [], levelShapes = [] } = useMemo(() => {
     if (!records.length) return { data: [], layout: {}, regimeShapes: [], levelShapes: [] }
     const dates = records.map(r => r.date)
@@ -3001,6 +3025,99 @@ export default function ETFScreen() {
       }
     }
 
+    // Chart patterns, each in its own color: solid once it broke out the way it
+    // points, dotted while still forming, dashed if it broke the other way. Point tags
+    // (LS / H / RS) mark the shoulders and head; the name label's hover text gives the
+    // dates, the measurements and, once confirmed, the measured move.
+    const patternAnnotations = []
+    const patternNameLabels = [] // { ann, index, side } for the overlap pass below
+    patternsShown.forEach(p => {
+      const dash = p.status === 'forming' ? 'dot' : p.status === 'failed' ? 'dash' : 'solid'
+      const polyline = (pts, width) => pts.forEach((b, i) => {
+        const a = pts[i - 1]
+        if (!a || !dates[a.index] || !dates[b.index] || !canPlot(a.price) || !canPlot(b.price)) return
+        levelShapes.push({
+          type: 'line', xref: 'x', yref: 'y',
+          x0: dates[a.index], x1: dates[b.index], y0: toAxisY(a.price), y1: toAxisY(b.price),
+          line: { color: p.color, width, dash },
+        })
+      })
+      polyline(p.outline, 1.5)
+      p.lines.forEach(l => polyline(l.pts, l.width || 2))
+      p.tags.forEach(t => {
+        if (!dates[t.index] || !canPlot(t.price)) return
+        patternAnnotations.push({
+          x: dates[t.index], xref: 'x', y: annotY(t.price), yref: 'y',
+          text: t.text, showarrow: false,
+          yanchor: t.side === 'above' ? 'bottom' : 'top', yshift: t.side === 'above' ? 2 : -2,
+          font: { color: p.color, size: 10 },
+        })
+      })
+      const at = p.labelAt
+      if (!dates[at.index] || !canPlot(at.price)) return
+      const statusTag = p.status === 'forming' ? ' (forming)' : p.status === 'failed' ? ' (broke down)' : ''
+      const statusLine = p.status === 'forming'
+        ? 'Forming: no breakout yet'
+        : p.status === 'failed'
+          ? 'Broke down instead of out'
+          : `Confirmed: broke ${p.bias === 'bearish' ? 'down' : 'out'}`
+      const hover = [
+        `<b>${p.name}</b>`,
+        `${levelDateLabel(dates[p.startIndex])} to ${levelDateLabel(dates[p.endIndex])}`,
+        statusLine,
+        p.summary,
+      ]
+      if (p.target != null) hover.push(`Measured move: ${formatMoney(p.target)}`)
+      const nameLabel = {
+        x: dates[at.index], xref: 'x', y: annotY(at.price), yref: 'y',
+        text: `<b>${p.short}</b>${statusTag}`, showarrow: false,
+        yanchor: at.side === 'above' ? 'bottom' : 'top',
+        yshift: (at.side === 'above' ? 1 : -1) * (at.shift || 6),
+        font: { color: p.color, size: 10 },
+        bgcolor: labelBg, bordercolor: p.color, borderwidth: 1, borderpad: 2,
+        hovertext: hover.join('<br>'),
+        hoverlabel: { bgcolor: '#1e1e2f', bordercolor: p.color, font: { color: '#e0e0e0', size: 11 } },
+      }
+      patternAnnotations.push(nameLabel)
+      patternNameLabels.push({ ann: nameLabel, index: at.index, side: at.side })
+    })
+    // Name labels that would land on each other (close in time, same side, within a
+    // label's height) move one label height at a time: outward first, then inward,
+    // never out of the price pane. A label is about a tenth of the plot wide; heights
+    // use the price pane's units per pixel (on a log axis, an estimate of its range).
+    if (patternNameLabels.length > 1) {
+      const panePx = (chartHeight - PLOT_MARGIN.t - PLOT_MARGIN.b) * (priceTop - priceBot)
+      let paneLo = yLo
+      let paneHi = yHi
+      if (chartScale === 'log') {
+        const lo = Math.log10(Math.min(...lows.filter(v => v > 0)))
+        const hi = Math.log10(Math.max(...highs))
+        paneLo = lo - (hi - lo) * 0.05
+        paneHi = hi + (hi - lo) * 0.05
+      }
+      const unitsPerPx = panePx > 0 && paneHi > paneLo ? (paneHi - paneLo) / panePx : 0
+      const labelBars = Math.max(3, dates.length * 0.1)
+      const labelPx = 17
+      const placed = []
+      if (unitsPerPx > 0) {
+        const loPx = paneLo / unitsPerPx
+        const hiPx = paneHi / unitsPerPx
+        patternNameLabels.sort((a, b) => a.index - b.index).forEach(m => {
+          const basePx = m.ann.y / unitsPerPx
+          const outward = m.side === 'above' ? labelPx : -labelPx
+          const start = m.ann.yshift
+          // Label box in px: from its anchor up (above) or down (below).
+          const fits = (px) => (m.side === 'above' ? px >= loPx && px + labelPx <= hiPx : px - labelPx >= loPx && px <= hiPx)
+          const free = (px) => !placed.some(q => q.side === m.side && Math.abs(q.index - m.index) < labelBars && Math.abs(q.px - px) < labelPx)
+          for (const k of [0, 1, -1, 2, -2, 3, -3, 4]) {
+            const px = basePx + start + k * outward
+            if (fits(px) && free(px)) { m.ann.yshift = start + k * outward; break }
+          }
+          placed.push({ index: m.index, side: m.side, px: basePx + m.ann.yshift })
+        })
+      }
+    }
+
     // Level labels sit in gutters outside the plot area so they never cover bars:
     // % levels on the left, beyond the price-axis numbers, and S/R on the right. The
     // margins widen below to fit the longest label on each side.
@@ -3117,10 +3234,10 @@ export default function ETFScreen() {
     const fibShapes = fibSets.flatMap(f => f.shapes)
     const fibAnnotations = fibSets.flatMap(f => f.annotations)
     layout.shapes = [...regimeShapes, ...levelShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
-    const extraAnnotations = [...levelAnnotations, ...hiLoAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
+    const extraAnnotations = [...levelAnnotations, ...hiLoAnnotations, ...patternAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
     if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
     return { data: traces, layout, regimeShapes, levelShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, showHighLow, isDark])
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, showHighLow, patternsShown, isDark])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -3758,6 +3875,13 @@ export default function ETFScreen() {
             />
             <OffHighToggle active={showOffHigh} onToggle={() => setShowOffHigh(v => !v)} />
             <HighLowToggle active={showHighLow} onToggle={() => setShowHighLow(v => !v)} />
+            <PatternsControl
+              active={showPatterns}
+              onToggle={() => setShowPatterns(v => !v)}
+              selectedKeys={patternKeys}
+              onChangeKeys={setPatternKeys}
+              counts={patternCounts}
+            />
           </div>
         )}
       </div>
@@ -4073,6 +4197,7 @@ export default function ETFScreen() {
                     onChangeThr={setMkThr}
                   />
                 )}
+                {showPatterns && <PatternsStatus selectedKeys={patternKeys} counts={patternCounts} />}
                 {drawMode === 'fib' && (
                   <div style={{ color: 'var(--p-ffd740)', fontSize: '0.8rem', padding: '4px 8px', background: 'var(--p-2a2a3d)', borderRadius: 4, marginBottom: 4 }}>
                     {fibClicks.length === 0 ? 'Click the first point (swing high or low)' : 'Click the second point to complete Fibonacci retracement'}

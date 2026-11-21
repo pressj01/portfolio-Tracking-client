@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ALL_PERCENT_LEVEL_KEYS,
   CUSTOM_PERCENT_LEVELS,
@@ -15,13 +15,28 @@ import {
   srColorLabels,
   srLevelColor,
 } from '../utils/priceLevels'
+import { ALL_PATTERN_KEYS, PATTERN_GROUPS, PATTERN_TYPES } from '../utils/chartPatterns'
 import { formatMoney } from '../utils/money'
 
 // A toggle button with an attached ▾ menu. The main button turns the overlay on/off
 // with one click; the caret opens its settings.
-function ToggleWithMenu({ label, title, active, onToggle, menuTitle, children }) {
+function ToggleWithMenu({ label, title, active, onToggle, menuTitle, menuClassName = '', children }) {
   const [open, setOpen] = useState(false)
+  const [openRight, setOpenRight] = useState(false)
   const wrapRef = useRef(null)
+  const menuRef = useRef(null)
+
+  // The menu hangs left from the button's right edge; when the toolbar wraps and the
+  // button sits near the window's left edge, that would run off screen, so it opens
+  // rightward from the button instead.
+  useLayoutEffect(() => {
+    if (!open || !menuRef.current) return
+    if (menuRef.current.getBoundingClientRect().left < 8) setOpenRight(true)
+  }, [open])
+  const toggleOpen = () => {
+    setOpenRight(false)
+    setOpen(o => !o)
+  }
 
   useEffect(() => {
     if (!open) return undefined
@@ -47,12 +62,18 @@ function ToggleWithMenu({ label, title, active, onToggle, menuTitle, children })
       <button
         type="button"
         className={`btn btn-sm etf-level-caret${active ? ' btn-active' : ''}`}
-        onClick={() => setOpen(o => !o)}
+        onClick={toggleOpen}
         title={menuTitle}
         aria-haspopup="true"
         aria-expanded={open}
       >▾</button>
-      {open && <div className="etf-level-menu" role="menu">{children}</div>}
+      {open && (
+        <div
+          ref={menuRef}
+          className={`etf-level-menu ${menuClassName}${openRight ? ' etf-level-menu--right' : ''}`}
+          role="menu"
+        >{children}</div>
+      )}
     </span>
   )
 }
@@ -213,6 +234,90 @@ export function HighLowToggle({ active, onToggle }) {
       title="Show / hide labels on the highest and lowest bars of the loaded period"
       aria-pressed={active}
     >Hi/Lo</button>
+  )
+}
+
+// Chart patterns: one checkbox per pattern, each with its line color and, while the
+// overlay is on, how many were found in the loaded period.
+export function PatternsControl({ active, onToggle, selectedKeys, onChangeKeys, counts }) {
+  const selected = new Set(selectedKeys)
+  const toggleKey = (key) => {
+    const next = selected.has(key) ? selectedKeys.filter(k => k !== key) : [...selectedKeys, key]
+    onChangeKeys(next)
+    if (!active && next.length) onToggle()
+  }
+  return (
+    <ToggleWithMenu
+      label="Patterns"
+      title="Show / hide chart patterns found in the loaded period"
+      menuTitle="Choose which chart patterns to look for"
+      menuClassName="etf-pattern-menu"
+      active={active}
+      onToggle={onToggle}
+    >
+      {PATTERN_GROUPS.map(group => (
+        <React.Fragment key={group}>
+          <div className="etf-level-menu-head">{group}</div>
+          {PATTERN_TYPES.filter(t => t.group === group).map(t => (
+            <label key={t.key} className="etf-level-option etf-pattern-option">
+              <span className="etf-pattern-swatch" style={{ background: t.color }} aria-hidden="true" />
+              <input type="checkbox" checked={selected.has(t.key)} onChange={() => toggleKey(t.key)} />
+              <span>{t.label}</span>
+              {active && counts?.[t.key] > 0 && (
+                <span className="etf-pattern-count" title="Found in the loaded period">{counts[t.key]}</span>
+              )}
+              {active && !counts?.[t.key] && selected.has(t.key) && (
+                <span className="etf-pattern-count is-none" title="Not found in the loaded period">not found</span>
+              )}
+            </label>
+          ))}
+        </React.Fragment>
+      ))}
+      <div className="etf-level-menu-row">
+        <button type="button" className="btn btn-sm" onClick={() => { onChangeKeys([...ALL_PATTERN_KEYS]); if (!active) onToggle() }}>All</button>
+        <button type="button" className="btn btn-sm" onClick={() => onChangeKeys([])}>None</button>
+      </div>
+      <p className="etf-level-menu-note">
+        Found automatically in the loaded period and redrawn whenever the ticker, period
+        or bar size changes. Solid lines: the pattern broke out the way it points. Dotted:
+        still forming. Dashed: it broke the other way. Hover a label for details.
+      </p>
+    </ToggleWithMenu>
+  )
+}
+
+// The line above the chart (never over it) while Patterns is on: the ticked patterns
+// that were not found in the loaded period. It lists ticked patterns only, so
+// unticking one drops it from the line, and with none missing the line is gone.
+export function PatternsStatus({ selectedKeys, counts }) {
+  const ticked = PATTERN_TYPES.filter(t => selectedKeys.includes(t.key))
+  const missing = ticked.filter(t => !counts?.[t.key])
+  if (!missing.length) return null
+  const noneFound = missing.length === ticked.length
+  if (noneFound && ticked.length > 3) {
+    return (
+      <div className="etf-pattern-status" role="status">
+        <span>
+          <strong>None of the {ticked.length} ticked patterns were found in the loaded period.</strong>
+          {' '}A longer period or a different bar size may show some.
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="etf-pattern-status" role="status">
+      <span>
+        <strong>{missing.length === 1 ? 'Pattern not found' : 'Patterns not found'} in the loaded period:</strong>
+        {' '}
+        {missing.map((t, i) => (
+          <span key={t.key} className="etf-pattern-chip">
+            <span className="etf-pattern-swatch" style={{ background: t.color }} aria-hidden="true" />
+            {t.label}{i < missing.length - 1 ? ',' : '.'}
+          </span>
+        ))}
+        {noneFound && ' A longer period or a different bar size may show some.'}
+      </span>
+    </div>
   )
 }
 
