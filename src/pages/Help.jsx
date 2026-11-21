@@ -4276,7 +4276,7 @@ function ETFScreenHelp() {
       <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>% Levels</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Dashed lines at fixed percent moves from a reference price, each labeled with the percent and the price it
-        works out to. With QQQ closing at $620.61, the −10% line sits at $558.55: the price QQQ would reach after a
+        works out to. With QQQ closing at $645.04, the −10% line sits at $580.54: the price QQQ would reach after a
         10% drop from here. They are plain arithmetic, useful for sizing a move in dollars or picking a stop or a
         target. They say nothing about where price is likely to go.
       </p>
@@ -4301,8 +4301,8 @@ function ETFScreenHelp() {
       </ul>
       <HelpScreenshot
         src="./help-screenshots/etf-screen/price-levels-percent.png"
-        alt="% Levels menu open over a QQQ chart, with a color square and checkbox for each level"
-        caption="The % Levels menu: a color square and checkbox for each level, All / None / Reset colors, and what the levels are measured from. The labels sit left of the price axis."
+        alt="% Levels menu open over a QQQ chart, with a color square and checkbox for each level and a custom +12.5% and −30% row"
+        caption="The % Levels menu: a color square and checkbox for each level, a Custom row at the end of each list (here +12.5% and −30%), All / None / Reset colors, and what the levels are measured from. The labels sit left of the price axis."
       />
 
       <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>Support and Resistance (S/R)</h4>
@@ -4387,8 +4387,8 @@ function ETFScreenHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>The reference price is either the <strong>close of the last bar</strong> (<em>Last close</em>) or the
           <strong> highest high of any bar</strong> in the period (<em>Period high</em>, which includes intraday spikes).</li>
-        <li>Each level is that price × (1 + the percent). From a $620.61 close: −10% = $620.61 × 0.90 = $558.55, and
-          +5% = $620.61 × 1.05 = $651.64.</li>
+        <li>Each level is that price × (1 + the percent). From a $645.04 close: −10% = $645.04 × 0.90 = $580.54, and
+          +5% = $645.04 × 1.05 = $677.29. A custom level works the same way: −30% = $645.04 × 0.70 = $451.53.</li>
       </ul>
 
       <p style={{ marginBottom: '0.4rem' }}><strong>Off High</strong></p>
