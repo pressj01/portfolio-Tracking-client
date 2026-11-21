@@ -2,15 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  ALL_PERCENT_LEVEL_KEYS,
+  CUSTOM_PERCENT_LEVELS,
   PERCENT_LEVEL_OPTIONS,
   RESISTANCE_COLOR,
   SUPPORT_COLOR,
   approachedFromAbove,
   clusterPivots,
+  customPercentLevelPct,
   drawdownFromHigh,
   drawdownLabel,
   findPivots,
   findSupportResistance,
+  isPercentLevelKey,
   levelDateLabel,
   levelDistanceLabel,
   levelDistancePct,
@@ -19,6 +23,7 @@ import {
   percentLevelColor,
   percentLevelLabel,
   percentLevels,
+  sanitizeCustomPercentLevels,
   sanitizePercentLevelColors,
   sanitizeSrColors,
   spreadLabelPositions,
@@ -309,6 +314,57 @@ test('percent levels take the user color for a key and keep defaults for the res
     sanitizePercentLevelColors({ u20: '#abcdef', d99: '#000000', d10: 'red', S1: '#111111' }),
     { u20: '#abcdef' },
   )
+})
+
+test('custom level sizes take the sign of their row and reject unusable input', () => {
+  assert.equal(customPercentLevelPct('uc', '12.5'), 12.5)
+  assert.equal(customPercentLevelPct('uc', '-12.5'), 12.5)
+  assert.equal(customPercentLevelPct('dc', '30'), -30)
+  assert.equal(customPercentLevelPct('dc', '-30%'), -30)
+  assert.equal(customPercentLevelPct('dc', ' 7.555 '), -7.56)
+  assert.equal(customPercentLevelPct('dc', 99), -99)
+  assert.equal(customPercentLevelPct('dc', 100), null)
+  assert.equal(customPercentLevelPct('uc', 1001), null)
+  assert.equal(customPercentLevelPct('uc', ''), null)
+  assert.equal(customPercentLevelPct('uc', '0'), null)
+  assert.equal(customPercentLevelPct('uc', 'abc'), null)
+  assert.equal(customPercentLevelPct('u10', 10), null)
+})
+
+test('saved custom sizes keep good entries and fall back to defaults', () => {
+  const defaults = Object.fromEntries(CUSTOM_PERCENT_LEVELS.map(c => [c.key, c.pct]))
+  assert.deepEqual(sanitizeCustomPercentLevels(null), defaults)
+  assert.deepEqual(sanitizeCustomPercentLevels([1, 2]), defaults)
+  assert.deepEqual(sanitizeCustomPercentLevels({ uc: 33, dc: 'junk', zz: 5 }), { uc: 33, dc: defaults.dc })
+  // A downside size saved without its sign still lands below the base.
+  assert.deepEqual(sanitizeCustomPercentLevels({ uc: 7, dc: 12 }), { uc: 7, dc: -12 })
+})
+
+test('checked custom levels draw at their typed size in their own color', () => {
+  const levels = percentLevels(100, ['uc', 'd10', 'dc'], { dc: '#010203' }, { uc: 7.5, dc: -33 })
+  assert.deepEqual(levels.map(l => [l.key, l.pct, Number(l.price.toFixed(2))]), [
+    ['uc', 7.5, 107.5],
+    ['d10', -10, 90],
+    ['dc', -33, 67],
+  ])
+  assert.equal(levels.find(l => l.key === 'dc').color, '#010203')
+  assert.equal(levels.find(l => l.key === 'uc').color, CUSTOM_PERCENT_LEVELS.find(c => c.key === 'uc').color)
+  // Unchecked custom rows don't draw.
+  assert.deepEqual(percentLevels(100, ['u10'], {}, { uc: 7.5 }).map(l => l.key), ['u10'])
+})
+
+test('a custom level matching a checked preset replaces it', () => {
+  const levels = percentLevels(100, ['u10', 'uc', 'd5'], {}, { uc: 10 })
+  assert.deepEqual(levels.map(l => l.key), ['uc', 'd5'])
+})
+
+test('custom keys are percent-level keys and keep saved colors', () => {
+  assert.equal(isPercentLevelKey('uc'), true)
+  assert.equal(isPercentLevelKey('dc'), true)
+  assert.equal(isPercentLevelKey('d10'), true)
+  assert.equal(isPercentLevelKey('S1'), false)
+  assert.deepEqual(sanitizePercentLevelColors({ uc: '#abcdef', dc: 'bad' }), { uc: '#abcdef' })
+  assert.deepEqual(ALL_PERCENT_LEVEL_KEYS.slice(-2), ['uc', 'dc'])
 })
 
 test('S/R can show only support or only resistance', () => {

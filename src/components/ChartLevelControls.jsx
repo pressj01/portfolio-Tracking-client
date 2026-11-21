@@ -1,9 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
+  ALL_PERCENT_LEVEL_KEYS,
+  CUSTOM_PERCENT_LEVELS,
+  MAX_CUSTOM_DOWNSIDE_PCT,
+  MAX_CUSTOM_UPSIDE_PCT,
   MAX_SR_PER_SIDE,
   PERCENT_LEVEL_BASES,
   PERCENT_LEVEL_OPTIONS,
   SR_SIDE_OPTIONS,
+  customPercentLevelPct,
   levelDistanceLabel,
   percentLevelColor,
   percentLevelLabel,
@@ -66,8 +71,55 @@ function LevelColorInput({ value, onChange, label }) {
   )
 }
 
+// The custom row for one side: color, checkbox, and a box to type the size of the move.
+// The draft text is kept apart from the saved value so a half-typed "7." stays put;
+// leaving the box shows the saved size again.
+function CustomLevelRow({ def, pct, checked, onToggle, onChangePct, color, onChangeColor }) {
+  const sign = def.side === 'up' ? '+' : '-'
+  const size = String(Math.abs(pct))
+  const max = def.side === 'up' ? MAX_CUSTOM_UPSIDE_PCT : MAX_CUSTOM_DOWNSIDE_PCT
+  const [draft, setDraft] = useState(size)
+  const focused = useRef(false)
+  useEffect(() => { if (!focused.current) setDraft(size) }, [size])
+  const invalid = customPercentLevelPct(def.key, draft) == null
+  const label = `Custom ${percentLevelLabel(pct)}`
+
+  return (
+    <div className="etf-level-option etf-level-color-row etf-level-custom-row">
+      <LevelColorInput value={color} onChange={onChangeColor} label={label} />
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        aria-label={`Show the ${label} level`}
+        title={`Show the ${label} level`}
+      />
+      <span className="etf-level-custom-sign">{sign}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        className={`etf-level-custom-input${invalid ? ' is-invalid' : ''}`}
+        value={draft}
+        onFocus={() => { focused.current = true }}
+        onBlur={() => { focused.current = false; setDraft(size) }}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          const next = customPercentLevelPct(def.key, e.target.value)
+          if (next != null && next !== pct) onChangePct(next)
+        }}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+        aria-label={`Custom ${def.side === 'up' ? 'upside' : 'downside'} percent`}
+        title={`Type a ${def.side === 'up' ? 'rise' : 'drop'} of more than 0% and up to ${max}%`}
+      />
+      <span>%</span>
+      <span className="etf-level-custom-tag">Custom</span>
+    </div>
+  )
+}
+
 export function PercentLevelsControl({
   active, onToggle, selectedKeys, onChangeKeys, base, onChangeBase, colors, onChangeColor, onResetColors,
+  customPcts, onChangeCustomPct,
 }) {
   const selected = new Set(selectedKeys)
   const toggleKey = (key) => {
@@ -91,6 +143,25 @@ export function PercentLevelsControl({
       </label>
     </div>
   )
+  // Typing a new size turns that custom level on, as checking its box would.
+  const renderCustom = (side) => {
+    const def = CUSTOM_PERCENT_LEVELS.find(c => c.side === side)
+    return (
+      <CustomLevelRow
+        key={def.key}
+        def={def}
+        pct={customPcts?.[def.key] ?? def.pct}
+        checked={selected.has(def.key)}
+        onToggle={() => toggleKey(def.key)}
+        onChangePct={(pct) => {
+          onChangeCustomPct(def.key, pct)
+          if (!selected.has(def.key)) toggleKey(def.key)
+        }}
+        color={percentLevelColor(def.key, colors)}
+        onChangeColor={color => onChangeColor(def.key, color)}
+      />
+    )
+  }
 
   return (
     <ToggleWithMenu
@@ -102,10 +173,12 @@ export function PercentLevelsControl({
     >
       <div className="etf-level-menu-head">Upside</div>
       {upside.map(renderOption)}
+      {renderCustom('up')}
       <div className="etf-level-menu-head">Downside</div>
       {downside.map(renderOption)}
+      {renderCustom('down')}
       <div className="etf-level-menu-row">
-        <button type="button" className="btn btn-sm" onClick={() => { onChangeKeys(PERCENT_LEVEL_OPTIONS.map(o => o.key)); if (!active) onToggle() }}>All</button>
+        <button type="button" className="btn btn-sm" onClick={() => { onChangeKeys(ALL_PERCENT_LEVEL_KEYS); if (!active) onToggle() }}>All</button>
         <button type="button" className="btn btn-sm" onClick={() => onChangeKeys([])}>None</button>
         <button type="button" className="btn btn-sm" onClick={onResetColors} disabled={!customized}>Reset colors</button>
       </div>

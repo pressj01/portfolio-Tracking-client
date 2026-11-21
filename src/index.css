@@ -5232,6 +5232,39 @@ th.col-drag-target {
   height: 18px;
   flex: none;
 }
+.etf-level-custom-row {
+  gap: 0.3rem;
+}
+.etf-level-custom-row input[type="checkbox"] {
+  margin: 0 0.1rem 0 0;
+  cursor: pointer;
+}
+.etf-level-custom-sign {
+  width: 0.6rem;
+  text-align: center;
+}
+.etf-level-custom-input {
+  width: 3.6rem;
+  padding: 1px 5px;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--p-2a2a3d);
+  border: 1px solid var(--p-444);
+  border-radius: 4px;
+}
+.etf-level-custom-input:focus {
+  outline: none;
+  border-color: var(--accent, #4f8ef7);
+}
+.etf-level-custom-input.is-invalid {
+  border-color: var(--red, #ef5350);
+}
+.etf-level-custom-tag {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-faint, var(--p-888));
+}
 .etf-sr-color-label {
   font-weight: 600;
   min-width: 1.6rem;

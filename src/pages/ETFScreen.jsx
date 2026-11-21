@@ -30,16 +30,17 @@ import {
 import {
   DEFAULT_PERCENT_LEVEL_KEYS,
   OFF_HIGH_COLOR,
-  PERCENT_LEVEL_OPTIONS,
   drawdownFromHigh,
   drawdownLabel,
   findSupportResistance,
+  isPercentLevelKey,
   normalizeSrSides,
   percentLevelBase,
   percentLevelLabel,
   levelDateLabel,
   levelDistanceLabel,
   percentLevels,
+  sanitizeCustomPercentLevels,
   sanitizePercentLevelColors,
   sanitizeSrColors,
   spreadLabelPositions,
@@ -2125,7 +2126,7 @@ export default function ETFScreen() {
   const [pctLevelKeys, setPctLevelKeys] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('etf_pctLevelKeys'))
-      if (Array.isArray(saved)) return saved.filter(k => PERCENT_LEVEL_OPTIONS.some(o => o.key === k))
+      if (Array.isArray(saved)) return saved.filter(isPercentLevelKey)
     } catch { /* ignore */ }
     return DEFAULT_PERCENT_LEVEL_KEYS
   })
@@ -2143,6 +2144,11 @@ export default function ETFScreen() {
     try { return sanitizePercentLevelColors(JSON.parse(localStorage.getItem('etf_pctLevelColors'))) } catch { return {} }
   })
   useEffect(() => { localStorage.setItem('etf_pctLevelColors', JSON.stringify(pctLevelColors)) }, [pctLevelColors])
+  // Typed sizes for the custom upside / downside rows ({ uc: 15, dc: -30 }).
+  const [pctLevelCustom, setPctLevelCustom] = useState(() => {
+    try { return sanitizeCustomPercentLevels(JSON.parse(localStorage.getItem('etf_pctLevelCustom'))) } catch { return sanitizeCustomPercentLevels(null) }
+  })
+  useEffect(() => { localStorage.setItem('etf_pctLevelCustom', JSON.stringify(pctLevelCustom)) }, [pctLevelCustom])
   const [showOffHigh, setShowOffHigh] = useState(() => localStorage.getItem('etf_showOffHigh') === 'true')
   useEffect(() => { localStorage.setItem('etf_showOffHigh', String(showOffHigh)) }, [showOffHigh])
   useEffect(() => { localStorage.setItem('etf_showSR', String(showSR)) }, [showSR])
@@ -2785,7 +2791,7 @@ export default function ETFScreen() {
     // Percent levels sit at fixed moves from a reference price; extend the price
     // axis so every selected level is on screen.
     const pctBase = showPctLevels ? percentLevelBase(records, pctLevelBase) : null
-    const pctLevelList = showPctLevels ? percentLevels(pctBase, pctLevelKeys, pctLevelColors) : []
+    const pctLevelList = showPctLevels ? percentLevels(pctBase, pctLevelKeys, pctLevelColors, pctLevelCustom) : []
     const toAxisY = (price) => (isPct ? toPct(price) : price)
     let yLo = priceMin - yPadBot
     let yHi = priceMax + yPadTop
@@ -3059,7 +3065,7 @@ export default function ETFScreen() {
     const extraAnnotations = [...levelAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
     if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
     return { data: traces, layout, regimeShapes, levelShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, srShown, srColors, showOffHigh, isDark])
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, isDark])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -3680,6 +3686,8 @@ export default function ETFScreen() {
               colors={pctLevelColors}
               onChangeColor={(key, color) => setPctLevelColors(prev => ({ ...prev, [key]: color }))}
               onResetColors={() => setPctLevelColors({})}
+              customPcts={pctLevelCustom}
+              onChangeCustomPct={(key, pct) => setPctLevelCustom(prev => ({ ...prev, [key]: pct }))}
             />
             <SupportResistanceControl
               active={showSR}

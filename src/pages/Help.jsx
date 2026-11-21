@@ -4283,11 +4283,19 @@ function ETFScreenHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Which levels:</strong> tick any of +20%, +10%, +5%, −5%, −10%, −20%, −25%, −40% and −50% in the ▾
           menu. <em>All</em> and <em>None</em> set every box at once.</li>
+        <li><strong>Custom levels:</strong> the <em>Custom</em> row at the end of each list takes a percent you type,
+          up to +1000% above and −99% below. Type 12.5 in the upside row for a +12.5% line, or 30 in the downside row
+          for −30%. Typing a number ticks the row's box; untick it to hide the line and keep the number. A custom
+          level that matches a ticked preset (say, a custom +10% with +10% ticked) replaces it, drawn in the custom
+          row's color.</li>
+        <li><strong>Remembered:</strong> the ticked levels, the custom percents, the colors and the Measured from
+          choice stay as you left them the next time you open the app.</li>
         <li><strong>Measured from:</strong> the <em>last close</em> (the default), or the <em>period high</em>, the
           highest high in the loaded period. Measured from the period high, a gray dotted 0% line marks the high
           itself, and the −10% and −20% lines mark the usual correction and bear-market thresholds.</li>
         <li><strong>Colors:</strong> the color square beside each level changes that line and its label.
-          <em> Reset colors</em> puts back the defaults (blues above, yellows through magenta below).</li>
+          <em> Reset colors</em> puts back the defaults (blues above, yellows through magenta below, indigo and pink
+          for the custom rows).</li>
         <li>The price axis stretches so every ticked level is on screen. If the candles get squeezed, untick the
           deeper levels.</li>
       </ul>
