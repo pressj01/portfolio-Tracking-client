@@ -23,6 +23,7 @@ import {
   percentLevelColor,
   percentLevelLabel,
   percentLevels,
+  periodHighLow,
   sanitizeCustomPercentLevels,
   sanitizePercentLevelColors,
   sanitizeSrColors,
@@ -356,6 +357,38 @@ test('checked custom levels draw at their typed size in their own color', () => 
 test('a custom level matching a checked preset replaces it', () => {
   const levels = percentLevels(100, ['u10', 'uc', 'd5'], {}, { uc: 10 })
   assert.deepEqual(levels.map(l => l.key), ['uc', 'd5'])
+})
+
+test('period high and low come from the bar wicks by default', () => {
+  const records = [
+    { date: '2026-01-02', open: 10, high: 12, low: 9, close: 11 },
+    { date: '2026-01-05', open: 11, high: 15, low: 10, close: 13 },
+    { date: '2026-01-06', open: 13, high: 14, low: 7, close: 8 },
+    { date: '2026-01-07', open: 8, high: 9, low: 8, close: 9 },
+  ]
+  assert.deepEqual(periodHighLow(records), {
+    high: { price: 15, index: 1, date: '2026-01-05' },
+    low: { price: 7, index: 2, date: '2026-01-06' },
+  })
+  // Line and % charts draw closes, so their labels read closes.
+  assert.deepEqual(periodHighLow(records, 'close'), {
+    high: { price: 13, index: 1, date: '2026-01-05' },
+    low: { price: 8, index: 2, date: '2026-01-06' },
+  })
+})
+
+test('period high and low: earlier bar wins a tie, missing wicks fall back to the close', () => {
+  const records = [
+    { date: '2026-01-02', high: 20, low: 5, close: 10 },
+    { date: '2026-01-05', close: 25 },
+    { date: '2026-01-06', high: 25, low: 5, close: 12 },
+  ]
+  const hl = periodHighLow(records)
+  assert.equal(hl.high.index, 1)
+  assert.equal(hl.high.price, 25)
+  assert.equal(hl.low.index, 0)
+  assert.equal(periodHighLow([]), null)
+  assert.equal(periodHighLow([{ date: '2026-01-02', close: null }]), null)
 })
 
 test('custom keys are percent-level keys and keep saved colors', () => {

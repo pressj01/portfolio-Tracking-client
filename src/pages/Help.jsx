@@ -4254,21 +4254,23 @@ function ETFScreenHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Level Overlays</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Three toggles at the end of the chart toolbar draw reference prices across the chart: <strong>% Levels</strong>,
-        <strong> S/R</strong> (support and resistance) and <strong>Off High</strong>. Click a button to show or hide its
-        overlay, and click the ▾ beside it for settings. Each one answers a different question about where price
-        is now:
+        Four toggles at the end of the chart toolbar mark reference prices on the chart: <strong>% Levels</strong>,
+        <strong> S/R</strong> (support and resistance), <strong>Off High</strong> and <strong>Hi/Lo</strong>. Click a
+        button to show or hide its overlay; % Levels and S/R also have a ▾ beside them for settings. Each one answers
+        a different question about where price is now:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>% Levels</strong>: where would price be after a fixed move, such as a 10% drop?</li>
         <li><strong>S/R</strong>: where has price turned around before, and how far away are those prices?</li>
         <li><strong>Off High</strong>: how far has price already fallen from its best close in the period?</li>
+        <li><strong>Hi/Lo</strong>: what were the highest and lowest prices in the period, and on which day?</li>
       </ul>
       <p style={{ marginBottom: '0.75rem' }}>
-        The labels sit outside the chart, % levels on the left past the price numbers and S/R on the right, so
-        they never cover a bar. The chart narrows a little to make room. Every setting, including colors, is
+        The % level and S/R labels sit outside the chart, % levels on the left past the price numbers and S/R on
+        the right, so they never cover a bar. The chart narrows a little to make room. The Off High and Hi/Lo labels
+        sit inside the chart, next to the bars they describe. Every setting, including colors, is
         remembered between sessions. The levels are reference points drawn from past prices, not predictions or
-        trade instructions. The screenshot at the top of this page has all three turned on: % levels on the left,
+        trade instructions. The screenshot at the top of this page has the first three turned on: % levels on the left,
         S1–S3 support and R1–R3 resistance on the right, and the Off High label with its dashed drop line at the
         last bar.
       </p>
@@ -4376,6 +4378,27 @@ function ETFScreenHelp() {
         caption="Off High on QQQ: down 18.3% from its highest close of the year, $759.66 on Oct 6."
       />
 
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>Hi/Lo</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Labels the highest and lowest prices of the loaded period. A green <em>High</em> label sits on an arrow
+        above the bar that made the high, and a red <em>Low</em> label sits below the bar that made the low. Each
+        label shows the price and the day, for example <em>High $762.86 · Oct 6, 2026</em>.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>On a candle chart it uses each bar's <strong>high</strong> and <strong>low</strong>, the tips of the
+          wicks, so it matches the H and L shown above the chart for that bar.</li>
+        <li>On a line chart or the % scale, where only closes are drawn, it uses the highest and lowest
+          <strong> close</strong> instead, and the labels read <em>High close</em> and <em>Low close</em>.</li>
+        <li>The period sets the window: on 6M it marks the 6-month high and low, on 5Y the 5-year high and low.
+          If the same price was reached more than once, the label points to the first time.</li>
+        <li>On intraday bars the label shows the time of the bar as well as the day.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/price-levels-high-low.png"
+        alt="Hi/Lo on a one-year QQQ candle chart: a green High label above the Oct 6 bar and a red Low label below the Mar 30 bar"
+        caption="Hi/Lo on a one-year QQQ candle chart: the high, $762.86 on Oct 6, and the low, $555.60 on Mar 30."
+      />
+
       <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>How the Levels Are Calculated</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Every overlay is worked out from the bars loaded on the chart: the period (1M, 6M, 1Y…) and the bar size
@@ -4396,6 +4419,13 @@ function ETFScreenHelp() {
         <li>It finds the <strong>highest close</strong> among the loaded bars (highs are ignored) and compares the
           <strong> last bar's close</strong> to it.</li>
         <li>Off High = (last close ÷ highest close − 1) × 100. QQQ: ($620.61 ÷ $759.66 − 1) × 100 = −18.3%.</li>
+      </ul>
+
+      <p style={{ marginBottom: '0.4rem' }}><strong>Hi/Lo</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>High = the largest bar <strong>high</strong> among the loaded bars; Low = the smallest bar
+          <strong> low</strong>. A bar with no high or low counts its close.</li>
+        <li>On line charts and the % scale, both use <strong>closes</strong> only.</li>
       </ul>
 
       <p style={{ marginBottom: '0.4rem' }}><strong>Support and resistance</strong>, step by step:</p>

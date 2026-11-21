@@ -30,6 +30,8 @@ import {
 import {
   DEFAULT_PERCENT_LEVEL_KEYS,
   OFF_HIGH_COLOR,
+  PERIOD_HIGH_COLOR,
+  PERIOD_LOW_COLOR,
   drawdownFromHigh,
   drawdownLabel,
   findSupportResistance,
@@ -40,6 +42,7 @@ import {
   levelDateLabel,
   levelDistanceLabel,
   percentLevels,
+  periodHighLow,
   sanitizeCustomPercentLevels,
   sanitizePercentLevelColors,
   sanitizeSrColors,
@@ -48,11 +51,15 @@ import {
   srLevelColor,
   srLevelsForSides,
 } from '../utils/priceLevels'
-import { OffHighToggle, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
+import { HighLowToggle, OffHighToggle, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
 
 // % level and support / resistance labels sit in gutters either side of the price plot.
 const LEVEL_LABEL_FONT_SIZE = 11
 const LEVEL_GUTTER_SHIFT = 6
+// Hi/Lo labels sit this many px above the high bar / below the low bar, on an arrow.
+const HILO_ARROW_PX = 26
+// The technical chart's base margins; level labels widen the sides from here.
+const PLOT_MARGIN = { l: 60, r: 30, t: 40, b: 40 }
 const PLOTLY_FONT_FAMILY = '"Open Sans", verdana, arial, sans-serif'
 let labelMeasureCtx = null
 
@@ -2151,6 +2158,8 @@ export default function ETFScreen() {
   useEffect(() => { localStorage.setItem('etf_pctLevelCustom', JSON.stringify(pctLevelCustom)) }, [pctLevelCustom])
   const [showOffHigh, setShowOffHigh] = useState(() => localStorage.getItem('etf_showOffHigh') === 'true')
   useEffect(() => { localStorage.setItem('etf_showOffHigh', String(showOffHigh)) }, [showOffHigh])
+  const [showHighLow, setShowHighLow] = useState(() => localStorage.getItem('etf_showHighLow') === 'true')
+  useEffect(() => { localStorage.setItem('etf_showHighLow', String(showHighLow)) }, [showHighLow])
   useEffect(() => { localStorage.setItem('etf_showSR', String(showSR)) }, [showSR])
   useEffect(() => { localStorage.setItem('etf_srPerSide', String(srPerSide)) }, [srPerSide])
   // Which side(s) of the last close S/R draws: both, support only, or resistance only.
@@ -2711,6 +2720,7 @@ export default function ETFScreen() {
     const dates = records.map(r => r.date)
     const hasVolume = showVolume && records.some(r => r.volume > 0)
     const lowerCount = subplots.length + (hasVolume ? 1 : 0)
+    const chartHeight = 500 + lowerCount * 130
     const totalRows = 1 + lowerCount
     const priceWeight = 3, volWeight = 1, subWeight = 1
     const totalWeight = priceWeight + (hasVolume ? volWeight : 0) + subplots.length * subWeight
@@ -2811,6 +2821,25 @@ export default function ETFScreen() {
       if (lvlMax > yHi) yHi = lvlMax + span * 0.03
     }
 
+    // Hi/Lo labels mark the period's highest and lowest bar: the wicks on a candle
+    // chart, the closes on line and % charts, where the closes are what's drawn. Each
+    // label sits on an arrow above the high / below the low, so a fixed (non-log) axis
+    // gets room for it; a log axis autoranges, and Plotly fits annotations itself.
+    const hiLoClosesOnly = isPct || chartType !== 'candlestick'
+    const hiLo = showHighLow ? periodHighLow(records, hiLoClosesOnly ? 'close' : 'bar') : null
+    if (hiLo && chartScale !== 'log') {
+      const panePx = (chartHeight - PLOT_MARGIN.t - PLOT_MARGIN.b) * (domains[0][1] - domains[0][0])
+      const roomFrac = panePx > 0 ? Math.min(0.3, (HILO_ARROW_PX + LEVEL_LABEL_FONT_SIZE * 1.3 + 18) / panePx) : 0
+      const hiY = toAxisY(hiLo.high.price)
+      const loY = toAxisY(hiLo.low.price)
+      // Widening one end shrinks the room at the other in pixel terms, so settle it in a few passes.
+      for (let pass = 0; pass < 3; pass += 1) {
+        const span = yHi - yLo
+        yHi = Math.max(yHi, hiY + span * roomFrac)
+        yLo = Math.min(yLo, loY - span * roomFrac)
+      }
+    }
+
     // X-axis range: pad ~1.5 bars before the first bar so it clears the y-axis
     // labels, and N bars into the future on the right (min 1 bar so the last bar
     // isn't flush against the edge).
@@ -2871,8 +2900,8 @@ export default function ETFScreen() {
 
     const layout = {
       template: 'plotly_dark', paper_bgcolor: '#1e1e2f', plot_bgcolor: '#1e1e2f',
-      font: { color: '#e0e0e0', size: 12 }, margin: { l: 60, r: 30, t: 40, b: 40 },
-      height: 500 + lowerCount * 130,
+      font: { color: '#e0e0e0', size: 12 }, margin: { ...PLOT_MARGIN },
+      height: chartHeight,
       xaxis: { rangeslider: { visible: false }, type: 'date', rangebreaks: sessionRangeBreaks, gridcolor: '#333', hoverformat: '%a %b %d, %Y', tickvals: xTickVals, ticktext: xTickTexts, tickfont: { size: 9, color: '#aaa' }, tickangle: 0, showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot', ...(xRange ? { range: xRange } : {}) },
       yaxis: {
         title: isPct ? 'Change (%)' : 'Price',
@@ -2944,6 +2973,32 @@ export default function ETFScreen() {
         ...levelLabel(offHigh.high, `<b>${drawdownLabel(offHigh.pct)}</b> ${formatMoney(offHigh.high)} · ${levelDateLabel(offHigh.highDate)}`, OFF_HIGH_COLOR, 'right'),
         x: lastX, xref: 'x', xshift: -6,
       })
+    }
+
+    // Hi/Lo: a label on an arrow above the period's high bar and below its low bar.
+    // Near either end of the chart a label hangs inward so it isn't cut off.
+    const hiLoAnnotations = []
+    if (hiLo) {
+      const hiLoLabel = (pt, name, color, above) => {
+        const frac = dates.length > 1 ? pt.index / (dates.length - 1) : 0.5
+        const when = levelDateLabel(pt.date)
+        return {
+          x: dates[pt.index], xref: 'x', y: annotY(pt.price), yref: 'y',
+          text: `<b>${name}</b> ${formatMoney(pt.price)}${when ? ` · ${when}` : ''}`,
+          showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5, arrowcolor: color,
+          ax: 0, ay: above ? -HILO_ARROW_PX : HILO_ARROW_PX,
+          xanchor: frac > 0.85 ? 'right' : frac < 0.15 ? 'left' : 'center',
+          yanchor: above ? 'bottom' : 'top',
+          font: { color, size: LEVEL_LABEL_FONT_SIZE },
+          bgcolor: labelBg, bordercolor: color, borderwidth: 1, borderpad: 2,
+        }
+      }
+      if (canPlot(hiLo.high.price)) {
+        hiLoAnnotations.push(hiLoLabel(hiLo.high, hiLoClosesOnly ? 'High close' : 'High', PERIOD_HIGH_COLOR, true))
+      }
+      if (canPlot(hiLo.low.price)) {
+        hiLoAnnotations.push(hiLoLabel(hiLo.low, hiLoClosesOnly ? 'Low close' : 'Low', PERIOD_LOW_COLOR, false))
+      }
     }
 
     // Level labels sit in gutters outside the plot area so they never cover bars:
@@ -3062,10 +3117,10 @@ export default function ETFScreen() {
     const fibShapes = fibSets.flatMap(f => f.shapes)
     const fibAnnotations = fibSets.flatMap(f => f.annotations)
     layout.shapes = [...regimeShapes, ...levelShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
-    const extraAnnotations = [...levelAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
+    const extraAnnotations = [...levelAnnotations, ...hiLoAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
     if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
     return { data: traces, layout, regimeShapes, levelShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, isDark])
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, showHighLow, isDark])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -3702,6 +3757,7 @@ export default function ETFScreen() {
               levels={srShown}
             />
             <OffHighToggle active={showOffHigh} onToggle={() => setShowOffHigh(v => !v)} />
+            <HighLowToggle active={showHighLow} onToggle={() => setShowHighLow(v => !v)} />
           </div>
         )}
       </div>

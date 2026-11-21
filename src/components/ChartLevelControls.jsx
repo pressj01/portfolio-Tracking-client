@@ -204,6 +204,18 @@ export function OffHighToggle({ active, onToggle }) {
   )
 }
 
+export function HighLowToggle({ active, onToggle }) {
+  return (
+    <button
+      type="button"
+      className={`btn btn-sm${active ? ' btn-active' : ''}`}
+      onClick={onToggle}
+      title="Show / hide labels on the highest and lowest bars of the loaded period"
+      aria-pressed={active}
+    >Hi/Lo</button>
+  )
+}
+
 export function SupportResistanceControl({
   active, onToggle, perSide, onChangePerSide, sides, onChangeSides, colors, onChangeColor, onResetColors, levels,
 }) {

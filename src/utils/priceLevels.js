@@ -234,6 +234,33 @@ export function drawdownFromHigh(records) {
   }
 }
 
+export const PERIOD_HIGH_COLOR = '#66BB6A'
+export const PERIOD_LOW_COLOR = '#EF5350'
+
+/**
+ * The bars holding the loaded period's high and low, for the Hi/Lo labels.
+ * `basis` 'bar' reads each bar's high and low (the candle wicks, falling back to the
+ * close when a bar has none); 'close' reads closes only, for line and % charts where
+ * the drawn line is the closes. On a tie the earlier bar wins.
+ * Returns { high: { price, index, date }, low: { price, index, date } }, or null
+ * without usable bars.
+ */
+export function periodHighLow(records, basis = 'bar') {
+  if (!Array.isArray(records) || !records.length) return null
+  const closesOnly = basis === 'close'
+  let high = null
+  let low = null
+  records.forEach((r, i) => {
+    const close = r?.close
+    const h = !closesOnly && finite(r?.high) ? r.high : close
+    const l = !closesOnly && finite(r?.low) ? r.low : close
+    const date = r?.date ?? null
+    if (finite(h) && (!high || h > high.price)) high = { price: h, index: i, date }
+    if (finite(l) && (!low || l < low.price)) low = { price: l, index: i, date }
+  })
+  return high && low ? { high, low } : null
+}
+
 /** "-8.1% from highest close" / "At highest close" for the off-high label. */
 export function drawdownLabel(pct) {
   if (!finite(pct)) return ''
