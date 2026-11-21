@@ -29,9 +29,12 @@ export function patternType(key) {
   return PATTERN_TYPES.find(t => t.key === key) || null
 }
 
-/** Saved pattern choices: known keys only; anything unusable means every pattern. */
+/**
+ * Saved pattern choices: known keys only. Every pattern starts unticked, so nothing
+ * saved (or anything unusable) means none; the user picks the ones to look for.
+ */
 export function sanitizePatternKeys(saved) {
-  if (!Array.isArray(saved)) return [...ALL_PATTERN_KEYS]
+  if (!Array.isArray(saved)) return []
   return ALL_PATTERN_KEYS.filter(k => saved.includes(k))
 }
 

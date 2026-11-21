@@ -5267,6 +5267,51 @@ th.col-drag-target {
 .etf-level-menu.etf-pattern-menu {
   width: 310px;
 }
+.etf-level-menu.etf-candle-menu {
+  width: 330px;
+  max-height: min(78vh, 640px);
+  overflow-y: auto;
+}
+.etf-candle-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.etf-candle-head > span:first-child {
+  margin-right: auto;
+}
+.etf-candle-option {
+  gap: 0.4rem;
+}
+.etf-candle-code {
+  flex: none;
+  min-width: 2.6rem;
+  padding: 0 0.25rem;
+  border: 1px solid;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+}
+.etf-candle-name {
+  margin-right: auto;
+  white-space: nowrap;
+}
+.etf-candle-col {
+  flex: none;
+  width: 2.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.etf-candle-col.etf-candle-found {
+  width: 2.3rem;
+  min-width: 0;
+  margin-left: 0;
+}
+.etf-candle-odds.is-weak {
+  color: var(--text-faint, var(--p-888));
+}
 .etf-pattern-count.is-none {
   font-size: 0.7rem;
   font-style: italic;

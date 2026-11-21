@@ -51,14 +51,27 @@ import {
   srLevelColor,
   srLevelsForSides,
 } from '../utils/priceLevels'
-import { HighLowToggle, OffHighToggle, PatternsControl, PatternsStatus, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
+import { CandlePatternsControl, CandlePatternsStatus, HighLowToggle, OffHighToggle, PatternsControl, PatternsStatus, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
 import { findChartPatterns, sanitizePatternKeys } from '../utils/chartPatterns'
+import {
+  candleBoxX,
+  candlePatternHover,
+  findCandlestickPatterns,
+  sanitizeCandleMinOdds,
+  sanitizeCandlePatternKeys,
+  placeCandleLabels,
+  summarizeCandlePatterns,
+} from '../utils/candlestickPatterns'
 
 // % level and support / resistance labels sit in gutters either side of the price plot.
 const LEVEL_LABEL_FONT_SIZE = 11
 const LEVEL_GUTTER_SHIFT = 6
 // Hi/Lo labels sit this many px above the high bar / below the low bar, on an arrow.
 const HILO_ARROW_PX = 26
+// Candlestick-pattern codes sit on an arrow this long beyond the pattern's box; a code
+// label is about this tall.
+const CANDLE_ARROW_PX = 16
+const CANDLE_LABEL_PX = 15
 // The technical chart's base margins; level labels widen the sides from here.
 const PLOT_MARGIN = { l: 60, r: 30, t: 40, b: 40 }
 const PLOTLY_FONT_FAMILY = '"Open Sans", verdana, arial, sans-serif'
@@ -2128,6 +2141,9 @@ export default function ETFScreen() {
   const [fibClicks, setFibClicks] = useState([]) // [{x, y}, {x, y}] for fib retracement
   const [fibSets, setFibSets] = useState([]) // array of { shapes, annotations } for each fib drawing
   const plotRef = useRef(null)
+  // The technical chart's width in px (0 until measured), so labels can be kept off
+  // each other in screen terms.
+  const [techPlotWidth, setTechPlotWidth] = useState(0)
 
   // Price-level overlays: percent up/down levels and support / resistance.
   const [showPctLevels, setShowPctLevels] = useState(() => localStorage.getItem('etf_showPctLevels') === 'true')
@@ -2161,13 +2177,26 @@ export default function ETFScreen() {
   useEffect(() => { localStorage.setItem('etf_showOffHigh', String(showOffHigh)) }, [showOffHigh])
   const [showHighLow, setShowHighLow] = useState(() => localStorage.getItem('etf_showHighLow') === 'true')
   useEffect(() => { localStorage.setItem('etf_showHighLow', String(showHighLow)) }, [showHighLow])
-  // Chart patterns: the overlay switch and which pattern types it draws (all by default).
+  // Chart patterns: the overlay switch and which pattern types it draws (none until the
+  // user ticks some). A fresh key, so a selection saved while every type started ticked
+  // doesn't carry over.
   const [showPatterns, setShowPatterns] = useState(() => localStorage.getItem('etf_showPatterns') === 'true')
   useEffect(() => { localStorage.setItem('etf_showPatterns', String(showPatterns)) }, [showPatterns])
   const [patternKeys, setPatternKeys] = useState(() => {
-    try { return sanitizePatternKeys(JSON.parse(localStorage.getItem('etf_patternKeys'))) } catch { return sanitizePatternKeys(null) }
+    try { return sanitizePatternKeys(JSON.parse(localStorage.getItem('etf_patternSelection'))) } catch { return sanitizePatternKeys(null) }
   })
-  useEffect(() => { localStorage.setItem('etf_patternKeys', JSON.stringify(patternKeys)) }, [patternKeys])
+  useEffect(() => { localStorage.setItem('etf_patternSelection', JSON.stringify(patternKeys)) }, [patternKeys])
+  // Candlestick patterns: the overlay switch, which patterns it marks (none until the
+  // user ticks some)
+  // and the minimum odds a pattern needs to be drawn (0 = any).
+  const [showCandlePatterns, setShowCandlePatterns] = useState(() => localStorage.getItem('etf_showCandlePatterns') === 'true')
+  useEffect(() => { localStorage.setItem('etf_showCandlePatterns', String(showCandlePatterns)) }, [showCandlePatterns])
+  const [candlePatternKeys, setCandlePatternKeys] = useState(() => {
+    try { return sanitizeCandlePatternKeys(JSON.parse(localStorage.getItem('etf_candlePatternSelection'))) } catch { return sanitizeCandlePatternKeys(null) }
+  })
+  useEffect(() => { localStorage.setItem('etf_candlePatternSelection', JSON.stringify(candlePatternKeys)) }, [candlePatternKeys])
+  const [candleMinOdds, setCandleMinOdds] = useState(() => sanitizeCandleMinOdds(localStorage.getItem('etf_candleMinOdds')))
+  useEffect(() => { localStorage.setItem('etf_candleMinOdds', String(candleMinOdds)) }, [candleMinOdds])
   useEffect(() => { localStorage.setItem('etf_showSR', String(showSR)) }, [showSR])
   useEffect(() => { localStorage.setItem('etf_srPerSide', String(srPerSide)) }, [srPerSide])
   // Which side(s) of the last close S/R draws: both, support only, or resistance only.
@@ -2723,6 +2752,19 @@ export default function ETFScreen() {
   // Only the side(s) the user chose to show; S1/R1 labels keep their ranking either way.
   const srShown = useMemo(() => srLevelsForSides(srLevels, srSides), [srLevels, srSides])
 
+  // Watch the technical chart's width (its container mounts once bars are loaded).
+  const techPlotShown = tab !== 'returns' && records.length > 0
+  useEffect(() => {
+    const el = plotRef.current
+    if (!techPlotShown || !el || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(entries => {
+      const w = Math.round(entries[0]?.contentRect?.width || 0)
+      setTechPlotWidth(prev => (Math.abs(prev - w) >= 8 ? w : prev))
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [techPlotShown])
+
   // Chart patterns in the loaded bars: found for every type (so the menu can count
   // them), drawn for the types that are ticked. New bars re-run the search.
   const chartPatterns = useMemo(
@@ -2737,6 +2779,19 @@ export default function ETFScreen() {
   const patternsShown = useMemo(
     () => chartPatterns.filter(p => patternKeys.includes(p.key)),
     [chartPatterns, patternKeys],
+  )
+
+  // Candlestick patterns in the loaded bars: found for every type (so the menu can
+  // count them and give each type's odds), drawn for the ticked types whose odds meet
+  // the minimum.
+  const candleFinds = useMemo(
+    () => (showCandlePatterns && records.length ? findCandlestickPatterns(records) : []),
+    [showCandlePatterns, records],
+  )
+  const candleStats = useMemo(() => summarizeCandlePatterns(candleFinds), [candleFinds])
+  const candlesShown = useMemo(
+    () => candleFinds.filter(f => candlePatternKeys.includes(f.key) && Math.round(f.odds.pct) >= candleMinOdds),
+    [candleFinds, candlePatternKeys, candleMinOdds],
   )
 
   const { data: techData, layout: techLayout, regimeShapes = [], levelShapes = [] } = useMemo(() => {
@@ -2864,6 +2919,146 @@ export default function ETFScreen() {
       }
     }
 
+    // Label geometry in screen pixels, so labels can be kept off each other: px per bar
+    // from the measured plot width (estimated until it has been measured) and price-axis
+    // units per px from the current range (estimated on a log axis, which autoranges).
+    const paneHeightPx = (chartHeight - PLOT_MARGIN.t - PLOT_MARGIN.b) * (domains[0][1] - domains[0][0])
+    const plotWidthPx = Math.max(200, (techPlotWidth || 1000) - PLOT_MARGIN.l - PLOT_MARGIN.r)
+    const barPx = plotWidthPx / (dates.length + 1.5 + Math.max(xExpandNum, 1))
+    const axisUnit = (price) => (chartScale === 'log' ? Math.log10(price) : toAxisY(price))
+    const axisUnitsPerPx = () => {
+      let lo = yLo
+      let hi = yHi
+      if (chartScale === 'log') {
+        const l = Math.log10(Math.min(...lows.filter(v => v > 0)))
+        const h = Math.log10(Math.max(...highs))
+        lo = l - (h - l) * 0.05
+        hi = h + (h - l) * 0.05
+      }
+      return paneHeightPx > 0 && hi > lo ? (hi - lo) / paneHeightPx : 0
+    }
+    const levelLabelHeightPx = LEVEL_LABEL_FONT_SIZE * 1.3 + 8
+    const labelWidthPx = (html, size) => measureLabelPx(html, size) + 10
+    const hiLoText = (pt, name) => {
+      const when = levelDateLabel(pt.date)
+      return `<b>${name}</b> ${formatMoney(pt.price)}${when ? ` · ${when}` : ''}`
+    }
+    const hiLoNames = hiLoClosesOnly ? ['High close', 'Low close'] : ['High', 'Low']
+    // Hi/Lo labels hang inward near either end of the chart, centered elsewhere.
+    const hiLoAnchor = (index) => {
+      const frac = dates.length > 1 ? index / (dates.length - 1) : 0.5
+      return frac > 0.85 ? 'right' : frac < 0.15 ? 'left' : 'center'
+    }
+
+    // Off High label: normally just above its line, hanging left from the last bar.
+    // When the Hi/Lo high label's arrow would come up through it (the period high sits
+    // under the label and barely above the line), it stacks above the High label
+    // instead, on a connector up from its line at the last bar, so it covers neither
+    // the arrow nor the bars.
+    const offHigh = showOffHigh ? drawdownFromHigh(records) : null
+    const offHighText = offHigh
+      ? `<b>${drawdownLabel(offHigh.pct)}</b> ${formatMoney(offHigh.high)} · ${levelDateLabel(offHigh.highDate)}`
+      : ''
+    const offHighSpanBars = offHigh ? (LEVEL_GUTTER_SHIFT + labelWidthPx(offHighText, LEVEL_LABEL_FONT_SIZE)) / barPx : 0
+    // How far above its line the High label's arrow starts, in px (0 on a line chart).
+    const hiLoRisePx = (upp) => (hiLo && offHigh && upp > 0
+      ? Math.max(0, (axisUnit(hiLo.high.price) - axisUnit(offHigh.high)) / upp)
+      : 0)
+    let offHighStacked = false
+    if (offHigh && hiLo) {
+      const underLabel = hiLo.high.index >= offHigh.closeIndex - offHighSpanBars - 0.5
+      offHighStacked = underLabel && hiLoRisePx(axisUnitsPerPx()) < levelLabelHeightPx
+    }
+    // The stacked label's bottom, in px above its line: over the High label and its arrow.
+    const offHighLiftPx = (upp) => hiLoRisePx(upp) + HILO_ARROW_PX + levelLabelHeightPx + 4
+    if (offHighStacked && chartScale !== 'log' && paneHeightPx > 0) {
+      const lineY = toAxisY(offHigh.high)
+      for (let pass = 0; pass < 3; pass += 1) {
+        const span = yHi - yLo
+        const needPx = offHighLiftPx(axisUnitsPerPx()) + levelLabelHeightPx + 6
+        yHi = Math.max(yHi, lineY + span * Math.min(0.4, needPx / paneHeightPx))
+      }
+    }
+
+    // Labels already on the chart that candlestick codes (and their arrows) must stay
+    // off: the Hi/Lo labels and the Off High label, each as its text box plus, where it
+    // has one, a thin arrow or connector. In bar indexes across and, for a given axis
+    // scale, px up and down.
+    const fixedLabelBoxes = (upp) => {
+      if (!(upp > 0)) return []
+      const boxes = []
+      const thin = 3 / barPx // an arrow is a few px wide
+      if (hiLo) {
+        [[hiLo.high, hiLoNames[0], true], [hiLo.low, hiLoNames[1], false]].forEach(([pt, name, above]) => {
+          const base = axisUnit(pt.price) / upp
+          if (!Number.isFinite(base)) return
+          const w = labelWidthPx(hiLoText(pt, name), LEVEL_LABEL_FONT_SIZE) / barPx
+          const anchor = hiLoAnchor(pt.index)
+          const from = anchor === 'right' ? pt.index - w : anchor === 'left' ? pt.index : pt.index - w / 2
+          const arrow = above ? [base, base + HILO_ARROW_PX] : [base - HILO_ARROW_PX, base]
+          const box = above
+            ? [base + HILO_ARROW_PX, base + HILO_ARROW_PX + levelLabelHeightPx]
+            : [base - HILO_ARROW_PX - levelLabelHeightPx, base - HILO_ARROW_PX]
+          boxes.push({ from: pt.index - thin, to: pt.index + thin, box: arrow })
+          boxes.push({ from, to: from + w, box })
+        })
+      }
+      if (offHigh) {
+        const base = axisUnit(offHigh.high) / upp
+        if (Number.isFinite(base)) {
+          const lift = offHighStacked ? offHighLiftPx(upp) : 0
+          const right = offHighStacked ? offHigh.closeIndex : offHigh.closeIndex - LEVEL_GUTTER_SHIFT / barPx
+          if (offHighStacked) {
+            boxes.push({ from: offHigh.closeIndex - thin, to: offHigh.closeIndex + thin, box: [base, base + lift] })
+          }
+          boxes.push({
+            from: right - offHighSpanBars + LEVEL_GUTTER_SHIFT / barPx,
+            to: right,
+            box: [base + lift, base + lift + levelLabelHeightPx],
+          })
+        }
+      }
+      return boxes
+    }
+
+    // Candlestick-pattern codes hang below bullish patterns and sit above bearish ones,
+    // moved outward in pixels where they would land on another label. A fixed (non-log)
+    // axis gets room for each one, then the labels are placed again on the final
+    // scale; a log axis autoranges around the annotations itself.
+    let candleOffsets = []
+    if (candlesShown.length) {
+      const panePx = paneHeightPx
+      const anchorPrice = (f) => (f.bias === 'bullish' ? f.bottom : f.top)
+      const placeLabels = () => {
+        const upp = axisUnitsPerPx()
+        return placeCandleLabels(candlesShown, {
+          barCount: dates.length,
+          unitsPerPx: upp,
+          axisValue: f => axisUnit(anchorPrice(f)),
+          arrowPx: CANDLE_ARROW_PX,
+          labelPx: CANDLE_LABEL_PX,
+          halfBars: f => labelWidthPx(`<b>${f.code}</b>`, 10) / 2 / barPx,
+          obstacles: fixedLabelBoxes(upp),
+        })
+      }
+      const makeRoom = () => {
+        for (let pass = 0; pass < 3; pass += 1) {
+          const span = yHi - yLo
+          candlesShown.forEach((f, k) => {
+            const room = span * Math.min(0.35, (CANDLE_ARROW_PX + candleOffsets[k] + CANDLE_LABEL_PX + 4) / panePx)
+            if (f.bias === 'bullish') yLo = Math.min(yLo, toAxisY(f.bottom) - room)
+            else yHi = Math.max(yHi, toAxisY(f.top) + room)
+          })
+        }
+      }
+      candleOffsets = placeLabels()
+      if (chartScale !== 'log' && panePx > 0) {
+        makeRoom()
+        candleOffsets = placeLabels()
+        makeRoom()
+      }
+    }
+
     // X-axis range: pad ~1.5 bars before the first bar so it clears the y-axis
     // labels, and N bars into the future on the right (min 1 bar so the last bar
     // isn't flush against the edge).
@@ -2977,8 +3172,8 @@ export default function ETFScreen() {
 
     // Off High: how far the last close is below the period's highest close. A dotted
     // line runs from that bar to the last bar, a dashed drop line at the last bar
-    // spans the fall, and the label sits at the top of the drop.
-    const offHigh = showOffHigh ? drawdownFromHigh(records) : null
+    // spans the fall, and the label sits at the top of the drop (or above the Hi/Lo
+    // high label when that label's arrow would otherwise run through it).
     if (offHigh && canPlot(offHigh.high) && canPlot(offHigh.close)) {
       const highY = toAxisY(offHigh.high)
       const lastX = dates[offHigh.closeIndex]
@@ -2992,11 +3187,19 @@ export default function ETFScreen() {
           line: { color: OFF_HIGH_COLOR, width: 2, dash: 'dash' },
         })
       }
-      // Right-anchored at the last bar, left of the drop line.
-      levelAnnotations.push({
-        ...levelLabel(offHigh.high, `<b>${drawdownLabel(offHigh.pct)}</b> ${formatMoney(offHigh.high)} · ${levelDateLabel(offHigh.highDate)}`, OFF_HIGH_COLOR, 'right'),
-        x: lastX, xref: 'x', xshift: -6,
-      })
+      // Right-anchored at the last bar, left of the drop line; or, stacked over the
+      // Hi/Lo high label, at the top of a connector rising from the line at the last bar.
+      levelAnnotations.push(offHighStacked
+        ? {
+          ...levelLabel(offHigh.high, offHighText, OFF_HIGH_COLOR, 'right'),
+          x: lastX, xref: 'x', xshift: 0,
+          showarrow: true, arrowhead: 0, arrowwidth: 1.5, arrowcolor: OFF_HIGH_COLOR, standoff: 0,
+          ax: 0, ay: -offHighLiftPx(axisUnitsPerPx()),
+        }
+        : {
+          ...levelLabel(offHigh.high, offHighText, OFF_HIGH_COLOR, 'right'),
+          x: lastX, xref: 'x', xshift: -LEVEL_GUTTER_SHIFT,
+        })
     }
 
     // Hi/Lo: a label on an arrow above the period's high bar and below its low bar.
@@ -3004,24 +3207,22 @@ export default function ETFScreen() {
     const hiLoAnnotations = []
     if (hiLo) {
       const hiLoLabel = (pt, name, color, above) => {
-        const frac = dates.length > 1 ? pt.index / (dates.length - 1) : 0.5
-        const when = levelDateLabel(pt.date)
         return {
           x: dates[pt.index], xref: 'x', y: annotY(pt.price), yref: 'y',
-          text: `<b>${name}</b> ${formatMoney(pt.price)}${when ? ` · ${when}` : ''}`,
+          text: hiLoText(pt, name),
           showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5, arrowcolor: color,
           ax: 0, ay: above ? -HILO_ARROW_PX : HILO_ARROW_PX,
-          xanchor: frac > 0.85 ? 'right' : frac < 0.15 ? 'left' : 'center',
+          xanchor: hiLoAnchor(pt.index),
           yanchor: above ? 'bottom' : 'top',
           font: { color, size: LEVEL_LABEL_FONT_SIZE },
           bgcolor: labelBg, bordercolor: color, borderwidth: 1, borderpad: 2,
         }
       }
       if (canPlot(hiLo.high.price)) {
-        hiLoAnnotations.push(hiLoLabel(hiLo.high, hiLoClosesOnly ? 'High close' : 'High', PERIOD_HIGH_COLOR, true))
+        hiLoAnnotations.push(hiLoLabel(hiLo.high, hiLoNames[0], PERIOD_HIGH_COLOR, true))
       }
       if (canPlot(hiLo.low.price)) {
-        hiLoAnnotations.push(hiLoLabel(hiLo.low, hiLoClosesOnly ? 'Low close' : 'Low', PERIOD_LOW_COLOR, false))
+        hiLoAnnotations.push(hiLoLabel(hiLo.low, hiLoNames[1], PERIOD_LOW_COLOR, false))
       }
     }
 
@@ -3117,6 +3318,38 @@ export default function ETFScreen() {
         })
       }
     }
+
+    // Candlestick patterns: a faint box around each pattern's candles, and its code on
+    // an arrow, below the box for bullish patterns (green ▲) and above it for bearish
+    // ones (red ▼). Hovering the code gives the name, the dates, the chance of the
+    // expected move and how this one turned out.
+    const candleAnnotations = []
+    candlesShown.forEach((f, k) => {
+      if (!canPlot(f.top) || !canPlot(f.bottom) || !dates[f.endIndex]) return
+      const box = candleBoxX(dates, f.startIndex, f.endIndex)
+      if (box) {
+        levelShapes.push({
+          type: 'rect', xref: 'x', yref: 'y', layer: 'below',
+          x0: box.x0, x1: box.x1, y0: toAxisY(f.bottom), y1: toAxisY(f.top),
+          line: { color: f.color, width: 1 }, fillcolor: f.fill,
+        })
+      }
+      const above = f.bias === 'bearish'
+      candleAnnotations.push({
+        x: dates[f.endIndex], xref: 'x', y: annotY(above ? f.top : f.bottom), yref: 'y',
+        text: `<b>${f.code}</b>`,
+        showarrow: true, arrowhead: 0, arrowwidth: 1, arrowcolor: f.color, standoff: 1,
+        ax: 0, ay: (CANDLE_ARROW_PX + (candleOffsets[k] || 0)) * (above ? -1 : 1),
+        xanchor: 'center', yanchor: above ? 'bottom' : 'top',
+        font: { color: f.color, size: 10 },
+        bgcolor: labelBg, bordercolor: f.color, borderwidth: 1, borderpad: 1,
+        hovertext: candlePatternHover(f, dates, levelDateLabel).join('<br>'),
+        hoverlabel: { bgcolor: '#1e1e2f', bordercolor: f.color, font: { color: '#e0e0e0', size: 11 } },
+      })
+    })
+    // Outermost codes first, so a code nearer its bars is drawn over a stacked
+    // neighbor's arrow rather than under it.
+    candleAnnotations.sort((a, b) => Math.abs(b.ay) - Math.abs(a.ay))
 
     // Level labels sit in gutters outside the plot area so they never cover bars:
     // % levels on the left, beyond the price-axis numbers, and S/R on the right. The
@@ -3234,10 +3467,10 @@ export default function ETFScreen() {
     const fibShapes = fibSets.flatMap(f => f.shapes)
     const fibAnnotations = fibSets.flatMap(f => f.annotations)
     layout.shapes = [...regimeShapes, ...levelShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
-    const extraAnnotations = [...levelAnnotations, ...hiLoAnnotations, ...patternAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
+    const extraAnnotations = [...levelAnnotations, ...hiLoAnnotations, ...patternAnnotations, ...candleAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
     if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
     return { data: traces, layout, regimeShapes, levelShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, showHighLow, patternsShown, isDark])
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, showHighLow, patternsShown, candlesShown, techPlotWidth, isDark])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -3882,6 +4115,15 @@ export default function ETFScreen() {
               onChangeKeys={setPatternKeys}
               counts={patternCounts}
             />
+            <CandlePatternsControl
+              active={showCandlePatterns}
+              onToggle={() => setShowCandlePatterns(v => !v)}
+              selectedKeys={candlePatternKeys}
+              onChangeKeys={setCandlePatternKeys}
+              minOdds={candleMinOdds}
+              onChangeMinOdds={setCandleMinOdds}
+              stats={candleStats}
+            />
           </div>
         )}
       </div>
@@ -4197,7 +4439,15 @@ export default function ETFScreen() {
                     onChangeThr={setMkThr}
                   />
                 )}
-                {showPatterns && <PatternsStatus selectedKeys={patternKeys} counts={patternCounts} />}
+                {showPatterns && records.length > 0 && <PatternsStatus selectedKeys={patternKeys} counts={patternCounts} />}
+                {showCandlePatterns && records.length > 0 && (
+                  <CandlePatternsStatus
+                    selectedKeys={candlePatternKeys}
+                    finds={candleFinds}
+                    shownCount={candlesShown.length}
+                    minOdds={candleMinOdds}
+                  />
+                )}
                 {drawMode === 'fib' && (
                   <div style={{ color: 'var(--p-ffd740)', fontSize: '0.8rem', padding: '4px 8px', background: 'var(--p-2a2a3d)', borderRadius: 4, marginBottom: 4 }}>
                     {fibClicks.length === 0 ? 'Click the first point (swing high or low)' : 'Click the second point to complete Fibonacci retracement'}

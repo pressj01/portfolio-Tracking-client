@@ -153,8 +153,10 @@ test('too few bars, or no prices, finds nothing', () => {
   assert.deepEqual(findChartPatterns(barsFrom([[0, 100], [5, 101]])), [])
 })
 
-test('saved pattern choices keep known keys only', () => {
-  assert.deepEqual(sanitizePatternKeys(null), ALL_PATTERN_KEYS)
+test('saved pattern choices keep known keys only; nothing saved means none ticked', () => {
+  assert.deepEqual(sanitizePatternKeys(null), [])
+  assert.deepEqual(sanitizePatternKeys('junk'), [])
+  assert.deepEqual(sanitizePatternKeys([...ALL_PATTERN_KEYS]), ALL_PATTERN_KEYS)
   assert.deepEqual(sanitizePatternKeys(['bull_flag', 'nope', 'hs']), ['hs', 'bull_flag'])
   assert.deepEqual(sanitizePatternKeys([]), [])
 })

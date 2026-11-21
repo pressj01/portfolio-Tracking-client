@@ -16,6 +16,7 @@ import {
   srLevelColor,
 } from '../utils/priceLevels'
 import { ALL_PATTERN_KEYS, PATTERN_GROUPS, PATTERN_TYPES } from '../utils/chartPatterns'
+import { ALL_CANDLE_PATTERN_KEYS, CANDLE_MIN_ODDS_OPTIONS, CANDLE_PATTERN_SOURCE, CANDLE_PATTERN_TYPES } from '../utils/candlestickPatterns'
 import { formatMoney } from '../utils/money'
 
 // A toggle button with an attached ▾ menu. The main button turns the overlay on/off
@@ -288,9 +289,23 @@ export function PatternsControl({ active, onToggle, selectedKeys, onChangeKeys, 
 
 // The line above the chart (never over it) while Patterns is on: the ticked patterns
 // that were not found in the loaded period. It lists ticked patterns only, so
-// unticking one drops it from the line, and with none missing the line is gone.
+// unticking one drops it from the line, and with none missing the line is gone. With
+// nothing ticked (how it starts) it says so, and how many were found.
 export function PatternsStatus({ selectedKeys, counts }) {
   const ticked = PATTERN_TYPES.filter(t => selectedKeys.includes(t.key))
+  if (!ticked.length) {
+    const found = Object.values(counts || {}).reduce((a, b) => a + b, 0)
+    return (
+      <div className="etf-pattern-status" role="status">
+        <span>
+          <strong>Patterns:</strong> None are ticked yet.{' '}
+          {found
+            ? `${found} found in the loaded period; tick the ones to show in the ▾ menu beside Patterns.`
+            : 'None were found in the loaded period either. Tick the ones to look for in the ▾ menu beside Patterns.'}
+        </span>
+      </div>
+    )
+  }
   const missing = ticked.filter(t => !counts?.[t.key])
   if (!missing.length) return null
   const noneFound = missing.length === ticked.length
@@ -317,6 +332,101 @@ export function PatternsStatus({ selectedKeys, counts }) {
         ))}
         {noneFound && ' A longer period or a different bar size may show some.'}
       </span>
+    </div>
+  )
+}
+
+// Candlestick patterns: one checkbox per pattern, bullish then bearish, each with its
+// chart code, its odds (published, blended with this chart's record once found) and,
+// while the overlay is on, how many were found in the loaded period.
+export function CandlePatternsControl({
+  active, onToggle, selectedKeys, onChangeKeys, minOdds, onChangeMinOdds, stats,
+}) {
+  const selected = new Set(selectedKeys)
+  const setKeys = (keys) => {
+    onChangeKeys(keys)
+    if (!active && keys.length) onToggle()
+  }
+  const toggleKey = (key) => setKeys(selected.has(key) ? selectedKeys.filter(k => k !== key) : [...selectedKeys, key])
+  const keysFor = (bias) => CANDLE_PATTERN_TYPES.filter(t => t.bias === bias).map(t => t.key)
+  return (
+    <ToggleWithMenu
+      label="Candle Patterns"
+      title="Show / hide candlestick patterns found in the loaded period"
+      menuTitle="Choose which candlestick patterns to look for"
+      menuClassName="etf-candle-menu"
+      active={active}
+      onToggle={onToggle}
+    >
+      {[['bullish', 'Bullish ▲'], ['bearish', 'Bearish ▼']].map(([bias, head]) => (
+        <React.Fragment key={bias}>
+          <div className="etf-level-menu-head etf-candle-head">
+            <span>{head}</span>
+            <span className="etf-candle-col">Odds</span>
+            <span className="etf-candle-col etf-candle-found">Found</span>
+          </div>
+          {CANDLE_PATTERN_TYPES.filter(t => t.bias === bias).map(t => {
+            const s = active ? stats?.[t.key] : null
+            const odds = s ? s.oddsPct : t.published
+            const oddsTitle = s
+              ? `Chance of the expected move on this chart: ${Math.round(odds)}%. Published tests ${t.published}%`
+                + (s.resolved ? `; here ${s.wins} of ${s.resolved} played out.` : '; none has played out here yet.')
+              : `Published tests: ${t.published}% (${t.study.toLowerCase()}).`
+            return (
+              <label key={t.key} className="etf-level-option etf-candle-option" title={`${t.label}: ${t.signal.toLowerCase()}`}>
+                <input type="checkbox" checked={selected.has(t.key)} onChange={() => toggleKey(t.key)} />
+                <span className="etf-candle-code" style={{ color: t.color, borderColor: t.color }}>{t.arrow}{t.code}</span>
+                <span className="etf-candle-name">{t.label}</span>
+                <span className={`etf-candle-col etf-candle-odds${odds < 50 ? ' is-weak' : ''}`} title={oddsTitle}>
+                  {Math.round(odds)}%
+                </span>
+                <span className="etf-candle-col etf-candle-found etf-pattern-count">
+                  {active && s?.count ? s.count : active && selected.has(t.key) ? '–' : ''}
+                </span>
+              </label>
+            )
+          })}
+        </React.Fragment>
+      ))}
+      <div className="etf-level-menu-row">
+        <button type="button" className="btn btn-sm" onClick={() => setKeys([...ALL_CANDLE_PATTERN_KEYS])}>All</button>
+        <button type="button" className="btn btn-sm" onClick={() => onChangeKeys([])}>None</button>
+        <button type="button" className="btn btn-sm" onClick={() => setKeys(keysFor('bullish'))}>Bullish</button>
+        <button type="button" className="btn btn-sm" onClick={() => setKeys(keysFor('bearish'))}>Bearish</button>
+      </div>
+      <label className="etf-level-menu-field">
+        <span>Only show odds of at least</span>
+        <select className="etf-draw-select" value={minOdds} onChange={e => onChangeMinOdds(Number(e.target.value))}>
+          {CANDLE_MIN_ODDS_OPTIONS.map(v => <option key={v} value={v}>{v ? `${v}%` : 'Any'}</option>)}
+        </select>
+      </label>
+      <p className="etf-level-menu-note">
+        Odds are the chance of the expected move: a close above the pattern&apos;s high (bullish) or below
+        its low (bearish) before a close beyond its other side. They start from published test results
+        ({CANDLE_PATTERN_SOURCE}) and lean toward how each pattern did earlier on this chart. Under 50%
+        means tests found it more often went the other way. Hover a label on the chart for details.
+        Past results, not a forecast.
+      </p>
+    </ToggleWithMenu>
+  )
+}
+
+// The line above the chart (never over it) when Candle Patterns is on but draws
+// nothing: none ticked, none found, or none with the minimum odds.
+export function CandlePatternsStatus({ selectedKeys, finds, shownCount, minOdds }) {
+  if (shownCount > 0) return null
+  const ticked = finds.filter(f => selectedKeys.includes(f.key))
+  let text
+  if (!selectedKeys.length) {
+    text = finds.length
+      ? `None are ticked yet. ${finds.length} found in the loaded period; tick the ones to show in the ▾ menu beside Candle Patterns.`
+      : 'None are ticked yet, and none were found in the loaded period. Tick the ones to look for in the ▾ menu beside Candle Patterns.'
+  }
+  else if (!ticked.length) text = 'None of the ticked candlestick patterns were found in the loaded period. A longer period or a different bar size may show some.'
+  else text = `${ticked.length} ticked candlestick pattern${ticked.length === 1 ? ' was' : 's were'} found, but none with odds of at least ${minOdds}%.`
+  return (
+    <div className="etf-pattern-status" role="status">
+      <span><strong>Candle Patterns:</strong> {text}</span>
     </div>
   )
 }

@@ -3,6 +3,7 @@ import GradePeriodHelp from '../components/GradePeriodHelp'
 import { NOT_FINANCIAL_ADVICE, PRIVACY_NOTE } from '../content/notFinancialAdvice'
 import { fundVerdictBands } from '../utils/gradingPreferences'
 import appPackage from '../../package.json'
+import { CANDLE_ODDS_PRIOR_WEIGHT, CANDLE_PATTERN_TYPES } from '../utils/candlestickPatterns'
 
 // Keep the in-app label tied to the same package metadata electron-builder
 // uses for the installer and executable. A release can no longer ship a
@@ -4191,6 +4192,28 @@ function SecurityResearchHelp() {
   )
 }
 
+// What each candlestick pattern looks like, for the Candlestick Patterns table.
+const CANDLE_PATTERN_LOOKS = {
+  hammer: 'After a fall: a small body at the top of the bar, a lower wick at least twice the body and most of the bar, little or no upper wick.',
+  inv_hammer: 'After a fall: a small body at the bottom of the bar, an upper wick at least twice the body and most of the bar, little or no lower wick.',
+  bull_engulfing: 'After a fall: a down candle, then an up candle whose body covers all of the first body.',
+  piercing: 'After a fall: a long down candle, then an up candle that opens below its close and closes above the middle of its body, but not above its open.',
+  morning_star: 'After a fall: a long down candle, a small candle whose body gaps below it, then a strong up candle closing at least halfway back into the first body.',
+  three_soldiers: 'Not after a rise: three strong up candles in a row, each closing higher and near its high, each opening inside (or just above) the last body.',
+  tweezer_bottom: 'After a fall: a down candle, then an up candle with a matching low, the lowest of the last several bars.',
+  bull_harami: 'After a fall: a long down candle, then a small up candle whose body sits inside it.',
+  rising_three: 'In a rise: a long up candle, three small candles (mostly down) with bodies inside its range, then a long up candle closing above the first.',
+  hanging_man: 'The hammer shape, after a rise.',
+  shooting_star: 'The inverted hammer shape, after a rise.',
+  bear_engulfing: 'After a rise: an up candle, then a down candle whose body covers all of the first body.',
+  dark_cloud: 'After a rise: a long up candle, then a down candle that opens above its close and closes below the middle of its body, but not below its open.',
+  evening_star: 'After a rise: a long up candle, a small candle whose body gaps above it, then a strong down candle closing at least halfway into the first body.',
+  three_crows: 'Not after a fall: three strong down candles in a row, each closing lower and near its low, each opening inside (or just below) the last body.',
+  tweezer_top: 'After a rise: an up candle, then a down candle with a matching high, the highest of the last several bars.',
+  bear_harami: 'After a rise: a long up candle, then a small down candle whose body sits inside it.',
+  falling_three: 'In a fall: a long down candle, three small candles (mostly up) with bodies inside its range, then a long down candle closing below the first.',
+}
+
 function ETFScreenHelp() {
   return (
     <div>
@@ -4257,7 +4280,8 @@ function ETFScreenHelp() {
         Four toggles at the end of the chart toolbar mark reference prices on the chart: <strong>% Levels</strong>,
         <strong> S/R</strong> (support and resistance), <strong>Off High</strong> and <strong>Hi/Lo</strong>. Click a
         button to show or hide its overlay; % Levels and S/R also have a ▾ beside them for settings. (The
-        <strong> Patterns</strong> button after them is covered under <em>Chart Patterns</em> below.) Each one answers
+        <strong> Patterns</strong> and <strong>Candle Patterns</strong> buttons after them are covered under
+        <em> Chart Patterns</em> and <em>Candlestick Patterns</em> below.) Each one answers
         a different question about where price is now:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -4369,6 +4393,9 @@ function ETFScreenHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>It uses closing prices only, so an intraday spike that didn't hold is not the yardstick.</li>
         <li>When the last close is the highest close, it reads <em>At highest close</em>.</li>
+        <li>The label sits just above the dotted line, left of the last bar. With <em>Hi/Lo</em> on and the period
+          high underneath it, the label moves up above the <em>High</em> label instead, on a short line rising
+          from the dotted line at the last bar, so neither label covers the other or the bars.</li>
         <li>The period sets the window: on 6M it is the drop from the 6-month high close, on 5Y from the 5-year
           high close.</li>
         <li>Turn on % Levels measured from the period high too, to compare the drop with the −10% and −20% lines.</li>
@@ -4481,15 +4508,17 @@ function ETFScreenHelp() {
         trade instructions, and a confirmed pattern can still fail.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Turning patterns on and off:</strong> click <em>Patterns</em> to show or hide them all. Click the
-          ▾ beside it to tick or untick each pattern on its own; <em>All</em> and <em>None</em> set every box at once.
-          While Patterns is on, each row shows how many of that pattern were found, or <em>not found</em> for a
-          ticked pattern with none. Your choices are remembered between sessions.</li>
+        <li><strong>Turning patterns on and off:</strong> every pattern starts unticked. Click the ▾ beside
+          <em> Patterns</em> to tick or untick each pattern on its own; <em>All</em> and <em>None</em> set every box at
+          once, and ticking a pattern turns the overlay on. Click <em>Patterns</em> itself to show or hide them all.
+          While Patterns is on, each row shows how many of that pattern were found (ticked or not), or
+          <em> not found</em> for a ticked pattern with none. Your choices are remembered between sessions.</li>
         <li><strong>Patterns not found:</strong> when a ticked pattern isn't in the loaded period, a line above the
           chart says so, for example <em>Patterns not found in the loaded period: Bear Flag, Bear Pennant</em>. It sits
           above the chart, never on it, so it covers nothing. Untick a pattern and it leaves the line at once. When
-          every ticked pattern was found, or none is ticked, the line goes away. If none of the ticked patterns were
-          found, a longer period or a different bar size may show some.</li>
+          every ticked pattern was found, the line goes away; with none ticked, it says so and how many patterns were
+          found. If none of the ticked patterns were found, a longer period or a different bar size may show
+          some.</li>
         <li><strong>Reading the drawing:</strong> each pattern has its own color, shown beside its name in the menu.
           Solid lines mean the pattern is <em>confirmed</em>: price broke out the way the pattern points. Dotted lines
           mean it is still <em>forming</em>: the shape is there but no breakout yet. Dashed lines mark an ascending
@@ -4547,6 +4576,109 @@ function ETFScreenHelp() {
         may be too small to count on weekly bars, and a large one on weekly bars may be too noisy to see on daily
         bars. Try another period or bar size.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Candlestick Patterns</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Candle Patterns</strong> button at the end of the chart toolbar hunts for 18 classic
+        candlestick patterns, 9 bullish and 9 bearish, in the loaded bars and marks each one it finds. Every pattern
+        starts unticked: click the ▾ beside the button and tick the ones you want to hunt for. The search runs again
+        whenever the ticker, the period or the bar size changes. Like chart patterns, these are shapes found in past
+        prices, not predictions or trade instructions.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Choosing patterns:</strong> the menu lists each pattern with its chart code, its odds and, while
+          the overlay is on, how many were found in the loaded period. The <em>Found</em> column counts unticked
+          patterns too, so you can see what is on the chart before ticking anything. <em>All</em>, <em>None</em>,
+          <em> Bullish</em> and <em>Bearish</em> set several boxes at once. <em>Only show odds of at least</em> hides
+          patterns whose odds are under 50%, 60% or 70%. Your choices are remembered between sessions.</li>
+        <li><strong>Reading the chart:</strong> a faint box surrounds the candles that make up each pattern. Bullish
+          patterns get a green code with ▲ below the box; bearish ones get a red code with ▼ above it. Codes that
+          would land on each other move further out. Hover a code for the pattern&apos;s name and dates, the chance
+          of the expected move, the two figures that chance comes from, and how that particular pattern turned
+          out.</li>
+        <li><strong>Nothing drawn:</strong> while the overlay is on but draws nothing, a line above the chart says
+          why: no patterns are ticked (with a count of what was found), none of the ticked ones were found, or none
+          met the minimum odds.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/candle-patterns.png"
+        alt="One-year QQQ candlestick chart with candlestick patterns boxed and labeled, and the hover box for one of them"
+        caption="Six candlestick patterns ticked on a one-year QQQ chart. Each pattern's candles are boxed, and hovering a code shows the chance of the expected move and how that one turned out."
+      />
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/candle-patterns-menu.png"
+        alt="Candle Patterns menu listing the 18 patterns with codes, odds, and how many were found"
+        caption="The Candle Patterns menu: every pattern starts unticked. Odds under 50% are dimmed, and Found shows how many of each are in the loaded period."
+      />
+
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>The Odds</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Expected move:</strong> after the pattern&apos;s last candle, price <em>closes above the
+          pattern&apos;s highest high</em> before it closes below its lowest low (bullish), or <em>closes below the
+          lowest low</em> before it closes above the highest high (bearish). This is the breakout test Thomas
+          Bulkowski uses in his published candlestick studies (thepatternsite.com). The hover says whether the
+          pattern <em>played out</em>, <em>did not play out</em>, or is <em>not decided yet</em> because neither
+          close has happened.</li>
+        <li><strong>From published tests:</strong> the share of Bulkowski&apos;s tested patterns that broke out the
+          way the pattern points. Several textbook patterns tested under 50%: the Inverted Hammer, Hanging Man, both
+          Tweezers and the Bearish Harami more often went the other way. The menu dims those, and the hover says
+          what the tests found.</li>
+        <li><strong>From this chart:</strong> how the earlier patterns of the same kind in the loaded bars turned
+          out, counting only the ones that have played out or failed.</li>
+        <li><strong>Chance of the expected move:</strong> the published figure, leaning toward this chart&apos;s
+          record as it builds up. The published figure counts as {CANDLE_ODDS_PRIOR_WEIGHT} results: chance =
+          (published % × {CANDLE_ODDS_PRIOR_WEIGHT} + played out here) ÷ ({CANDLE_ODDS_PRIOR_WEIGHT} + decided
+          here). For example, a Hammer (published 60%) that played out 4 times out of 5 on this chart shows
+          (0.60 × {CANDLE_ODDS_PRIOR_WEIGHT} + 4) ÷ ({CANDLE_ODDS_PRIOR_WEIGHT} + 5) = 64%. A few results move it
+          a little; once {CANDLE_ODDS_PRIOR_WEIGHT} have been decided, the chart&apos;s record counts for half.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Keep in mind:</strong> the shapes here follow the usual textbook descriptions, which differ in small
+        ways from the exact rules behind the published tests, so treat the published figures as a guide. A
+        chart&apos;s own record is a small sample from one ticker and one period, and it includes the pattern you are
+        hovering once that one has been decided.
+      </p>
+
+      <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>The Patterns</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <em>After a fall</em> (or <em>rise</em>) means the 5 bars before the pattern fell (or rose) by at least one
+        typical bar range and the last of them closed below (or above) its 10-bar average. A <em>long</em> candle
+        has a body at least 1.2 times the ticker&apos;s typical body, and a <em>small</em> one at most 0.6 times;
+        typical sizes are the medians of the loaded bars, in percent, so the same rules fit any price and bar size.
+        <em> Matching</em> highs or lows are within a tenth of a typical bar range.
+      </p>
+      <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+        <table style={{ fontSize: '0.85rem', minWidth: '640px' }}>
+          <thead>
+            <tr>
+              <th style={{ padding: '0.4rem 0.75rem' }}>Pattern</th>
+              <th style={{ padding: '0.4rem 0.75rem' }}>Code</th>
+              <th style={{ padding: '0.4rem 0.75rem' }}>Candles</th>
+              <th style={{ padding: '0.4rem 0.75rem' }}>What it looks like</th>
+              <th style={{ padding: '0.4rem 0.75rem' }}>Published tests</th>
+            </tr>
+          </thead>
+          <tbody>
+            {CANDLE_PATTERN_TYPES.map(t => (
+              <tr key={t.key}>
+                <td style={{ padding: '0.4rem 0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {t.label}
+                  <div style={{ fontWeight: 400, fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>{t.signal}</div>
+                </td>
+                <td style={{ padding: '0.4rem 0.75rem', color: t.color, fontWeight: 700, whiteSpace: 'nowrap' }}>{t.arrow}{t.code}</td>
+                <td style={{ padding: '0.4rem 0.75rem', textAlign: 'center' }}>{t.bars}</td>
+                <td style={{ padding: '0.4rem 0.75rem' }}>{CANDLE_PATTERN_LOOKS[t.key]}</td>
+                <td style={{ padding: '0.4rem 0.75rem' }}>
+                  <strong>{t.published}%</strong>
+                  {t.published < 50 && (
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>Tested as: {t.study.toLowerCase()}</div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>
       <p style={{ marginBottom: '1rem' }}>
