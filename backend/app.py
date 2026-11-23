@@ -43267,12 +43267,14 @@ def _series_return(values, default=None):
 # 1D and 5D comparer windows chart intraday bars instead of one or five daily
 # closes. Keyed by the preset period; the value is the bar size requested.
 _ETF_SCREEN_INTRADAY_INTERVALS = {"1d": "5m", "5d": "15m"}
+# Trading sessions each intraday window covers, whatever the provider returned.
+_ETF_SCREEN_INTRADAY_SESSIONS = {"1d": 1, "5d": 5}
 # Intraday prices move all session, so their cached responses expire sooner.
 _ETF_SCREEN_INTRADAY_TTL_SEC = 2 * 60
 _ETF_SCREEN_EXCHANGE_TZ = "America/New_York"
 
 
-def _etf_screen_intraday_series(intraday_close, daily_close=None, daily_divs=None):
+def _etf_screen_intraday_series(intraday_close, daily_close=None, daily_divs=None, sessions=None):
     """Intraday closes anchored on the prior session's close, plus dividends.
 
     A 1D or 5D return is measured from the close held going into the window, so
@@ -43282,6 +43284,16 @@ def _etf_screen_intraday_series(intraday_close, daily_close=None, daily_divs=Non
     first bar of its ex-date, where the price drop it explains happens, so the
     total-return traces reinvest it at the right moment. Returns
     ``(closes, dividends)`` on one shared index.
+
+    Providers disagree on two things this has to even out:
+    - Timestamps. Yahoo's intraday bars are timezone-aware (New York time);
+      the Tiingo facade returns timezone-naive UTC. Naive bars are therefore
+      read as UTC — left as they were, they printed UTC clock times as New
+      York times and the chart's 09:30-16:00 range breaks hid most of the
+      session.
+    - Window. Yahoo's period="1d"/"5d" is one/five sessions; Tiingo's is ten
+      or fourteen calendar days. ``sessions`` keeps only the last N trading
+      dates so both cover the window the button names.
     """
     empty = pd.Series(dtype=float)
     if intraday_close is None or intraday_close.empty:
@@ -43291,25 +43303,41 @@ def _etf_screen_intraday_series(intraday_close, daily_close=None, daily_divs=Non
         return empty, empty
     bars = bars[~bars.index.duplicated(keep="last")].sort_index()
     index = pd.DatetimeIndex(bars.index)
-    if index.tz is not None:
-        index = index.tz_convert(_ETF_SCREEN_EXCHANGE_TZ)
+    if index.tz is None:
+        index = index.tz_localize("UTC")
+    index = index.tz_convert(_ETF_SCREEN_EXCHANGE_TZ)
     bars.index = index
+
+    # Session trim. The last bar before the kept window is the fallback
+    # baseline when the daily download has no close for that session.
+    prior_intraday = None
+    if sessions:
+        days = sorted({ts.date() for ts in index})
+        keep = set(days[-int(sessions):])
+        kept = [ts.date() in keep for ts in index]
+        dropped = bars[[not flag for flag in kept]]
+        if not dropped.empty:
+            prior_intraday = (dropped.index[-1].date(), float(dropped.iloc[-1]))
+        bars = bars[kept]
+        index = bars.index
     first_day = index[0].date()
 
     has_baseline = False
+    prior = []
     if daily_close is not None and not daily_close.empty:
         prior = [
             (pd.Timestamp(ts).date(), float(value))
             for ts, value in daily_close.dropna().items()
             if pd.Timestamp(ts).date() < first_day and float(value) > 0
         ]
-        if prior:
-            prior_day, prior_close = max(prior, key=lambda item: item[0])
-            stamp = pd.Timestamp(datetime.datetime.combine(prior_day, datetime.time(15, 59)))
-            if index.tz is not None:
-                stamp = stamp.tz_localize(index.tz)
-            bars = pd.concat([pd.Series([prior_close], index=pd.DatetimeIndex([stamp])), bars])
-            has_baseline = True
+    if not prior and prior_intraday and prior_intraday[1] > 0:
+        prior = [prior_intraday]
+    if prior:
+        prior_day, prior_close = max(prior, key=lambda item: item[0])
+        stamp = pd.Timestamp(datetime.datetime.combine(prior_day, datetime.time(15, 59)))
+        stamp = stamp.tz_localize(index.tz)
+        bars = pd.concat([pd.Series([prior_close], index=pd.DatetimeIndex([stamp])), bars])
+        has_baseline = True
 
     divs = pd.Series(0.0, index=bars.index)
     if daily_divs is not None and not daily_divs.empty:
@@ -44232,7 +44260,10 @@ def etf_screen_data():
             if intraday:
                 # price_df holds the intraday bars; div_df is the month of
                 # daily bars that anchors them and carries the dividends.
-                close, divs = _etf_screen_intraday_series(close, div_close, divs_raw)
+                close, divs = _etf_screen_intraday_series(
+                    close, div_close, divs_raw,
+                    sessions=_ETF_SCREEN_INTRADAY_SESSIONS.get(str(period).strip().lower()),
+                )
                 if close.empty:
                     result["warnings"].append(f"{sym}: no intraday data available")
                     continue

@@ -63,6 +63,51 @@ class IntradaySeriesTest(unittest.TestCase):
 
         self.assertEqual(closes.index[0].strftime("%H:%M"), "09:30")
 
+    def test_naive_bars_are_read_as_utc(self):
+        # The Tiingo facade returns timezone-naive UTC; 14:30 UTC is the open.
+        bars = pd.Series(
+            [10.0, 10.1],
+            index=pd.DatetimeIndex(pd.to_datetime(["2026-11-20 14:30", "2026-11-20 20:55"])),
+        )
+
+        closes, _divs = _etf_screen_intraday_series(bars)
+
+        self.assertEqual(
+            [ts.strftime("%Y-%m-%d %H:%M") for ts in closes.index],
+            ["2026-11-20 09:30", "2026-11-20 15:55"],
+        )
+
+    def test_extra_provider_history_is_trimmed_to_the_requested_sessions(self):
+        # Tiingo answers period="1d" with ten calendar days of bars.
+        bars = self._bars(
+            ["2026-11-18 09:30", "2026-11-18 15:55", "2026-11-19 09:30",
+             "2026-11-19 15:55", "2026-11-20 09:30", "2026-11-20 15:55"],
+            [90.0, 91.0, 95.0, 96.0, 99.0, 101.0],
+        )
+        daily = pd.Series(
+            [91.0, 96.5, 101.0],
+            index=pd.to_datetime(["2026-11-18", "2026-11-19", "2026-11-20"]),
+        )
+
+        closes, _divs = _etf_screen_intraday_series(bars, daily, sessions=1)
+
+        self.assertEqual(closes.tolist(), [96.5, 99.0, 101.0])
+        self.assertEqual(closes.index[0].strftime("%Y-%m-%d %H:%M"), "2026-11-19 15:59")
+
+        five_day, _ = _etf_screen_intraday_series(bars, daily, sessions=5)
+        self.assertEqual(len(five_day), 6)  # fewer sessions than asked: all kept
+
+    def test_trimmed_window_falls_back_to_the_prior_intraday_close(self):
+        bars = self._bars(
+            ["2026-11-19 09:30", "2026-11-19 15:55", "2026-11-20 09:30"],
+            [95.0, 96.0, 99.0],
+        )
+
+        closes, _divs = _etf_screen_intraday_series(bars, None, sessions=1)
+
+        self.assertEqual(closes.tolist(), [96.0, 99.0])
+        self.assertEqual(closes.index[0].strftime("%Y-%m-%d %H:%M"), "2026-11-19 15:59")
+
     def test_empty_input_returns_empty_series(self):
         closes, divs = _etf_screen_intraday_series(pd.Series(dtype=float))
         self.assertTrue(closes.empty)

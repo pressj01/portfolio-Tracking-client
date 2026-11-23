@@ -278,7 +278,10 @@ export function chartTableFromTraces(traces = [], { start = null, end = null, un
       if (!key) return
       const day = dayKey(key)
       if ((startKey && day < startKey) || (endKey && day > endKey)) return
-      const value = Number(ys[index])
+      // A gap on the chart (null, e.g. YoY before two years of dividends)
+      // stays an empty cell; Number(null) would export it as 0.
+      const raw = ys[index]
+      const value = raw == null || raw === '' ? NaN : Number(raw)
       if (!valuesByX.has(key)) valuesByX.set(key, new Array(usable.length).fill(null))
       valuesByX.get(key)[column] = Number.isFinite(value) ? round(value, 4) : null
     })

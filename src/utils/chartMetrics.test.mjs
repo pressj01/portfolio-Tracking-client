@@ -127,6 +127,14 @@ test('fallback events come from the window when the history has not loaded', () 
   assert.deepEqual(events.map(e => e.amount), [0.2])
 })
 
+test('export keeps chart gaps as empty cells instead of zeros', () => {
+  const table = chartTableFromTraces([
+    { name: 'SCHD', x: ['2026-01-02', '2026-01-05', '2026-01-06'], y: [null, undefined, 2.5] },
+  ])
+  assert.deepEqual(table.rows, [['2026-01-02', null], ['2026-01-05', null], ['2026-01-06', 2.5]])
+  assert.equal(tableToDelimited(table), 'Date,SCHD\r\n2026-01-02,\r\n2026-01-05,\r\n2026-01-06,2.5')
+})
+
 test('export table merges lines by date and honors the window', () => {
   const table = chartTableFromTraces([
     { name: 'SPY', x: ['2026-01-02', '2026-01-05', '2026-01-06'], y: [0, 1.234567, 2] },
