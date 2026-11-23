@@ -78,6 +78,7 @@ import {
 } from '../utils/priceLevels'
 import { CandlePatternsControl, CandlePatternsStatus, HighLowToggle, OffHighToggle, PatternsControl, PatternsStatus, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
 import { findChartPatterns, sanitizePatternKeys } from '../utils/chartPatterns'
+import { accumulateLiveBars, lastFinite, liveQuotePollMs, LIVE_QUOTE_IDLE_MS, LIVE_QUOTE_POLL_MS, stackAxisTags, tagTextColor } from '../utils/liveQuote'
 import {
   candleBoxX,
   candlePatternHover,
@@ -2150,10 +2151,22 @@ export default function ETFScreen() {
   const yExpandTopNum = Math.max(0, parseInt(yExpandTop) || 0)
   const yExpandBotNum = Math.max(0, parseInt(yExpandBot) || 0)
   const xExpandNum = Math.max(0, parseInt(xExpand) || 0)
-  const [records, setRecords] = useState([])
-  // What the loaded bars are: { ticker, period, interval } with the bar size the
-  // backend actually used, so S/R history can be fetched at the same bar size.
+  // The bars as downloaded. `records` (below) is these with the live quotes folded in.
+  const [loadedRecords, setRecords] = useState([])
+  // What the loaded bars are: { ticker, period, interval, loadId } with the bar size
+  // the backend actually used, so S/R history can be fetched at the same bar size.
+  // loadId counts loads, so a Load resets the chart's zoom but a live tick doesn't.
   const [recordsSource, setRecordsSource] = useState(null)
+  const techLoadCountRef = useRef(0)
+  // Yahoo's latest quote for the loaded ticker, polled while the chart is open.
+  const [liveQuote, setLiveQuote] = useState(null)
+  // The bars with every quote since the last Load folded in ({ loadId, records }),
+  // built up poll by poll so a live bar keeps its open, high and low. Bars from an
+  // earlier load are ignored, so a Load starts again from what it downloaded.
+  const [liveBars, setLiveBars] = useState(null)
+  const records = liveBars && recordsSource && liveBars.loadId === recordsSource.loadId
+    ? liveBars.records
+    : loadedRecords
   const [srHistory, setSrHistory] = useState(null) // { key, records }
   const [tickerName, setTickerName] = useState('')
   const [loading, setLoading] = useState(false)
@@ -2553,7 +2566,8 @@ export default function ETFScreen() {
         if (d.error) { setError(d.error); setRecords([]); setRecordsSource(null); setTickerName(''); setIvData(null) }
         else {
           setRecords(d.records)
-          setRecordsSource({ ticker: requested, period, interval: interval || d.interval || '' })
+          techLoadCountRef.current += 1
+          setRecordsSource({ ticker: requested, period, interval: interval || d.interval || '', loadId: techLoadCountRef.current })
           setTickerName(d.name || d.ticker)
           setIvData(d.iv || null)
         }
@@ -2561,6 +2575,48 @@ export default function ETFScreen() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [ticker, period, interval])
+
+  // Poll Yahoo's quote for the loaded ticker while the chart is showing, so the last
+  // bar, the moving averages and the price tag follow the market. Every 15 s in the
+  // regular session, once a minute outside it, and not at all while the window is
+  // hidden. A quote the server could only answer from cache (stale) is not used.
+  // Each quote is folded into the bars the earlier polls built (see liveBars).
+  const liveTicker = recordsSource?.ticker?.toUpperCase() || ''
+  const liveLoadId = recordsSource?.loadId ?? 0
+  const liveInterval = recordsSource?.interval || ''
+  const liveQuoteWanted = tab !== 'returns' && !!liveTicker && loadedRecords.length > 0
+  useEffect(() => {
+    if (!liveQuoteWanted) return undefined
+    let cancelled = false
+    let timer = null
+    let ctrl = null
+    const schedule = (ms) => { if (!cancelled) timer = setTimeout(poll, ms) }
+    function poll() {
+      if (typeof document !== 'undefined' && document.hidden) { schedule(LIVE_QUOTE_POLL_MS); return }
+      ctrl = new AbortController()
+      pf(`/api/etf-screen/quote?ticker=${encodeURIComponent(liveTicker)}`, { signal: ctrl.signal })
+        .then(r => (r.ok ? r.json() : null))
+        .then(q => {
+          if (cancelled) return
+          if (q && !q.stale && Number.isFinite(q.price) && q.price > 0) {
+            setLiveQuote(prev => (prev && prev.ticker === liveTicker && prev.epoch === q.epoch && prev.price === q.price
+              && prev.day_high === q.day_high && prev.day_low === q.day_low && prev.volume === q.volume
+              ? prev
+              : { ...q, ticker: liveTicker }))
+            setLiveBars(prev => accumulateLiveBars(prev, liveLoadId, loadedRecords, q, liveInterval))
+          }
+          // No quote for this symbol (or Yahoo cooling down): check back slowly.
+          schedule(q && !q.error ? liveQuotePollMs(q) : LIVE_QUOTE_IDLE_MS)
+        })
+        .catch(() => schedule(LIVE_QUOTE_IDLE_MS))
+    }
+    poll()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      ctrl?.abort()
+    }
+  }, [pf, liveQuoteWanted, liveTicker, liveLoadId, liveInterval, loadedRecords])
 
   useEffect(() => {
     if (!requestedTicker || ticker.trim().toUpperCase() !== requestedTicker) return
@@ -2789,9 +2845,9 @@ export default function ETFScreen() {
 
   // ── Technical chart traces ─────────────────────────────────────────────────
 
-  const { mainTraces, subplots, indicatorShapes } = useMemo(() => {
-    if (!records.length) return { mainTraces: [], subplots: [], indicatorShapes: [] }
-    const mains = [], subs = [], shps = []
+  const { mainTraces, maTraces, subplots, indicatorShapes } = useMemo(() => {
+    if (!records.length) return { mainTraces: [], maTraces: [], subplots: [], indicatorShapes: [] }
+    const mains = [], mas = [], subs = [], shps = []
     const extra = { ivData }
     Object.entries(indicators).forEach(([, state]) => {
       if (!state.enabled || !state.visible) return
@@ -2799,10 +2855,12 @@ export default function ETFScreen() {
       if (!template) return
       const result = template.compute(records, state.params, state.color, extra)
       mains.push(...result.mainTraces)
+      // Moving-average studies get a value tag at the chart's right edge.
+      if (template.group === 'Moving Averages') mas.push(...result.mainTraces.filter(t => Array.isArray(t.y)))
       if (result.subTraces.length) subs.push({ title: result.subTitle, traces: result.subTraces })
       if (result.shapes) shps.push(...result.shapes)
     })
-    return { mainTraces: mains, subplots: subs, indicatorShapes: shps }
+    return { mainTraces: mains, maTraces: mas, subplots: subs, indicatorShapes: shps }
   }, [records, indicators, ivData])
 
   // Longer history at the same bar size, so S/R can still show levels on a side the
@@ -2901,10 +2959,13 @@ export default function ETFScreen() {
       traces.push({ x: dates, y: records.map(r => r.close), type: 'scatter', mode: 'lines', name: chartLabel, line: { color: '#2196F3', width: 2 }, xaxis: 'x', yaxis: 'y' })
     }
     const studyNames = new Set(mainTraces.map(trace => trace.name))
-    smaOverlayTraces(records, {
-      skipNames: studyNames,
-      transform: isPct ? toPct : undefined,
-    }).forEach(trace => traces.push({ ...trace, xaxis: 'x', yaxis: 'y' }))
+    // SMA 50 / 200 in dollars (their value tags read these), drawn in % on a % chart.
+    const smaTraces = smaOverlayTraces(records, { skipNames: studyNames })
+    smaTraces.forEach(trace => traces.push({
+      ...trace,
+      y: isPct ? trace.y.map(v => (v == null ? null : toPct(v))) : trace.y,
+      xaxis: 'x', yaxis: 'y',
+    }))
     // Transform indicator overlays for percent mode
     mainTraces.forEach(t => {
       if (isPct && t.y) {
@@ -2979,6 +3040,91 @@ export default function ETFScreen() {
       if (lvlMin < yLo) yLo = lvlMin - span * 0.03
       if (lvlMax > yHi) yHi = lvlMax + span * 0.03
     }
+    const canPlot = (price) => Number.isFinite(price) && (chartScale !== 'log' || price > 0)
+
+    // Price and moving-average tags at the right edge of the price pane, like a
+    // broker's price axis. The price tag is green when the price is up on the day
+    // (from Yahoo's previous close, else the prior bar's close) and red when it is
+    // down; each moving average's tag is filled in its line's color. The bars carry
+    // the live quote, so the tags move with it.
+    const lastClose = lastFinite(closes)
+    const quoteForBars = liveQuote && liveQuote.ticker === String(recordsSource?.ticker || '').toUpperCase()
+      && liveQuote.price === lastClose ? liveQuote : null
+    const priorClose = Number.isFinite(quoteForBars?.previous_close)
+      ? quoteForBars.previous_close
+      : records.length > 1 ? records[records.length - 2].close : null
+    let priceTag = null
+    if (canPlot(lastClose)) {
+      const up = !Number.isFinite(priorClose) || lastClose >= priorClose
+      const hover = [`<b>${chartLabel} ${formatMoney(lastClose)}</b>`]
+      if (Number.isFinite(priorClose) && priorClose > 0) {
+        const chg = lastClose - priorClose
+        hover.push(`${chg >= 0 ? '+' : ''}${formatMoney(chg)} (${chg >= 0 ? '+' : ''}${((chg / priorClose) * 100).toFixed(2)}%) from ${formatMoney(priorClose)}`)
+      }
+      if (quoteForBars?.time) hover.push(`Yahoo quote, ${quoteForBars.time} ET`)
+      priceTag = { value: lastClose, color: up ? '#26A69A' : '#EF5350', text: `<b>${formatMoney(lastClose)}</b>`, hover: hover.join('<br>') }
+    }
+    // One tag per line, at its value on the last bar. Some studies draw a line as
+    // several traces (the Hull MA is a run of green/red segments sharing one name),
+    // so only a trace that reaches the last bar counts, and the last such trace for a
+    // name wins: the segment the line is on now, in its current color.
+    const lastBarDate = dates[dates.length - 1]
+    const maTagsByName = new Map()
+    ;[...smaTraces, ...maTraces].forEach(t => {
+      const xs = Array.isArray(t.x) ? t.x : []
+      if (!xs.length || xs[xs.length - 1] !== lastBarDate) return
+      const value = t.y[t.y.length - 1]
+      if (!canPlot(value)) return
+      const color = t.line?.color || '#9E9E9E'
+      maTagsByName.set(t.name, { value, color, text: `<b>${formatMoney(value)}</b> ${t.name}`, hover: `${t.name}: ${formatMoney(value)}` })
+    })
+    const maTags = [...maTagsByName.values()]
+    // The tag column: a 2px gap off the plot, the widest tag (text, 2px pad and 1px
+    // border each side) and a little air before anything further right.
+    const AXIS_TAG_SHIFT = 2
+    const tagTexts = [priceTag, ...maTags].filter(Boolean).map(t => t.text)
+    const tagGutterPx = tagTexts.length
+      ? AXIS_TAG_SHIFT + Math.ceil(Math.max(...tagTexts.map(t => measureLabelPx(t, LEVEL_LABEL_FONT_SIZE)))) + 6 + 4
+      : 0
+
+    // Gutter label text, shared by the margin estimate just below and the labels
+    // themselves further down.
+    const pctLevelText = (lvl) => `<b>${percentLevelLabel(lvl.pct)}</b> ${formatMoney(lvl.price)}`
+    const pctBaseText = `0% (period high) ${formatMoney(pctBase)}`
+    const srLevelLines = (lvl) => {
+      const kind = lvl.label.startsWith('S') ? 'Support' : 'Resistance'
+      // How far the last close has to fall (support) or rise (resistance) to reach it.
+      const distance = levelDistanceLabel(lvl.pctFromClose)
+      const touches = `${lvl.touches} touch${lvl.touches === 1 ? '' : 'es'}`
+      const lines = [
+        `<b>${lvl.label}</b> ${kind} ${formatMoney(lvl.price)}${lvl.testing ? ' · testing' : ''}`,
+        distance ? `<b>${distance}</b> · ${touches}` : touches,
+      ]
+      if (lvl.fromHistory && lvl.lastDate) lines.push(`last touch ${levelDateLabel(lvl.lastDate)}`)
+      return lines
+    }
+    // Room the price-axis numbers and the "Price" title need left of the plot; the
+    // % level labels go beyond it. The original margin is the floor.
+    const tickReserveFor = (lo, hi) => {
+      const widestTick = isPct
+        ? `-${Math.round(Math.max(Math.abs(lo), Math.abs(hi)))}%`
+        : `$${Math.round(Math.max(Math.abs(lo), Math.abs(hi)))}.0`
+      return Math.max(PLOT_MARGIN.l, Math.ceil(measureLabelPx(widestTick, 12)) + 34)
+    }
+    // Gutter width: gutter shift + label box (text, 2px pad and 1px border each
+    // side) + a little air.
+    const gutterTextPx = (texts) => (texts.length
+      ? LEVEL_GUTTER_SHIFT + Math.ceil(Math.max(...texts.map(t => measureLabelPx(t, LEVEL_LABEL_FONT_SIZE)))) + 8
+      : 0)
+    const pctGutterTexts = pctLevelList.filter(l => canPlot(l.price)).map(pctLevelText)
+    if (pctLevelList.length && pctLevelBase === 'high' && canPlot(pctBase)) pctGutterTexts.push(pctBaseText)
+    const srGutterTexts = srShown
+      ? [...srShown.resistance, ...srShown.support].filter(l => canPlot(l.price)).map(l => srLevelLines(l).join('<br>'))
+      : []
+    // The side margins the gutters will need, so the label geometry below works
+    // from the plot's real width rather than the chart's.
+    const rightMarginPx = PLOT_MARGIN.r + tagGutterPx + gutterTextPx(srGutterTexts)
+    const leftMarginPx = pctGutterTexts.length ? tickReserveFor(yLo, yHi) + gutterTextPx(pctGutterTexts) : PLOT_MARGIN.l
 
     // Hi/Lo labels mark the period's highest and lowest bar: the wicks on a candle
     // chart, the closes on line and % charts, where the closes are what's drawn. Each
@@ -3003,7 +3149,7 @@ export default function ETFScreen() {
     // from the measured plot width (estimated until it has been measured) and price-axis
     // units per px from the current range (estimated on a log axis, which autoranges).
     const paneHeightPx = (chartHeight - PLOT_MARGIN.t - PLOT_MARGIN.b) * (domains[0][1] - domains[0][0])
-    const plotWidthPx = Math.max(200, (techPlotWidth || 1000) - PLOT_MARGIN.l - PLOT_MARGIN.r)
+    const plotWidthPx = Math.max(200, (techPlotWidth || 1000) - leftMarginPx - rightMarginPx)
     const barPx = plotWidthPx / (dates.length + 1.5 + Math.max(xExpandNum, 1))
     const axisUnit = (price) => (chartScale === 'log' ? Math.log10(price) : toAxisY(price))
     const axisUnitsPerPx = () => {
@@ -3046,8 +3192,12 @@ export default function ETFScreen() {
       : 0)
     let offHighStacked = false
     if (offHigh && hiLo) {
-      const underLabel = hiLo.high.index >= offHigh.closeIndex - offHighSpanBars - 0.5
-      offHighStacked = underLabel && hiLoRisePx(axisUnitsPerPx()) < levelLabelHeightPx
+      // The arrow's head is about 8px wide and px per bar is an estimate, so the arrow
+      // counts as under the label from 12px beyond its left end; likewise its tip
+      // counts as clear of the label only once it rises 6px above the label's top.
+      const slackBars = Math.max(0.5, 12 / barPx)
+      const underLabel = hiLo.high.index >= offHigh.closeIndex - offHighSpanBars - slackBars
+      offHighStacked = underLabel && hiLoRisePx(axisUnitsPerPx()) < levelLabelHeightPx + 6
     }
     // The stacked label's bottom, in px above its line: over the High label and its arrow.
     const offHighLiftPx = (upp) => hiLoRisePx(upp) + HILO_ARROW_PX + levelLabelHeightPx + 4
@@ -3216,6 +3366,9 @@ export default function ETFScreen() {
       newshape: { line: { color: drawColor, width: 2, dash: drawDash }, fillcolor: `${drawColor}26`, opacity: 0.8 },
       modebar: { orientation: 'v', bgcolor: 'rgba(30,30,47,0.8)', color: '#aaa', activecolor: '#FFD740' },
       dragmode: drawMode === 'trendline' ? 'drawline' : drawMode === 'hline' ? 'drawline' : drawMode === 'rect' ? 'drawrect' : drawMode === 'path' ? 'drawopenpath' : 'zoom',
+      // Keeps a zoom or pan through live-price redraws; a new Load, chart type or
+      // scale starts from the full view again.
+      uirevision: `tech-${recordsSource?.loadId ?? 0}-${chartType}-${chartScale}`,
     }
     if (hasVolume) {
       layout.yaxis2 = { title: 'Volume', domain: domains[1], gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot' }
@@ -3248,7 +3401,6 @@ export default function ETFScreen() {
       font: { color, size: 11 },
       bgcolor: labelBg, bordercolor: color, borderwidth: 1, borderpad: 2,
     })
-    const canPlot = (price) => Number.isFinite(price) && (chartScale !== 'log' || price > 0)
 
     // Off High: how far the last close is below the period's highest close. A dotted
     // line runs from that bar to the last bar, a dashed drop line at the last bar
@@ -3432,23 +3584,19 @@ export default function ETFScreen() {
     candleAnnotations.sort((a, b) => Math.abs(b.ay) - Math.abs(a.ay))
 
     // Level labels sit in gutters outside the plot area so they never cover bars:
-    // % levels on the left, beyond the price-axis numbers, and S/R on the right. The
-    // margins widen below to fit the longest label on each side.
+    // % levels on the left, beyond the price-axis numbers, and S/R on the right,
+    // beyond the price and moving-average tags. The margins widen below to fit the
+    // longest label on each side.
     const gutterLabel = (price, text, color, side) => ({
       x: side === 'left' ? 0 : 1, xref: 'paper',
       xanchor: side === 'left' ? 'right' : 'left',
-      xshift: side === 'left' ? -(tickReservePx + LEVEL_GUTTER_SHIFT) : LEVEL_GUTTER_SHIFT,
+      xshift: side === 'left' ? -(tickReservePx + LEVEL_GUTTER_SHIFT) : tagGutterPx + LEVEL_GUTTER_SHIFT,
       y: annotY(price), yref: 'y', yanchor: 'middle',
       text, align: side === 'left' ? 'right' : 'left', showarrow: false,
       font: { color, size: LEVEL_LABEL_FONT_SIZE },
       bgcolor: labelBg, bordercolor: color, borderwidth: 1, borderpad: 2,
     })
-    // Room the price-axis numbers and the "Price" title need left of the plot; the
-    // % level labels go beyond it. The original margin is the floor.
-    const widestTick = isPct
-      ? `-${Math.round(Math.max(Math.abs(yLo), Math.abs(yHi)))}%`
-      : `$${Math.round(Math.max(Math.abs(yLo), Math.abs(yHi)))}.0`
-    const tickReservePx = Math.max(layout.margin.l, Math.ceil(measureLabelPx(widestTick, 12)) + 34)
+    const tickReservePx = tickReserveFor(yLo, yHi)
 
     const pctGutter = []
     if (pctLevelList.length) {
@@ -3457,7 +3605,7 @@ export default function ETFScreen() {
           type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(pctBase), y1: toAxisY(pctBase),
           line: { color: '#9E9E9E', width: 1, dash: 'dot' },
         })
-        pctGutter.push(gutterLabel(pctBase, `0% (period high) ${formatMoney(pctBase)}`, '#9E9E9E', 'left'))
+        pctGutter.push(gutterLabel(pctBase, pctBaseText, '#9E9E9E', 'left'))
       }
       pctLevelList.forEach(lvl => {
         if (!canPlot(lvl.price)) return
@@ -3465,7 +3613,7 @@ export default function ETFScreen() {
           type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(lvl.price), y1: toAxisY(lvl.price),
           line: { color: lvl.color, width: 1.5, dash: 'dash' },
         })
-        pctGutter.push(gutterLabel(lvl.price, `<b>${percentLevelLabel(lvl.pct)}</b> ${formatMoney(lvl.price)}`, lvl.color, 'left'))
+        pctGutter.push(gutterLabel(lvl.price, pctLevelText(lvl), lvl.color, 'left'))
       })
     }
 
@@ -3488,15 +3636,7 @@ export default function ETFScreen() {
           type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: toAxisY(lvl.price), y1: toAxisY(lvl.price),
           line: { color, width: 2, dash: lvl.fromHistory ? 'dot' : 'solid' },
         })
-        const kind = lvl.label.startsWith('S') ? 'Support' : 'Resistance'
-        // How far the last close has to fall (support) or rise (resistance) to reach it.
-        const distance = levelDistanceLabel(lvl.pctFromClose)
-        const touches = `${lvl.touches} touch${lvl.touches === 1 ? '' : 'es'}`
-        const lines = [
-          `<b>${lvl.label}</b> ${kind} ${formatMoney(lvl.price)}${lvl.testing ? ' · testing' : ''}`,
-          distance ? `<b>${distance}</b> · ${touches}` : touches,
-        ]
-        if (lvl.fromHistory && lvl.lastDate) lines.push(`last touch ${levelDateLabel(lvl.lastDate)}`)
+        const lines = srLevelLines(lvl)
         srGutterLines = Math.max(srGutterLines, lines.length)
         srGutter.push(gutterLabel(lvl.price, lines.join('<br>'), color, 'right'))
       }
@@ -3504,12 +3644,49 @@ export default function ETFScreen() {
       srShown.support.forEach(l => addSR(l, srLevelColor(l.label, srColors)))
     }
 
-    // Widen each margin by gutter shift + label box (text, 2px pad and 1px border each
-    // side) + a little air. On the right the original margin stays for the vertical
-    // modebar; on the left the labels sit beyond the price-axis numbers.
-    const gutterPx = (labels) => LEVEL_GUTTER_SHIFT + Math.ceil(Math.max(...labels.map(a => measureLabelPx(a.text, LEVEL_LABEL_FONT_SIZE)))) + 8
-    if (srGutter.length) layout.margin = { ...layout.margin, r: layout.margin.r + gutterPx(srGutter) }
+    // Widen each margin to fit its gutter. On the right the original margin stays for
+    // the vertical modebar, past the price tags and the S/R labels; on the left the
+    // labels sit beyond the price-axis numbers.
+    const gutterPx = (labels) => gutterTextPx(labels.map(a => a.text))
+    layout.margin = { ...layout.margin, r: PLOT_MARGIN.r + tagGutterPx + (srGutter.length ? gutterPx(srGutter) : 0) }
     if (pctGutter.length) layout.margin = { ...layout.margin, l: tickReservePx + gutterPx(pctGutter) }
+
+    // The price and moving-average tags, in the column just right of the plot. The
+    // price tag sits at the price; a moving average's tag sits at its value unless it
+    // would overlap another tag, in which case it moves away from the price (staying
+    // on its side) one tag height at a time, kept inside the price pane.
+    const axisTagAnnotations = []
+    if (priceTag || maTags.length) {
+      // A tag is about 20px tall; stacked tags keep a few px apart.
+      const tagHeightPx = LEVEL_LABEL_FONT_SIZE * 1.3 + 10
+      const tagPanePx = (layout.height - layout.margin.t - layout.margin.b) * (priceTop - priceBot)
+      let paneLo = yLo
+      let paneHi = yHi
+      if (chartScale === 'log') {
+        const ys = [...lows, ...highs, ...maTags.map(t => t.value)].filter(v => v > 0)
+        const l = Math.log10(Math.min(...ys))
+        const h = Math.log10(Math.max(...ys))
+        paneLo = l - (h - l) * 0.05
+        paneHi = h + (h - l) * 0.05
+      }
+      const upp = tagPanePx > 0 && paneHi > paneLo ? (paneHi - paneLo) / tagPanePx : 0
+      const priceY = priceTag ? annotY(priceTag.value) : null
+      const maYs = upp > 0
+        ? stackAxisTags(priceY, maTags.map(t => annotY(t.value)), tagHeightPx * upp, paneLo, paneHi)
+        : maTags.map(t => annotY(t.value))
+      const axisTag = (y, tag) => ({
+        x: 1, xref: 'paper', xanchor: 'left', xshift: AXIS_TAG_SHIFT,
+        y, yref: 'y', yanchor: 'middle',
+        text: tag.text, align: 'left', showarrow: false,
+        font: { color: tagTextColor(tag.color), size: LEVEL_LABEL_FONT_SIZE },
+        bgcolor: tag.color, bordercolor: tag.color, borderwidth: 1, borderpad: 2,
+        hovertext: tag.hover,
+        hoverlabel: { bgcolor: '#1e1e2f', bordercolor: tag.color, font: { color: '#e0e0e0', size: 11 } },
+      })
+      maTags.forEach((tag, i) => axisTagAnnotations.push(axisTag(maYs[i], tag)))
+      // Last, so the price tag draws over a moving-average tag it can't avoid.
+      if (priceTag) axisTagAnnotations.push(axisTag(priceY, priceTag))
+    }
 
     // Keep level labels from overlapping: estimate axis units per pixel in the price
     // pane, then push labels in the same column apart by roughly one label height.
@@ -3547,10 +3724,10 @@ export default function ETFScreen() {
     const fibShapes = fibSets.flatMap(f => f.shapes)
     const fibAnnotations = fibSets.flatMap(f => f.annotations)
     layout.shapes = [...regimeShapes, ...levelShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
-    const extraAnnotations = [...levelAnnotations, ...hiLoAnnotations, ...patternAnnotations, ...candleAnnotations, ...pctGutter, ...srGutter, ...fibAnnotations]
+    const extraAnnotations = [...levelAnnotations, ...hiLoAnnotations, ...patternAnnotations, ...candleAnnotations, ...pctGutter, ...srGutter, ...axisTagAnnotations, ...fibAnnotations]
     if (extraAnnotations.length) layout.annotations = [...(layout.annotations || []), ...extraAnnotations]
     return { data: traces, layout, regimeShapes, levelShapes }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, showHighLow, patternsShown, candlesShown, techPlotWidth, isDark])
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, maTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets, showPctLevels, pctLevelKeys, pctLevelBase, pctLevelColors, pctLevelCustom, srShown, srColors, showOffHigh, showHighLow, patternsShown, candlesShown, techPlotWidth, isDark, liveQuote, recordsSource])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 

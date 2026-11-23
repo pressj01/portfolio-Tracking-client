@@ -125,6 +125,7 @@ from diversification import (
 )
 from sector_exposure import register_routes as register_sector_exposure_routes
 from etf_overlap import register_routes as register_etf_overlap_routes
+from live_quote import register_routes as register_live_quote_routes
 from option_iv_history import collect_daily_iv_rank, pending_iv_collector_tickers
 from option_trade_tracker import (
     expired_open_legs,
@@ -65008,6 +65009,7 @@ register_option_dashboard_routes(
 register_diversification_routes(app)
 register_sector_exposure_routes(app)
 register_etf_overlap_routes(app, get_profile_filter=get_profile_filter)
+register_live_quote_routes(app)
 register_option_trade_routes(app, get_profile_filter=get_profile_filter, get_profile_id=get_profile_id)
 register_put_scanner_routes(app)
 register_call_scanner_routes(app)
