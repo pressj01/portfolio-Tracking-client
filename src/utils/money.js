@@ -140,7 +140,13 @@ export function convertPlotlyCurrency(data, layout) {
     const nextAxis = { ...axis }
     if (isMoney) {
       nextAxis.tickprefix = symbol
-      if (Array.isArray(axis.range)) nextAxis.range = axis.range.map(value => Number(value) * rate)
+      // A log axis range is in log10 units, so scaling the data by `rate`
+      // shifts it by log10(rate) rather than multiplying it.
+      if (Array.isArray(axis.range)) {
+        nextAxis.range = axis.type === 'log'
+          ? axis.range.map(value => Number(value) + Math.log10(rate))
+          : axis.range.map(value => Number(value) * rate)
+      }
     }
     if (axis.title) {
       nextAxis.title = typeof axis.title === 'string'
@@ -171,7 +177,11 @@ export function convertPlotlyCurrency(data, layout) {
 
   nextLayout.annotations = Array.isArray(sourceLayout.annotations) ? sourceLayout.annotations.map(annotation => {
     const next = { ...annotation, text: replacePlotlyCurrencyText(annotation.text, symbol, currency) }
-    if (moneyAxes.has(plotlyAxisKey(annotation.yref, 'y')) && typeof next.y === 'number') next.y *= rate
+    const yAxisKey = plotlyAxisKey(annotation.yref, 'y')
+    if (moneyAxes.has(yAxisKey) && typeof next.y === 'number') {
+      if (sourceLayout[yAxisKey]?.type === 'log') next.y += Math.log10(rate)
+      else next.y *= rate
+    }
     if (moneyAxes.has(plotlyAxisKey(annotation.xref, 'x')) && typeof next.x === 'number') next.x *= rate
     return next
   }) : sourceLayout.annotations

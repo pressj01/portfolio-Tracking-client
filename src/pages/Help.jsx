@@ -4691,12 +4691,20 @@ function ETFScreenHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         Switch to the <strong>Returns</strong> tab to analyze historical performance including dividends.
       </p>
+      <HelpScreenshot
+        src="./help-screenshots/etf-screen/returns-tab.png"
+        alt="Returns tab for SCHD compared with VTI and JEPI over 1Y: the metric, Saved, Options and Download buttons above the return modes, the statistics sidebar and summary cards, and the chart with its scale on the right and value badges"
+      />
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Periods</strong> — the Returns tab adds 1D and 5D (intraday bars) and 3Y and 10Y to the period row.</li>
+        <li><strong>Metric, Saved, Options, Download</strong> — the same chart toolbar as ETF Comparer and Stock Comparer, described below.</li>
         <li><strong>Return Mode</strong> — Toggle between Total Return (price + DRIP), Price Only (relative, indexed to the period start), Actual Price (the real dollar share price), Price + Divs, Both, All Three, or All Four.</li>
         <li><strong>Reinvestment Slider</strong> — Set 0–100% of dividends to reinvest. 0% = take all distributions as cash; 100% = reinvest everything. The slider updates results instantly.</li>
         <li><strong>Return Summary Strip</strong> — Shows the period, total return %, price return %, dividend contribution %, annualized return, and max drawdown for the loaded ticker.</li>
         <li><strong>Comparison Statistics</strong> — If comparison tickers are added, a sidebar shows the same metrics for each one side-by-side.</li>
       </ul>
+
+      <ChartToolbarHelp page="analysis" />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Markov Tab</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -11723,6 +11731,106 @@ function AnnualTaxReportHelp() {
   )
 }
 
+// The metric / Saved / Options / Download toolbar is the same on ETF Comparer,
+// Stock Comparer and the Returns tab of Stock & ETF Analysis, so all three
+// help sections share this explanation. `page` is 'etf' | 'stock' | 'analysis'.
+function ChartToolbarHelp({ page }) {
+  const h3 = { color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }
+  const list = { paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }
+  const comparer = page !== 'analysis'
+  return (
+    <>
+      <h3 style={h3}>Chart Toolbar: Metric, Saved, Options and Download</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        {comparer
+          ? 'Three menus sit to the right of the ticker box, and a Download button sits at the right end of the period row inside the chart.'
+          : 'On the Returns tab the four buttons sit in a row above the return-mode buttons.'}
+        {' '}The same toolbar appears on ETF Comparer, Stock Comparer and the Returns tab of Stock &amp; ETF Analysis.
+      </p>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>Metric menu — what the chart plots</h4>
+      <HelpScreenshot
+        src="./help-screenshots/etf-comparer/metric-menu.png"
+        alt="The metric menu open, listing Total Return (%), Total Return, Growth of $10K, Stock Price (%), Stock Price, Dividends (TTM), Dividend Growth and Dividend Growth (YoY)"
+      />
+      <ul style={list}>
+        <li><strong>Total Return (%)</strong> — percentage change with dividends reinvested. The return-mode buttons (Total Return, Price + Divs, Both, All Three, All Four) choose which lines are drawn.</li>
+        <li><strong>Total Return</strong> — the dividend-adjusted share price in dollars. The last point equals today&apos;s price; earlier points are lower by the dividends reinvested since, the way an &quot;adjusted close&quot; works.</li>
+        <li><strong>Growth of $10K</strong> — what $10,000 invested at the start of the visible window would be worth. It follows the return-mode buttons too, and replaces the old % / Index toggle.</li>
+        <li><strong>Stock Price (%)</strong> — share-price change only, dividends ignored (the Price Only mode).</li>
+        <li><strong>Stock Price</strong> — each ticker&apos;s actual share price in dollars (the Actual Price mode).</li>
+        <li><strong>Dividends (TTM)</strong> — dividends paid per share over the trailing twelve months, drawn as steps that move when a payment is made. It uses each ticker&apos;s full payment history, so the first day of the window already counts the year before it. Each date sums the payments the ticker&apos;s own schedule implies (4 for quarterly, 12 for monthly), so a payment that arrives a few days earlier or later than last year does not briefly show five quarters or three.</li>
+        <li><strong>Dividend Growth</strong> — percentage change in the TTM dividend since the start of the visible window.</li>
+        <li><strong>Dividend Growth (YoY)</strong> — the TTM dividend against the TTM one year of payments earlier. It stays blank until a ticker has two years of dividends; a note under the chart names any ticker in that position or with no dividends at all.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Clicking <strong>Price Only</strong> or <strong>Actual Price</strong> on the return-mode row switches the metric to Stock Price (%) or
+        Stock Price; clicking any other mode returns to a percentage chart.
+        {comparer
+          ? ' The Reinvest slider applies to Total Return (%), Growth of $10K and Total Return.'
+          : ' On this page the Reinvest slider applies to the All Three and All Four modes.'}
+      </p>
+      {comparer && (
+        <HelpScreenshot
+          src="./help-screenshots/etf-comparer/dividends-ttm.png"
+          alt="Dividends (TTM) chart for SPY, QQQ and SCHD drawn as step lines, with value badges of $7.58, $3.09 and $1.06 on the right-hand scale"
+          caption="Dividends (TTM): each step is a payment; the badges show the current trailing-twelve-month dividend per share."
+        />
+      )}
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>Right-hand scale and value badges</h4>
+      <ul style={list}>
+        <li>The value scale is on the right-hand side of the chart, and percentage scales show a sign (+20.00%, 0.00%, −5.00%).</li>
+        <li>With <strong>Labels</strong> on, each line ends in a badge in its own color showing its last visible value. Badges are nudged apart so they never sit on top of each other{page === 'stock' ? '; on MAX and ALL each badge adds the CAGR' : ''}.</li>
+        <li>Turn off <strong>Scale on Right</strong> in Options to move the scale back to the left, with its axis title.</li>
+      </ul>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>1D and 5D</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>1D</strong> and <strong>5D</strong> chart intraday bars (5-minute and 15-minute) measured from the previous session&apos;s close,
+        with nights and weekends hidden so the sessions sit side by side. A dividend that goes ex inside the window is counted on
+        the bar where the price drops. Custom dates and range-slider zoom are day-based, so they do not apply to these two windows,
+        and the Sharpe and Sortino columns stay blank because they need daily returns.
+      </p>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>Saved comparisons</h4>
+      <HelpScreenshot
+        src="./help-screenshots/etf-comparer/saved-menu.png"
+        alt="The Saved menu showing Save Current Comparison and two saved comparisons, SPY, QQQ, VOO (Total Return (%), 1Y) and VTI, SCHD, VOO (Dividend Growth, 5Y), each with rename and delete icons"
+      />
+      <ul style={list}>
+        <li><strong>+ Save Current Comparison</strong> saves the tickers with the metric, period, return mode and Reinvest %. It is named after its tickers.</li>
+        <li>Click a saved comparison to load it{page === 'analysis' ? ' (the first ticker becomes the primary ticker and the rest become comparison chips)' : ''}.</li>
+        <li>The pencil renames it (Enter saves, Esc cancels). The trash can asks for <strong>Delete</strong> or <strong>Keep</strong> before removing it.</li>
+        <li>Saved comparisons are stored in the app&apos;s database, so they survive restarts and updates and are part of database backups. Each screen keeps its own list.</li>
+      </ul>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>Options</h4>
+      <HelpScreenshot
+        src="./help-screenshots/etf-comparer/options-menu.png"
+        alt="The Options menu with switches for Labels, Date Picker, Range Slider, Log Scale, Unified Hover and Scale on Right, then Print, View full screen, Download to Excel, Download to CSV, Download to Google Sheets and Download Image"
+      />
+      <ul style={list}>
+        <li><strong>Labels</strong> — the value badges at the end of each line.</li>
+        <li><strong>Date Picker</strong> — shows or hides the start and end date boxes beside the periods.</li>
+        <li><strong>Range Slider</strong> — the strip under the chart; drag its handles to zoom into part of the window.</li>
+        <li><strong>Log Scale</strong> — a logarithmic scale. It turns on by itself (shown as &quot;Auto&quot;) when the visible range is extreme; it does not apply to the dividend metrics.</li>
+        <li><strong>Unified Hover</strong> — one hover box listing every line at the hovered date, highest first.</li>
+        <li><strong>Scale on Right</strong> — the value scale on the right (on by default) or the left.</li>
+        <li><strong>Print</strong> — prints the chart on a white background (the range slider is left off the page).</li>
+        <li><strong>View full screen</strong> — fills the screen with the chart. Press Esc or click <strong>Exit Full Screen</strong> to return.</li>
+        <li><strong>Download to Excel</strong> / <strong>Download to CSV</strong> — the plotted data for the visible window: a Date column, then one column per line, in the chart&apos;s unit (% or $).</li>
+        <li><strong>Download to Google Sheets</strong> — copies the same table and opens a new blank Google Sheet in your browser. Click cell A1 and paste (Ctrl+V); the columns split into cells.</li>
+        <li><strong>Download Image</strong> — a PNG of the chart as shown on screen.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Download</strong> button offers the same four downloads in one click.
+        {comparer && <> <strong>Full Width »</strong> beside the page title removes the page&apos;s width limit so the chart can use the whole window.</>}
+      </p>
+    </>
+  )
+}
+
 function ETFComparerHelp() {
   return (
     <div>
@@ -11733,9 +11841,10 @@ function ETFComparerHelp() {
         It is designed for a direct head-to-head comparison of ETF return history, yield, distribution patterns, and fund characteristics.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-comparer/return-chart.jpg" alt="ETF Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
-      </div>
+      <HelpScreenshot
+        src="./help-screenshots/etf-comparer/return-chart.png"
+        alt="ETF Comparer comparing SPY, QQQ and SCHD over 1Y: the metric, Saved and Options menus beside the ticker box, the period row with date boxes and a Download button, and the Total Return (%) chart with its scale on the right and a colored value badge at the end of each line"
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -11746,13 +11855,14 @@ function ETFComparerHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Period</strong> — 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y, 10Y, or MAX.</li>
+        <li><strong>Period</strong> — 1D, 5D, 1M, 3M, 6M, YTD, 1Y, 2Y, 3Y, 4Y, 5Y, 10Y, MAX (the window all selected ETFs share) or ALL (every ETF&apos;s full history). The date boxes beside the periods set a custom window.</li>
+        <li><strong>Metric</strong> — the menu beside the ticker box picks what is plotted: Total Return (%), Total Return, Growth of $10K, Stock Price (%), Stock Price, Dividends (TTM), Dividend Growth or Dividend Growth (YoY). See the toolbar section below.</li>
         <li><strong>Return Mode</strong> — choose Total Return (price + reinvested dividends), Price Only (relative share-price change, indexed to the period start), Actual Price (each ETF's real dollar share price, not a relative return), Price + Dividends (cash), Both (total and price), All Three, or All Four traces per ticker.</li>
         <li><strong>Reinvestment %</strong> — adjustable slider from 0% (all dividends taken as cash) to 100% (all dividends reinvested). Only applies to the blended trace in applicable modes.</li>
-        <li><strong>% / Index toggle</strong> — show returns as a percentage gain/loss from period start, or as an indexed value starting at 100.</li>
-        <li><strong>Labels</strong> — toggle end-of-period return labels on the chart.</li>
-        <li><strong>Range slider</strong> — drag to zoom into a specific date range within the selected period.</li>
+        <li><strong>Refresh</strong> — fetches fresh market data instead of the copy cached for the last few minutes.</li>
       </ul>
+
+      <ChartToolbarHelp page="etf" />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -11931,9 +12041,10 @@ function StockComparerHelp() {
         It mirrors the ETF Comparer layout but uses stock-specific columns and fundamentals.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/stock-comparer/return-chart.jpg" alt="Stock Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
-      </div>
+      <HelpScreenshot
+        src="./help-screenshots/stock-comparer/return-chart.png"
+        alt="Stock Comparer comparing AAPL, MSFT and KO over 5Y: the metric, Saved and Options menus beside the ticker box and the Cumulative Total Return (%) chart with its scale on the right and value badges at the end of each line"
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -11944,9 +12055,11 @@ function StockComparerHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Identical controls to ETF Comparer: period selector (1M–MAX), return mode (Total Return, Price Only, Actual Price, Price + Divs, Both, All Three, All Four),
-        reinvestment % slider, % / index toggle, end labels, and a date range slider. Actual Price charts each stock&apos;s real dollar share price instead of a relative return.
+        Identical controls to ETF Comparer: period selector (1D–ALL), the metric menu, return mode (Total Return, Price Only, Actual Price, Price + Divs, Both, All Three, All Four),
+        and the reinvestment % slider. Actual Price charts each stock&apos;s real dollar share price instead of a relative return.
       </p>
+
+      <ChartToolbarHelp page="stock" />
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/stock-comparer/distribution-history.jpg" alt="Stock Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>

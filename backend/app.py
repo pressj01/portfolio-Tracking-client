@@ -43264,6 +43264,72 @@ def _series_return(values, default=None):
     return round(float(values[-1]) - 100, 2)
 
 
+# 1D and 5D comparer windows chart intraday bars instead of one or five daily
+# closes. Keyed by the preset period; the value is the bar size requested.
+_ETF_SCREEN_INTRADAY_INTERVALS = {"1d": "5m", "5d": "15m"}
+# Intraday prices move all session, so their cached responses expire sooner.
+_ETF_SCREEN_INTRADAY_TTL_SEC = 2 * 60
+_ETF_SCREEN_EXCHANGE_TZ = "America/New_York"
+
+
+def _etf_screen_intraday_series(intraday_close, daily_close=None, daily_divs=None):
+    """Intraday closes anchored on the prior session's close, plus dividends.
+
+    A 1D or 5D return is measured from the close held going into the window, so
+    the last daily close before the first intraday bar is prepended as the
+    100-point baseline (stamped 15:59 of that session, which keeps it beside
+    the next open once overnight hours are hidden). Each dividend lands on the
+    first bar of its ex-date, where the price drop it explains happens, so the
+    total-return traces reinvest it at the right moment. Returns
+    ``(closes, dividends)`` on one shared index.
+    """
+    empty = pd.Series(dtype=float)
+    if intraday_close is None or intraday_close.empty:
+        return empty, empty
+    bars = intraday_close.dropna().astype(float)
+    if bars.empty:
+        return empty, empty
+    bars = bars[~bars.index.duplicated(keep="last")].sort_index()
+    index = pd.DatetimeIndex(bars.index)
+    if index.tz is not None:
+        index = index.tz_convert(_ETF_SCREEN_EXCHANGE_TZ)
+    bars.index = index
+    first_day = index[0].date()
+
+    has_baseline = False
+    if daily_close is not None and not daily_close.empty:
+        prior = [
+            (pd.Timestamp(ts).date(), float(value))
+            for ts, value in daily_close.dropna().items()
+            if pd.Timestamp(ts).date() < first_day and float(value) > 0
+        ]
+        if prior:
+            prior_day, prior_close = max(prior, key=lambda item: item[0])
+            stamp = pd.Timestamp(datetime.datetime.combine(prior_day, datetime.time(15, 59)))
+            if index.tz is not None:
+                stamp = stamp.tz_localize(index.tz)
+            bars = pd.concat([pd.Series([prior_close], index=pd.DatetimeIndex([stamp])), bars])
+            has_baseline = True
+
+    divs = pd.Series(0.0, index=bars.index)
+    if daily_divs is not None and not daily_divs.empty:
+        bar_days = [ts.date() for ts in bars.index]
+        start_at = 1 if has_baseline else 0
+        for ts, amount in daily_divs.items():
+            try:
+                amount = float(amount or 0)
+            except (TypeError, ValueError):
+                continue
+            if amount <= 0:
+                continue
+            ex_day = pd.Timestamp(ts).date()
+            for position in range(start_at, len(bar_days)):
+                if bar_days[position] == ex_day:
+                    divs.iloc[position] += amount
+                    break
+    return bars, divs
+
+
 def _normalized_drawdown(values):
     if not values:
         return None
@@ -43793,6 +43859,13 @@ def etf_screen_data():
     # Comparers can prioritize the visible chart/table, then enrich full
     # distribution histories and issuer data through Security Research.
     defer_details = request.args.get("defer_details", "0").lower() in {"1", "true", "yes"}
+    # 1D/5D return windows chart intraday bars (the technical chart's OHLCV
+    # mode picks its own interval and is unaffected).
+    intraday_interval = (
+        None if use_range or mode == "ohlcv"
+        else _ETF_SCREEN_INTRADAY_INTERVALS.get(str(period or "").strip().lower())
+    )
+    intraday = bool(intraday_interval)
 
     if not ticker:
         return jsonify(error="ticker is required"), 400
@@ -43801,7 +43874,11 @@ def etf_screen_data():
     # (including the Refresh button's nonce) is the key, so a manual refresh
     # naturally misses and re-fetches.
     _resp_cache_key = request.full_path
-    _cached_resp = _cache_get(_ETF_SCREEN_DATA_CACHE, _resp_cache_key, _ETF_SCREEN_DATA_TTL_SEC)
+    _cached_resp = _cache_get(
+        _ETF_SCREEN_DATA_CACHE,
+        _resp_cache_key,
+        _ETF_SCREEN_INTRADAY_TTL_SEC if intraday else _ETF_SCREEN_DATA_TTL_SEC,
+    )
     if _cached_resp is not None:
         return jsonify(_cached_resp)
 
@@ -43933,6 +44010,8 @@ def etf_screen_data():
 
     # ---------- Return modes ----------
     frac = reinvest_pct / 100.0
+    if intraday:
+        interval = intraday_interval
     try:
         # Return-mode and reinvestment changes use the same market history.
         # Cache that raw download independently of the rendered response so
@@ -43946,9 +44025,23 @@ def etf_screen_data():
         market_frames = _cache_get(
             _ETF_SCREEN_MARKET_CACHE,
             _market_key,
-            _ETF_SCREEN_MARKET_TTL_SEC,
+            _ETF_SCREEN_INTRADAY_TTL_SEC if intraday else _ETF_SCREEN_MARKET_TTL_SEC,
         )
-        if market_frames is None:
+        if market_frames is None and intraday:
+            # Intraday bars for the chart; a month of daily bars supplies the
+            # prior-session baseline close and any dividend that went ex
+            # inside the window.
+            price_df = _chunked_yf_download(
+                yahoo_symbols, interval=interval, period=period,
+                auto_adjust=False, prepost=False, progress=False,
+            )
+            div_df = _chunked_yf_download(
+                yahoo_symbols, interval="1d", period="1mo",
+                auto_adjust=False, actions=True, progress=False,
+            )
+            if not price_df.empty and _download_has_dividend_actions(div_df):
+                _cache_set(_ETF_SCREEN_MARKET_CACHE, _market_key, (div_df, price_df))
+        elif market_frames is None:
             # Download daily data with dividends for return calcs.
             div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
 
@@ -44021,6 +44114,9 @@ def etf_screen_data():
             # This array isn't reordered by that sort, so callers that need
             # to know which symbol is the primary ticker should use it.
             "requested_symbols": list(symbols),
+            # Intraday (1D/5D) dates carry a time of day: "YYYY-MM-DD HH:MM".
+            "intraday": intraday,
+            "interval": interval,
         }
         saved_fund_data = {}
         try:
@@ -44133,13 +44229,25 @@ def etf_screen_data():
             divs_raw = _extract_col(div_df, "Dividends", dl_sym)
             divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
 
+            if intraday:
+                # price_df holds the intraday bars; div_df is the month of
+                # daily bars that anchors them and carries the dividends.
+                close, divs = _etf_screen_intraday_series(close, div_close, divs_raw)
+                if close.empty:
+                    result["warnings"].append(f"{sym}: no intraday data available")
+                    continue
+                div_close = close
+                divs_raw = divs_raw[divs_raw > 0] if not divs_raw.empty else pd.Series(dtype=float)
+
             # Also re-fetch per ticker when the batch download ignored
             # actions=True (otherwise every return trace degrades to
             # price-only) or collapsed this symbol to a single row — Yahoo
             # transiently returns just the live-quote date for one ticker in
             # a batch, which would pin a broken one-point series in the
             # caches and rebase MAX comparisons to a zero-width window.
-            if len(div_close) <= 1 or not _download_has_dividend_actions(div_df):
+            # Intraday windows never fall back: the daily history would
+            # replace the bars the 1D/5D chart is for.
+            if not intraday and (len(div_close) <= 1 or not _download_has_dividend_actions(div_df)):
                 try:
                     fallback_kwargs = _range_kwargs()
                     fallback_anchor = fallback_kwargs.pop("anchor_on_or_before", None)
@@ -44178,7 +44286,8 @@ def etf_screen_data():
             # coarser interval (weekly/monthly) whose length differs from the
             # daily return traces, causing misaligned chart data.
             base = div_close if not div_close.empty else close
-            dates = [d.strftime("%Y-%m-%d") for d in base.index]
+            date_format = "%Y-%m-%d %H:%M" if intraday else "%Y-%m-%d"
+            dates = [d.strftime(date_format) for d in base.index]
             # Retain the prior close as the 100-point baseline, but present it
             # at the requested boundary just like StockAnalysis. The source
             # close can be Friday while the displayed 6M boundary is Saturday.
@@ -44270,8 +44379,10 @@ def etf_screen_data():
             # Max drawdown for the selected return path, not price-only.
             mdd = _normalized_drawdown(drawdown_basis)
             risk_basis = pd.Series(drawdown_basis, index=base.index[:len(drawdown_basis)]).dropna()
-            sharpe = _sharpe(risk_basis)
-            sortino = _sortino(risk_basis)
+            # Both ratios annualize daily returns; intraday bars would inflate
+            # them by the number of bars in a session.
+            sharpe = None if intraday else _sharpe(risk_basis)
+            sortino = None if intraday else _sortino(risk_basis)
             # Regress the fund's price returns against the best-fitting benchmark
             # for a real beta (Yahoo returns 0.0/None for many option-income
             # ETFs), plus the alpha over that same benchmark and the approximate
@@ -44501,7 +44612,9 @@ def etf_screen_data():
                 "category": saved.get("etf_category") or saved.get("etf_strategy") or info.get("category"),
                 "issuer": saved.get("provider") or info.get("fundFamily"),
                 "inception_date": _fmt_yf_date(info.get("fundInceptionDate")),
-                "return_1y": saved.get("change_1y") if saved.get("change_1y") is not None else total_ret,
+                # A 1D/5D move is not a one-year return, so intraday windows
+                # leave the column to the saved figure alone.
+                "return_1y": saved.get("change_1y") if saved.get("change_1y") is not None or intraday else total_ret,
                 "return_annualized": ann,
                 "max_drawdown": mdd,
                 "sharpe": sharpe,
@@ -44527,6 +44640,293 @@ def etf_screen_tickers():
     ).fetchall()
     conn.close()
     return jsonify(tickers=[dict(r) for r in rows])
+
+
+_COMPARER_SYMBOL_RE = re.compile(r"^[A-Z0-9.^=\-/]{1,20}$")
+
+
+def _comparer_symbols(values, limit=30):
+    """Upper-cased, de-duplicated ticker list from a list or comma string."""
+    if isinstance(values, str):
+        values = re.split(r"[\s,]+", values)
+    out = []
+    for value in values or []:
+        symbol = str(value or "").strip().upper()
+        if symbol and _COMPARER_SYMBOL_RE.match(symbol) and symbol not in out:
+            out.append(symbol)
+        if len(out) >= limit:
+            break
+    return out
+
+
+@app.route("/api/etf-screen/dividends")
+def etf_screen_dividends():
+    """Full per-share dividend history for the comparer's dividend charts.
+
+    Dividends (TTM) and the two dividend-growth views need the payments from
+    before the charted window (a TTM value on its first day sums the prior
+    year), which the window's own price download does not contain. Amounts are
+    Yahoo's split-adjusted figures, the same basis the return traces use.
+    """
+    symbols = _comparer_symbols(request.args.get("tickers", ""))
+    if not symbols:
+        return jsonify(error="tickers is required"), 400
+    series = {}
+    for sym in symbols:
+        dl_sym = _yahoo_symbol_for_ticker(sym)
+        try:
+            divs = _cached_yf_dividends(_yf_ticker(dl_sym), dl_sym)
+        except Exception:
+            divs = pd.Series(dtype=float)
+        dates, amounts = [], []
+        if divs is not None and len(divs):
+            positive = divs[divs > 0].dropna().sort_index()
+            for ts, amount in positive.items():
+                try:
+                    dates.append(pd.Timestamp(ts).strftime("%Y-%m-%d"))
+                    amounts.append(round(float(amount), 6))
+                except Exception:
+                    continue
+        series[sym] = {"dates": dates, "amounts": amounts}
+    return jsonify(series=series, requested_symbols=symbols)
+
+
+# ── Saved comparisons (ETF / Stock comparers, Stock & ETF Analysis) ───────────
+
+_SAVED_COMPARISON_SCOPES = {"etf", "stock", "analysis"}
+
+
+def _ensure_saved_comparisons_table(conn):
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS saved_comparisons (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               scope TEXT NOT NULL,
+               name TEXT NOT NULL,
+               symbols TEXT NOT NULL,
+               metric TEXT,
+               settings TEXT,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+
+
+def _saved_comparison_row(row):
+    def _json(value, default):
+        try:
+            parsed = json.loads(value) if value else default
+        except Exception:
+            parsed = default
+        return parsed if isinstance(parsed, type(default)) else default
+
+    return {
+        "id": row["id"],
+        "scope": row["scope"],
+        "name": row["name"],
+        "symbols": _json(row["symbols"], []),
+        "metric": row["metric"],
+        "settings": _json(row["settings"], {}),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _saved_comparison_fields(data, partial=False):
+    """Validated column values from a request body, or (None, error)."""
+    fields = {}
+    if "symbols" in data or not partial:
+        symbols = _comparer_symbols(data.get("symbols"))
+        if not symbols:
+            return None, "symbols must list at least one ticker"
+        fields["symbols"] = json.dumps(symbols)
+        fields["_symbols"] = symbols
+    if "name" in data or not partial:
+        name = str(data.get("name") or "").strip()[:120]
+        if not name and "_symbols" in fields:
+            name = ", ".join(fields["_symbols"])[:120]
+        if not name:
+            return None, "name cannot be blank"
+        fields["name"] = name
+    if "metric" in data or not partial:
+        fields["metric"] = str(data.get("metric") or "").strip()[:40] or None
+    if "settings" in data or not partial:
+        settings = data.get("settings") or {}
+        if not isinstance(settings, dict):
+            return None, "settings must be an object"
+        encoded = json.dumps(settings)
+        if len(encoded) > 4000:
+            return None, "settings is too large"
+        fields["settings"] = encoded
+    fields.pop("_symbols", None)
+    return fields, None
+
+
+@app.route("/api/saved-comparisons", methods=["GET"])
+def list_saved_comparisons():
+    scope = request.args.get("scope", "").strip().lower()
+    if scope not in _SAVED_COMPARISON_SCOPES:
+        return jsonify(error="unknown scope"), 400
+    conn = get_connection()
+    try:
+        _ensure_saved_comparisons_table(conn)
+        rows = conn.execute(
+            "SELECT * FROM saved_comparisons WHERE scope = ? ORDER BY id DESC",
+            (scope,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return jsonify(items=[_saved_comparison_row(row) for row in rows])
+
+
+@app.route("/api/saved-comparisons", methods=["POST"])
+def create_saved_comparison():
+    data = request.get_json(silent=True) or {}
+    scope = str(data.get("scope") or "").strip().lower()
+    if scope not in _SAVED_COMPARISON_SCOPES:
+        return jsonify(error="unknown scope"), 400
+    fields, error = _saved_comparison_fields(data)
+    if error:
+        return jsonify(error=error), 400
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    conn = get_connection()
+    try:
+        _ensure_saved_comparisons_table(conn)
+        cursor = conn.execute(
+            """INSERT INTO saved_comparisons
+                   (scope, name, symbols, metric, settings, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (scope, fields["name"], fields["symbols"], fields["metric"],
+             fields["settings"], now, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM saved_comparisons WHERE id = ?", (cursor.lastrowid,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify(item=_saved_comparison_row(row)), 201
+
+
+@app.route("/api/saved-comparisons/<int:comparison_id>", methods=["PUT"])
+def update_saved_comparison(comparison_id):
+    data = request.get_json(silent=True) or {}
+    fields, error = _saved_comparison_fields(data, partial=True)
+    if error:
+        return jsonify(error=error), 400
+    if not fields:
+        return jsonify(error="nothing to update"), 400
+    fields["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    conn = get_connection()
+    try:
+        _ensure_saved_comparisons_table(conn)
+        cursor = conn.execute(
+            f"UPDATE saved_comparisons SET {assignments} WHERE id = ?",
+            (*fields.values(), comparison_id),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return jsonify(error="saved comparison not found"), 404
+        row = conn.execute(
+            "SELECT * FROM saved_comparisons WHERE id = ?", (comparison_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify(item=_saved_comparison_row(row))
+
+
+@app.route("/api/saved-comparisons/<int:comparison_id>", methods=["DELETE"])
+def delete_saved_comparison(comparison_id):
+    conn = get_connection()
+    try:
+        _ensure_saved_comparisons_table(conn)
+        cursor = conn.execute("DELETE FROM saved_comparisons WHERE id = ?", (comparison_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    if cursor.rowcount == 0:
+        return jsonify(error="saved comparison not found"), 404
+    return jsonify(ok=True)
+
+
+def _chart_export_cell(value):
+    """Spreadsheet value for one exported chart cell: date, number or text."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value if math.isfinite(value) else None
+    text = str(value)
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            parsed = datetime.datetime.strptime(text, fmt)
+            return parsed if fmt.endswith("%M") else parsed.date()
+        except ValueError:
+            continue
+    return text
+
+
+@app.route("/api/export/chart-xlsx", methods=["POST"])
+def export_chart_xlsx():
+    """Turn a chart's plotted data into an .xlsx workbook.
+
+    The comparer charts build their table client-side (it is exactly what is
+    drawn); this only writes it out, since the browser has no Excel writer.
+    """
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    data = request.get_json(silent=True) or {}
+    columns = [str(c)[:120] for c in (data.get("columns") or [])][:200]
+    rows = data.get("rows") or []
+    if not columns or not isinstance(rows, list):
+        return jsonify(error="columns and rows are required"), 400
+    if len(rows) > 250000:
+        return jsonify(error="too many rows"), 400
+    sheet_name = re.sub(r"[\[\]\*\?/\\:]", " ", str(data.get("sheet") or "Chart Data")).strip()[:31] or "Chart Data"
+    filename = re.sub(r"[^A-Za-z0-9._ -]+", "-", str(data.get("filename") or "chart-data")).strip(" .-") or "chart-data"
+    if not filename.lower().endswith(".xlsx"):
+        filename += ".xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    ws.append(columns)
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    for row in rows:
+        if not isinstance(row, (list, tuple)):
+            continue
+        ws.append([_chart_export_cell(value) for value in list(row)[:len(columns)]])
+    number_format = str(data.get("number_format") or "#,##0.00")[:40]
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            if isinstance(cell.value, datetime.datetime):
+                cell.number_format = "yyyy-mm-dd hh:mm"
+            elif isinstance(cell.value, datetime.date):
+                cell.number_format = "yyyy-mm-dd"
+            elif isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                cell.number_format = number_format
+    for index, header in enumerate(columns, 1):
+        ws.column_dimensions[get_column_letter(index)].width = max(len(header) + 2, 14)
+    ws.freeze_panes = "B2"
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 # ── Dividend Calendar ──────────────────────────────────────────────────────────

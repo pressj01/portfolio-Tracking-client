@@ -7,11 +7,36 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { comparerActualCloses, comparerEndLabelAxisY, comparerLogHoverData, comparerReturnModeLabel, comparerSeriesColor, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerSeriesColor } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
+import { buildComparerChart } from '../utils/comparerChart'
+import {
+  applyLineModeChoice,
+  chartMetricInfo,
+  chartTableFromTraces,
+  exportFileStem,
+  isDividendMetric,
+  metricAllowsReinvest,
+  normalizeChartMetric,
+  returnModeForMetric,
+  RETURN_LINE_MODES,
+} from '../utils/chartMetrics'
+import {
+  ChartDownloadMenu,
+  ChartMetricMenu,
+  ChartOptionsMenu,
+  ChartToolStatus,
+  SavedComparisonsMenu,
+  chartDownloadActions,
+  chartOptionGroups,
+  useChartTools,
+} from '../components/ChartToolbar'
+import { readStoredFlag, storeFlag } from '../utils/chartActions'
 
 const PERIODS = [
+  { value: '1d', label: '1D' },
+  { value: '5d', label: '5D' },
   { value: '1mo', label: '1M' },
   { value: '3mo', label: '3M' },
   { value: '6mo', label: '6M' },
@@ -35,17 +60,6 @@ const RETURN_MODES = [
   { value: 'all3', label: 'All Three' },
   { value: 'all4', label: 'All Four' },
 ]
-
-const DIMMED_COLOR = '#7c8595'
-
-const TRACE_STYLES = {
-  price: { dash: 'dot', width: 2, label: 'Price' },
-  actual: { dash: 'solid', width: 2.6, label: 'Actual Price' },
-  pricediv: { dash: 'longdash', width: 2.4, label: 'Price + Divs' },
-  blend: { dash: 'dash', width: 2.4, label: '' },
-  total: { dash: 'solid', width: 3, label: 'Total Return' },
-  drip: { dash: 'solid', width: 3, label: '100% DRIP' },
-}
 
 const COLUMNS = [
   { key: 'symbol', label: 'Symbol', locked: true },
@@ -150,20 +164,6 @@ function visibleDateRange(data, range, useRange = false) {
   ]
 }
 
-function firstVisibleIndex(dates, start, end) {
-  if (!dates?.length) return -1
-  return dates.findIndex(d => (!start || dateKey(d) >= start) && (!end || dateKey(d) <= end))
-}
-
-function lastVisibleIndex(dates, start, end) {
-  if (!dates?.length) return -1
-  for (let i = dates.length - 1; i >= 0; i--) {
-    const d = dateKey(dates[i])
-    if ((!start || d >= start) && (!end || d <= end)) return i
-  }
-  return -1
-}
-
 function yearsAgoDateKey(endDate, years) {
   const dt = new Date(`${dateKey(endDate)}T00:00:00Z`)
   if (Number.isNaN(dt.getTime())) return null
@@ -242,13 +242,23 @@ export default function StockComparer() {
   const [input, setInput] = useState('')
   const inputRef = useRef(null)
   const [period, setPeriod] = useState('6mo')
-  const [returnMode, setReturnMode] = useState('total')
+  // The metric menu picks the y-axis (Total Return (%), Growth of $10K,
+  // Dividends (TTM), ...); lineMode picks which return lines a percentage or
+  // growth metric draws (Total Return, Both, All Three, ...).
+  const [metric, setMetric] = useState('total_pct')
+  const [lineMode, setLineMode] = useState('total')
+  const returnMode = returnModeForMetric(metric, lineMode)
   const [reinvest, setReinvest] = useState(100)
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
-  const [returnPctMode, setReturnPctMode] = useState(true)
   const [returnScalePreference, setReturnScalePreference] = useState('auto')
   const [showRangeSlider, setShowRangeSlider] = useState(true)
+  const [showDatePicker, setShowDatePicker] = useState(() => readStoredFlag('comparer-date-picker', true))
+  const [scaleRight, setScaleRight] = useState(() => readStoredFlag('comparer-scale-right', true))
+  const [fullWidth, setFullWidth] = useState(() => readStoredFlag('comparer-full-width', false))
+  const [divHistory, setDivHistory] = useState({})
+  const graphDivRef = useRef(null)
+  const chartCardRef = useRef(null)
   const [returnXRange, setReturnXRange] = useState([null, null])
   // Committed custom data window from the date inputs (overrides `period` on the
   // server). Separate from returnXRange (the volatile range-slider zoom, which
@@ -286,6 +296,9 @@ export default function StockComparer() {
   useEffect(() => {
     try { localStorage.setItem('stockcomparer-columns', JSON.stringify(visibleColumns)) } catch { /* ignore */ }
   }, [visibleColumns])
+  useEffect(() => { storeFlag('comparer-date-picker', showDatePicker) }, [showDatePicker])
+  useEffect(() => { storeFlag('comparer-scale-right', scaleRight) }, [scaleRight])
+  useEffect(() => { storeFlag('comparer-full-width', fullWidth) }, [fullWidth])
 
   const resetReturnRange = useCallback(() => {
     setFetchRange(null)
@@ -368,6 +381,24 @@ export default function StockComparer() {
   }, [pf, tickers, period, refreshNonce, fetchRange])
 
   useEffect(() => { load() }, [load])
+
+  // The dividend metrics need each ticker's full payment history (a TTM value
+  // on the window's first day sums the year before it), fetched only once a
+  // dividend metric is chosen. Refresh drops it so it is fetched again.
+  useEffect(() => {
+    if (!isDividendMetric(metric)) return undefined
+    const missing = tickers.map(normalize).filter(sym => sym && !divHistory[sym])
+    if (!missing.length) return undefined
+    let cancelled = false
+    pf(`/api/etf-screen/dividends?tickers=${encodeURIComponent(missing.join(','))}`)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled || d.error || !d.series) return
+        setDivHistory(prev => ({ ...prev, ...d.series }))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [pf, metric, tickers, divHistory])
 
   useEffect(() => {
     resetReturnRange()
@@ -475,15 +506,24 @@ export default function StockComparer() {
   }, [])
 
   const symbols = useMemo(() => tickers.map(normalize).filter(Boolean), [tickers])
-  // Price-only style modes ignore reinvestment; every mode that draws a
-  // Total Return line honors the slider via the bundled blend trace.
-  const isActualPrice = returnMode === 'actual'
-  const reinvestDisabled = ['price', 'pricediv', 'actual'].includes(returnMode)
+  // Reinvest applies wherever a reinvested line is drawn (Total Return lines,
+  // Growth of $10K, Total Return price); price-only views ignore it.
+  const reinvestDisabled = !metricAllowsReinvest(metric, lineMode)
+  const metricInfo = chartMetricInfo(metric)
+  const chooseMetric = useCallback((next) => {
+    setMetric(normalizeChartMetric(next))
+  }, [])
+  const chooseLineMode = useCallback((mode) => {
+    const choice = applyLineModeChoice(mode, metric)
+    setMetric(choice.metric)
+    if (choice.lineMode) setLineMode(choice.lineMode)
+  }, [metric])
   const refreshComparison = useCallback(() => {
     if (!symbols.length) return
     const currentReinvest = reinvestRef.current
     setRefreshNonce(value => value + 1)
     setReinvest(currentReinvest)
+    setDivHistory({})
   }, [symbols.length])
 
   const compareTitle = useMemo(() => {
@@ -492,303 +532,100 @@ export default function StockComparer() {
     return `Compare Stocks: ${symbols.join(' vs. ')}`
   }, [symbols])
 
+  // 1D/5D charts plot time-stamped intraday bars; a custom date window or a
+  // range-slider zoom is day-granular, so it does not apply to them.
+  const intraday = Boolean(data?.intraday)
+
   // The window the chart is actually showing — typed dates, a range-slider
   // zoom, or the full data bounds. Shared with the yield-on-cost chart so both
   // rebase on the same first visible close.
   const visibleWindow = useMemo(() => {
     const fallbackRange = dataDateBounds[0] && dataDateBounds[1] ? dataDateBounds : null
-    return visibleDateRange(data, normalizeReturnRange(returnXRange) || fallbackRange, true)
-  }, [data, returnXRange, dataDateBounds])
+    const zoom = intraday ? null : normalizeReturnRange(returnXRange)
+    return visibleDateRange(data, zoom || fallbackRange, true)
+  }, [data, returnXRange, dataDateBounds, intraday])
+
+  // The export reads whatever chart is current when a menu item is clicked.
+  const latestChartRef = useRef(null)
+  const getChartTable = useCallback(() => {
+    const current = latestChartRef.current
+    if (!current?.chart?.data?.length) return null
+    return chartTableFromTraces(current.chart.data, {
+      start: current.intraday ? null : current.visibleWindow[0],
+      end: current.intraday ? null : current.visibleWindow[1],
+      unit: current.chart.unit,
+    })
+  }, [])
+  const chartTools = useChartTools({
+    graphDivRef,
+    cardRef: chartCardRef,
+    getTable: getChartTable,
+    fileStem: exportFileStem(['stock-compare', ...symbols, metricInfo.label.replace(/[()$%]/g, ''), new Date().toISOString().slice(0, 10)]),
+    sheetName: metricInfo.label,
+    printTitle: `${compareTitle} — ${metricInfo.label}`,
+  })
+  const { isFullscreen } = chartTools
+  const chartHeight = isFullscreen ? chartTools.fullscreenHeight - 70 : 560
 
   const chart = useMemo(() => {
-    if (!data?.series) return { data: [], layout: {}, logScaleActive: false }
-    const traces = []
-    const annotations = []
-    const labelCandidates = []
-    const visibleYValues = []
-    const allDates = Object.values(data.series).flatMap(s => s.dates || [])
-    const minDate = allDates.reduce((a, b) => a < b ? a : b)
-    const maxDate = allDates.reduce((a, b) => a > b ? a : b)
-    const activeReturnRange = normalizeReturnRange(returnXRange)
-    const fallbackRange = dataDateBounds[0] && dataDateBounds[1] ? dataDateBounds : null
-    const effectiveReturnRange = activeReturnRange || fallbackRange
-    // Rebasing, end labels and y-scaling always follow the active window (typed
-    // dates or slider) so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = visibleWindow
-    const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
-    // The blend line is rebuilt locally from the live slider value, so the
-    // chart tracks the Reinvest % instantly without another data fetch.
-    const effectiveReinvest = Number(reinvest)
-    const autoLogScale = shouldUseComparerLogScale(
-      data.series,
+    const activeReturnRange = intraday ? null : normalizeReturnRange(returnXRange)
+    return buildComparerChart({
+      data,
       symbols,
+      metric,
       returnMode,
-      visibleStart,
-      visibleEnd,
-      effectiveReinvest,
-    )
-    const logScaleActive = returnScalePreference === 'log'
-      || (returnScalePreference === 'auto' && autoLogScale)
-
-    // When a symbol is highlighted, draw it last so its line sits on top of
-    // the dimmed ones instead of being covered by them.
-    const orderedSymbols = highlightedSymbol && symbols.includes(highlightedSymbol)
-      ? [...symbols.filter(s => s !== highlightedSymbol), highlightedSymbol]
-      : symbols
-    orderedSymbols.forEach((sym) => {
-      const idx = symbols.indexOf(sym)
-      const dates = data.series[sym]?.dates || []
-      const isDimmed = highlightedSymbol && highlightedSymbol !== sym
-      const baseColor = isDimmed ? DIMMED_COLOR : comparerSeriesColor(idx)
-
-      if (isActualPrice) {
-        const series = data.series[sym] || {}
-        const values = comparerActualCloses(series, data.profiles?.[sym]?.price)
-        if (!values.length) return
-        const style = TRACE_STYLES.actual
-        const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
-        dates.forEach((date, i) => {
-          const value = Number(values[i])
-          if (!Number.isFinite(value)) return
-          const keyDate = dateKey(date)
-          if ((!visibleStart || keyDate >= visibleStart) && (!visibleEnd || keyDate <= visibleEnd)) {
-            visibleYValues.push(value)
-          }
-        })
-        traces.push({
-          x: dates,
-          y: values,
-          type: 'scatter',
-          mode: 'lines',
-          name: `${sym} (${style.label})`,
-          line: { color: baseColor, width: style.width, dash: style.dash },
-          hovertemplate: `<b>${sym}</b><br>%{x}<br>Share Price: $%{y:.2f}<extra></extra>`,
-        })
-        if (showReturnLabels && labelIdx >= 0) {
-          const last = Number(values[labelIdx])
-          if (Number.isFinite(last)) {
-            labelCandidates.push({
-              y: last,
-              text: formatMoney(last, { convert: false }),
-              color: baseColor,
-            })
-          }
-        }
-        return
-      }
-
-      const traceMap = data.series[sym]?.traces || {}
-      const divRatio = data.series[sym]?.div_ratio
-      selectComparerTraces(traceMap, returnMode, effectiveReinvest).forEach(([key, rawValues]) => {
-        // Rebuild the blend line locally for the live slider % (exact, not an
-        // approximation) so dragging Reinvest never refetches the chart.
-        const values = key === 'blend'
-          ? (computeBlendTrace(traceMap.price, divRatio, effectiveReinvest / 100) || rawValues)
-          : rawValues
-        // In Total Return / Both, a partial reinvest shows the blend as the
-        // headline line — render it solid like full DRIP (no dashes) and only
-        // tint the color so it still reads as this fund's line.
-        const blendAsTotal = key === 'blend' && ['total', 'both'].includes(returnMode)
-        const color = blendAsTotal && !isDimmed
-          ? shiftColorForReinvest(baseColor, effectiveReinvest)
-          : baseColor
-        const style = blendAsTotal ? TRACE_STYLES.total : (TRACE_STYLES[key] || TRACE_STYLES.total)
-        const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
-        const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
-        const base = Number(baseIdx >= 0 ? values?.[baseIdx] : values?.[0])
-        const normalized = base ? values.map(v => v / base * 100) : values
-        const returnValues = normalized.map(v => Number(v) - 100)
-        const y = logScaleActive ? normalized : (returnPctMode ? returnValues : normalized)
-        dates.forEach((date, i) => {
-          const value = Number(y[i])
-          if (!Number.isFinite(value)) return
-          const keyDate = dateKey(date)
-          if ((!visibleStart || keyDate >= visibleStart) && (!visibleEnd || keyDate <= visibleEnd)) {
-            visibleYValues.push(value)
-          }
-        })
-        const label = key === 'blend' ? `${effectiveReinvest}% Reinvest` : style.label
-        const name = label ? `${sym} (${label})` : sym
-        traces.push({
-          x: dates,
-          y,
-          type: 'scatter',
-          mode: 'lines',
-          name,
-          customdata: logScaleActive
-            ? comparerLogHoverData(returnValues, normalized)
-            : returnValues,
-          line: { color, width: style.width, dash: style.dash },
-          hovertemplate: logScaleActive && returnPctMode
-            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata[0]}<br>Growth of $100: %{customdata[1]}<extra></extra>`
-            // No leading "+" in the format: Plotly 3 prepends "~" to it, d3
-            // rejects the result, and the raw float is printed instead.
-            : returnPctMode
-              ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:,.2f}%<extra></extra>`
-            : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:,.2f}<extra></extra>`,
-        })
-        if (showReturnLabels && labelIdx >= 0) {
-          const last = y[labelIdx]
-          const lastReturn = returnValues[labelIdx]
-          if (Number.isFinite(Number(last))) {
-            const visibleBaseIdx = baseIdx >= 0 ? baseIdx : 0
-            const startDate = new Date(`${dateKey(dates[visibleBaseIdx])}T00:00:00Z`)
-            const endDate = new Date(`${dateKey(dates[labelIdx])}T00:00:00Z`)
-            const years = (endDate - startDate) / (365.25 * 24 * 60 * 60 * 1000)
-            const endingValue = Number(values?.[labelIdx])
-            const cagr = (
-              ['max', 'all'].includes(period)
-              && Number.isFinite(years)
-              && years >= 1
-              && Number.isFinite(endingValue)
-              && base > 0
-              && endingValue > 0
-            )
-              ? (Math.pow(endingValue / base, 1 / years) - 1) * 100
-              : null
-            labelCandidates.push({
-              y: Number(last),
-              text: returnPctMode
-                ? `${pct(lastReturn)}${cagr == null ? '' : `<br>${pct(cagr)} CAGR`}`
-                : number(last),
-              color,
-            })
-          }
-        }
-      })
+      reinvest,
+      returnScalePreference,
+      showReturnLabels,
+      returnHoverMode,
+      showRangeSlider,
+      activeRange: activeReturnRange,
+      fallbackRange: dataDateBounds[0] && dataDateBounds[1] ? dataDateBounds : null,
+      visibleWindow,
+      titleWindow: intraday ? null : (activeReturnRange || normalizeReturnRange(fetchRange)),
+      highlightedSymbol,
+      divHistory,
+      scaleRight,
+      period,
+      variant: 'stock',
+      height: chartHeight,
     })
-    if (showReturnLabels && labelCandidates.length) {
-      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
-      const scaleY = value => comparerEndLabelAxisY(value, logScaleActive)
-      const axisBaseY = axisBase == null ? [] : [scaleY(axisBase)]
-      const yMin = Math.min(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
-      const yMax = Math.max(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
-      const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
-      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (isActualPrice ? 0.35 : (returnPctMode ? 0.45 : 1.5)))
-      const sortedLabels = [...labelCandidates]
-        .map(label => ({ ...label, scaledY: scaleY(label.y) }))
-        .sort((a, b) => a.scaledY - b.scaledY)
+  }, [data, symbols, metric, returnMode, reinvest, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol, visibleWindow, divHistory, scaleRight, period, intraday, chartHeight])
+  useEffect(() => {
+    latestChartRef.current = { chart, visibleWindow, intraday }
+  }, [chart, visibleWindow, intraday])
+  const rememberGraphDiv = useCallback((_figure, graphDiv) => { graphDivRef.current = graphDiv }, [])
 
-      sortedLabels.forEach((label, index) => {
-        label.displayY = index === 0
-          ? label.scaledY
-          : Math.max(label.scaledY, sortedLabels[index - 1].displayY + minLabelGap)
-      })
+  const loadSavedComparison = useCallback((item) => {
+    const settings = item.settings || {}
+    setTickers(uniqueTickers(item.symbols))
+    setHighlightedSymbol('')
+    setMetric(normalizeChartMetric(item.metric))
+    if (RETURN_LINE_MODES.includes(settings.lineMode)) setLineMode(settings.lineMode)
+    if (PERIODS.some(p => p.value === settings.period)) setPeriod(settings.period)
+    if (Number.isFinite(Number(settings.reinvest))) setReinvest(Math.max(0, Math.min(100, Number(settings.reinvest))))
+    resetReturnRange()
+  }, [resetReturnRange])
+  const describeSaved = useCallback((item) => {
+    const periodLabel = PERIODS.find(p => p.value === item.settings?.period)?.label
+    return [chartMetricInfo(item.metric).label, periodLabel].filter(Boolean).join(' · ')
+  }, [])
 
-      const overflow = sortedLabels[sortedLabels.length - 1].displayY - yMax
-      if (overflow > 0) {
-        for (let index = sortedLabels.length - 1; index >= 0; index -= 1) {
-          const nextY = index === sortedLabels.length - 1
-            ? sortedLabels[index].displayY - overflow
-            : Math.min(sortedLabels[index].displayY, sortedLabels[index + 1].displayY - minLabelGap)
-          sortedLabels[index].displayY = Math.max(yMin, nextY)
-        }
-      }
-
-      sortedLabels.forEach(label => {
-        annotations.push({
-          x: 1,
-          xref: 'paper',
-          // Log-axis annotations use log10 range coordinates in Plotly.
-          y: label.displayY,
-          text: label.text,
-          showarrow: false,
-          xanchor: 'left',
-          xshift: 8,
-          font: { color: label.color, size: 11 },
-        })
-      })
-    }
-    if (!isActualPrice) {
-      const baselineY = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
-      traces.push({
-        x: [minDate, maxDate],
-        y: [baselineY, baselineY],
-        type: 'scatter',
-        mode: 'lines',
-        name: 'Baseline',
-        line: { color: '#6b7280', width: 1, dash: 'dash' },
-        showlegend: false,
-        hoverinfo: 'skip',
-      })
-    }
-    // Constrain the y-axis to the visible date window. Plotly autoranges y over
-    // all trace data (not just the x-visible portion), so without this the curve
-    // stays scaled to the full series and looks misaligned after zooming.
-    let yAxisRange = null
-    let visibleAbsMax = 0
-    if (visibleYValues.length) {
-      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
-      const labelYs = labelCandidates.map(l => l.y)
-      const rangeValues = axisBase == null
-        ? [...visibleYValues, ...labelYs]
-        : [axisBase, ...visibleYValues, ...labelYs]
-      const yLo = Math.min(...rangeValues)
-      const yHi = Math.max(...rangeValues)
-      if (logScaleActive) {
-        const logLo = Math.log10(Math.max(yLo, Number.MIN_VALUE))
-        const logHi = Math.log10(Math.max(yHi, Number.MIN_VALUE))
-        const pad = Math.max((logHi - logLo) * 0.08, 0.04)
-        yAxisRange = [logLo - pad, logHi + pad]
-      } else {
-        visibleAbsMax = Math.max(Math.abs(yLo), Math.abs(yHi))
-        const pad = Math.max((yHi - yLo) * 0.08, 1)
-        yAxisRange = [yLo - pad, yHi + pad]
-      }
-    }
-    const returnModeLabel = comparerReturnModeLabel(returnMode)
-    const baseTitle = titleWindow
-      ? `${isActualPrice ? returnModeLabel : `Cumulative ${returnModeLabel}`} — ${titleWindow[0]} → ${titleWindow[1]}`
-      : (isActualPrice ? `${returnModeLabel} ($)` : `Cumulative ${returnModeLabel} (%)`)
-    const titleText = `${baseTitle}${logScaleActive ? ' — Log Scale' : ''}`
-    const largeReturnDisplay = !isActualPrice && !logScaleActive && returnPctMode && visibleAbsMax >= 1000
-    return {
-      data: traces,
-      logScaleActive,
-      layout: {
-        template: 'plotly_dark',
-        paper_bgcolor: '#1e1e2f',
-        plot_bgcolor: '#1e1e2f',
-        font: { color: '#e0e0e0', size: 12 },
-        title: { text: titleText, x: 0.5, font: { size: 20, color: '#e0e0e0' } },
-        height: 560,
-        margin: {
-          l: largeReturnDisplay ? 115 : 55,
-          r: showReturnLabels && ['max', 'all'].includes(period) ? 145 : 70,
-          t: 70,
-          b: 55,
-        },
-        hovermode: returnHoverMode,
-        legend: { orientation: 'h', x: 0, y: 1.08 },
-        yaxis: {
-          type: logScaleActive ? 'log' : 'linear',
-          title: isActualPrice
-            ? (logScaleActive ? 'Share Price ($) (log scale)' : 'Share Price ($)')
-            : logScaleActive
-              ? 'Growth of $100 (log scale)'
-              : (returnPctMode ? `Cumulative ${returnModeLabel} (%)` : 'Normalized Return (100 = start)'),
-          tickprefix: isActualPrice ? '$' : '',
-          ticksuffix: !isActualPrice && !logScaleActive && returnPctMode ? '%' : '',
-          tickformat: logScaleActive && !isActualPrice ? ',.0f' : (returnPctMode && !isActualPrice ? (largeReturnDisplay ? ',.0f' : ',.2f') : ',.2f'),
-          separatethousands: true,
-          gridcolor: '#333',
-          zerolinecolor: '#555',
-          showspikes: true,
-          spikemode: 'across',
-          ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
-        },
-        xaxis: {
-          type: 'date',
-          gridcolor: '#333',
-          rangeslider: showRangeSlider ? { visible: true, bgcolor: '#252540', bordercolor: '#555', borderwidth: 1, thickness: 0.08 } : { visible: false },
-          ...(effectiveReturnRange ? { range: effectiveReturnRange, autorange: false } : {}),
-          showspikes: true,
-          spikemode: 'across',
-        },
-        annotations,
-      },
-    }
-  }, [data, symbols, period, reinvest, returnMode, returnPctMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol, visibleWindow])
+  const optionToggles = [
+    { key: 'labels', label: 'Labels', checked: showReturnLabels, onChange: setShowReturnLabels, title: 'Value badges at the end of each line' },
+    { key: 'datepicker', label: 'Date Picker', checked: showDatePicker, onChange: setShowDatePicker, title: 'Start and end date inputs beside the periods' },
+    { key: 'slider', label: 'Range Slider', checked: showRangeSlider, onChange: (v) => { setShowRangeSlider(v); resetReturnRange() } },
+    {
+      key: 'log',
+      label: chart.logScaleActive && returnScalePreference === 'auto' ? 'Log Scale (Auto)' : 'Log Scale',
+      checked: chart.logScaleActive,
+      disabled: isDividendMetric(metric),
+      onChange: (v) => setReturnScalePreference(v ? 'log' : 'linear'),
+      title: returnScalePreference === 'auto' && chart.logScaleActive ? 'Turned on automatically because the visible range is extreme' : 'Logarithmic growth scale',
+    },
+    { key: 'hover', label: 'Unified Hover', checked: returnHoverMode === 'x unified', onChange: (v) => setReturnHoverMode(v ? 'x unified' : 'closest'), title: 'One hover box listing every line at the hovered date' },
+    { key: 'side', label: 'Scale on Right', checked: scaleRight, onChange: setScaleRight, title: 'Show the value scale on the right-hand side of the chart' },
+  ]
 
   const yieldOnCostEntries = useMemo(() => symbols
     .map((sym, idx) => ({
@@ -901,12 +738,21 @@ export default function StockComparer() {
       .map(label => periodByLabel.get(label) || { label, returns: {} })
   }, [averageData])
 
+  const customRangeActive = !intraday && !!(returnXRange[0] || returnXRange[1] || fetchRange)
+
   return (
-    <div className="page etf-comparer-page">
+    <div className={`page etf-comparer-page${fullWidth ? ' etfc-full-width' : ''}`}>
       <div className="etfc-breadcrumb">Home » Stocks » Compare</div>
       <div className="etfc-title-row">
         <h1>{compareTitle}</h1>
-        <span>Full Width »</span>
+        <button
+          type="button"
+          className="etfc-width-toggle"
+          onClick={() => setFullWidth(v => !v)}
+          title={fullWidth ? 'Return to the standard page width' : 'Use the full window width'}
+        >
+          {fullWidth ? '« Standard Width' : 'Full Width »'}
+        </button>
       </div>
 
       <div className="etfc-toolbar">
@@ -938,35 +784,15 @@ export default function StockComparer() {
           />
           <button className="btn btn-sm" onClick={addTickers}>Add</button>
         </div>
-        <div className="etfc-periods">
-          <select className="etfc-select" value={returnMode} onChange={e => setReturnMode(e.target.value)}>
-            {RETURN_MODES.map(m => (
-              <option key={m.value} value={m.value} title={m.value === 'actual' ? "Chart each stock's actual share price in dollars, not a relative return" : undefined}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-          {PERIODS.map(p => {
-            // A custom date window overrides the period, so don't show a period
-            // button as selected while one is active.
-            const customActive = !!(returnXRange[0] || returnXRange[1] || fetchRange)
-            return (
-              <button key={p.value} className={`btn btn-sm${period === p.value && !customActive ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); resetReturnRange() }}>{p.label}</button>
-            )
-          })}
-          {dataDateBounds[0] && (
-            <>
-              <span className="etfc-date-sep">|</span>
-              <input type="date" className="range-date-input" value={rangeStart} max={rangeEnd}
-                onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
-              <span className="range-date-arrow">→</span>
-              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart}
-                onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
-              {(returnXRange[0] || returnXRange[1] || fetchRange) && (
-                <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
-              )}
-            </>
-          )}
+        <div className="ctb-bar">
+          <ChartMetricMenu metric={metric} onChange={chooseMetric} />
+          <SavedComparisonsMenu
+            scope="stock"
+            current={{ symbols, metric, settings: { period, lineMode, reinvest } }}
+            onLoad={loadSavedComparison}
+            describe={describeSaved}
+          />
+          <ChartOptionsMenu toggles={optionToggles} groups={chartOptionGroups(chartTools)} />
         </div>
       </div>
 
@@ -981,12 +807,12 @@ export default function StockComparer() {
       {loading && <div className="etfc-loading">Loading stock comparison...</div>}
 
       <div className="etfc-return-controls">
-        <div className="etfc-mode-bar">
+        <div className="etfc-mode-bar" title="Which return lines a percentage or growth chart draws">
           {RETURN_MODES.map(m => (
             <button
               key={m.value}
-              className={`btn btn-sm${returnMode === m.value ? ' btn-active' : ''}`}
-              onClick={() => setReturnMode(m.value)}
+              className={`btn btn-sm${returnMode === m.value && !isDividendMetric(metric) && metric !== 'total_value' ? ' btn-active' : ''}`}
+              onClick={() => chooseLineMode(m.value)}
               title={m.value === 'actual' ? "Chart each stock's actual share price in dollars, not a relative return" : undefined}
             >{m.label}</button>
           ))}
@@ -999,20 +825,7 @@ export default function StockComparer() {
         <div className="etfc-chart-options">
           <span>Chart</span>
           <button type="button" className="btn btn-sm" onClick={refreshComparison} disabled={!symbols.length || loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
-          <button
-            className={`btn btn-sm${returnPctMode && !isActualPrice ? ' btn-active' : ''}`}
-            onClick={() => setReturnPctMode(v => !v)}
-            disabled={isActualPrice}
-            title={isActualPrice ? 'Return % applies to relative return modes, not actual share prices' : undefined}
-          >Return %</button>
-          <button
-            className={`btn btn-sm${chart.logScaleActive ? ' btn-active' : ''}`}
-            onClick={() => setReturnScalePreference(chart.logScaleActive ? 'linear' : 'log')}
-            title={returnScalePreference === 'auto' && chart.logScaleActive ? 'Automatically enabled because the visible return range is extreme' : 'Use a logarithmic growth scale'}
-          >Log Scale{chart.logScaleActive && returnScalePreference === 'auto' ? ' (Auto)' : ''}</button>
-          <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
-          <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
-          <button className={`btn btn-sm${showRangeSlider ? ' btn-active' : ''}`} onClick={() => { setShowRangeSlider(v => !v); resetReturnRange() }}>Range Slider</button>
+          <span className="etfc-metric-note">{metricInfo.desc}</span>
         </div>
       </div>
 
@@ -1021,15 +834,48 @@ export default function StockComparer() {
           Add stocks above to build a comparison.
         </section>
       ) : (
-        <section className="etfc-section etfc-chart-card">
+        <section className="etfc-section etfc-chart-card ctb-chart-card" ref={chartCardRef}>
+          <div className="etfc-range-bar">
+            <div className="etfc-periods">
+              {PERIODS.map(p => (
+                // A custom date window overrides the period, so don't show a
+                // period button as selected while one is active.
+                <button key={p.value} className={`btn btn-sm${period === p.value && !customRangeActive ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); resetReturnRange() }}>{p.label}</button>
+              ))}
+              {showDatePicker && dataDateBounds[0] && (
+                <>
+                  <span className="etfc-date-sep">|</span>
+                  <input type="date" className="range-date-input" value={rangeStart} max={rangeEnd}
+                    onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
+                  <span className="range-date-arrow">→</span>
+                  <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart}
+                    onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
+                  {customRangeActive && (
+                    <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="ctb-bar">
+              {isFullscreen && (
+                <button type="button" className="ctb-trigger" onClick={chartTools.fullscreen}>Exit Full Screen</button>
+              )}
+              <ChartDownloadMenu actions={chartDownloadActions(chartTools)} disabled={!chart.data.length} />
+            </div>
+          </div>
+          <ChartToolStatus status={chartTools.status} onDismiss={chartTools.clearStatus} />
+          {chart.notes?.length > 0 && <div className="etfc-chart-notes">{chart.notes.join(' ')}</div>}
           <Plot
             data={chart.data}
             layout={themedPlotlyLayout(chart.layout, isDark)}
             config={{ responsive: true, displayModeBar: true, displaylogo: false }}
             useResizeHandler
-            style={{ width: '100%', height: 560 }}
+            style={{ width: '100%', height: chartHeight }}
             rankUnifiedHover
+            onInitialized={rememberGraphDiv}
+            onUpdate={rememberGraphDiv}
             onRelayout={(e) => {
+              if (intraday) return
               if (e?.['xaxis.autorange']) { setReturnXRange([null, null]); return }
               const range = e?.['xaxis.range'] || (e?.['xaxis.range[0]'] && e?.['xaxis.range[1]'] ? [e['xaxis.range[0]'], e['xaxis.range[1]']] : null)
               const next = normalizeReturnRange(range)
