@@ -11,12 +11,37 @@ import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   comparerActualCloses,
-  comparerEndLabelAxisY,
   comparerLogHoverData,
   comparerStatsForMode,
   selectComparerTraces,
   shouldUseComparerLogScale,
 } from '../utils/comparerTraces'
+import {
+  GROWTH_START_VALUE,
+  RETURN_LINE_MODES,
+  applyLineModeChoice,
+  chartMetricInfo,
+  chartTableFromTraces,
+  dividendEvents,
+  dividendMetricSeries,
+  exportFileStem,
+  isDividendMetric,
+  normalizeChartMetric,
+  returnModeForMetric,
+  totalReturnDollarSeries,
+} from '../utils/chartMetrics'
+import { INTRADAY_RANGEBREAKS, placeEndLabelBadges, signedPct, signedPercentTicks } from '../utils/comparerChart'
+import { readStoredFlag, storeFlag } from '../utils/chartActions'
+import {
+  ChartDownloadMenu,
+  ChartMetricMenu,
+  ChartOptionsMenu,
+  ChartToolStatus,
+  SavedComparisonsMenu,
+  chartDownloadActions,
+  chartOptionGroups,
+  useChartTools,
+} from '../components/ChartToolbar'
 // Shared with the Put Selling Scanner's price popup so both screens draw the
 // same MACD, RSI, and moving averages for a given ticker.
 import {
@@ -1936,7 +1961,17 @@ const PERIODS = [
   { value: '1y', label: '1Y' }, { value: '2y', label: '2Y' },
   { value: '5y', label: '5Y' }, { value: 'max', label: 'Max' },
 ]
-const RETURN_PERIODS = [...PERIODS, { value: 'all', label: 'All' }]
+// The Returns tab adds intraday 1D/5D windows (time-stamped bars) and the 3Y
+// and 10Y windows the comparers offer.
+const RETURN_PERIODS = [
+  { value: '1d', label: '1D' }, { value: '5d', label: '5D' },
+  { value: '1mo', label: '1M' }, { value: '3mo', label: '3M' },
+  { value: '6mo', label: '6M' }, { value: 'ytd', label: 'YTD' },
+  { value: '1y', label: '1Y' }, { value: '2y', label: '2Y' },
+  { value: '3y', label: '3Y' }, { value: '5y', label: '5Y' },
+  { value: '10y', label: '10Y' }, { value: 'max', label: 'Max' },
+  { value: 'all', label: 'All' },
+]
 
 const RETURN_MODES = [
   { value: 'total', label: 'Total Return', desc: 'Full dividend-reinvested total return' },
@@ -2366,7 +2401,17 @@ export default function ETFScreen() {
   }, [tab, markovResult, records])
 
   // Returns tab state
-  const [returnMode, setReturnMode] = useState('total')
+  // The metric menu picks the y-axis (Total Return (%), Growth of $10K,
+  // Dividends (TTM), ...); lineMode picks which return lines a percentage or
+  // growth metric draws (Total Return, Both, All Three, ...).
+  const [metric, setMetric] = useState('total_pct')
+  const [lineMode, setLineMode] = useState('total')
+  const returnMode = returnModeForMetric(metric, lineMode)
+  const [showDatePicker, setShowDatePicker] = useState(() => readStoredFlag('comparer-date-picker', true))
+  const [scaleRight, setScaleRight] = useState(() => readStoredFlag('comparer-scale-right', true))
+  const [divHistory, setDivHistory] = useState({})
+  const returnChartCardRef = useRef(null)
+  const [savedLoadNonce, setSavedLoadNonce] = useState(0)
   const [reinvest, setReinvest] = useState(100)
   const [debouncedReinvest, setDebouncedReinvest] = useState(100)
   const [compareTickers, setCompareTickers] = useState([])
@@ -2375,7 +2420,6 @@ export default function ETFScreen() {
   const [returnLoading, setReturnLoading] = useState(false)
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
-  const [returnPctMode, setReturnPctMode] = useState(true)
   const [returnScalePreference, setReturnScalePreference] = useState('auto')
   const [showRangeSlider, setShowRangeSlider] = useState(false)
   const [returnXRange, setReturnXRange] = useState([null, null])
@@ -2619,6 +2663,42 @@ export default function ETFScreen() {
   // Keep a stable handle to the latest loadReturns so date-input handlers can
   // trigger a re-fetch without capturing a stale closure.
   loadReturnsRef.current = loadReturns
+
+  useEffect(() => { storeFlag('comparer-date-picker', showDatePicker) }, [showDatePicker])
+  useEffect(() => { storeFlag('comparer-scale-right', scaleRight) }, [scaleRight])
+
+  // A saved comparison sets the tickers, period and metric in one render and
+  // bumps this nonce; the effect then runs with loadReturns already rebuilt
+  // from those settings.
+  useEffect(() => {
+    if (savedLoadNonce) loadReturnsRef.current?.()
+  }, [savedLoadNonce])
+
+  // The dividend metrics need each ticker's full payment history (a TTM value
+  // on the window's first day sums the year before it), fetched only once a
+  // dividend metric is chosen.
+  const returnSymbolsKey = (returnData?.requested_symbols || []).join(',')
+  useEffect(() => {
+    if (tab !== 'returns' || !isDividendMetric(metric) || !returnSymbolsKey) return undefined
+    const missing = returnSymbolsKey.split(',').filter(sym => sym && !divHistory[sym])
+    if (!missing.length) return undefined
+    let cancelled = false
+    pf(`/api/etf-screen/dividends?tickers=${encodeURIComponent(missing.join(','))}`)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled || d.error || !d.series) return
+        setDivHistory(prev => ({ ...prev, ...d.series }))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [pf, tab, metric, returnSymbolsKey, divHistory])
+
+  const chooseMetric = useCallback((next) => setMetric(normalizeChartMetric(next)), [])
+  const chooseLineMode = useCallback((mode) => {
+    const choice = applyLineModeChoice(mode, metric)
+    setMetric(choice.metric)
+    if (choice.lineMode) setLineMode(choice.lineMode)
+  }, [metric])
 
   // The complete trace bundle makes mode changes local. Only a custom
   // reinvestment percentage needs the server to recompute the blend trace.
@@ -3476,18 +3556,51 @@ export default function ETFScreen() {
 
   // The window the return chart is actually showing — typed dates, a
   // range-slider zoom, or the full data bounds. Shared with the yield-on-cost
-  // chart so both rebase on the same first visible close.
+  // chart so both rebase on the same first visible close. 1D/5D charts plot
+  // time-stamped intraday bars, where a day-granular zoom does not apply.
+  const intradayReturns = Boolean(returnData?.intraday)
   const returnVisibleWindow = useMemo(() => {
     const fallbackRange = returnDataDateBounds[0] && returnDataDateBounds[1] ? returnDataDateBounds : null
-    return getVisibleDateRange(returnData, normalizeReturnRange(returnXRange) || fallbackRange, true)
-  }, [returnData, returnXRange, returnDataDateBounds])
+    const zoom = intradayReturns ? null : normalizeReturnRange(returnXRange)
+    return getVisibleDateRange(returnData, zoom || fallbackRange, true)
+  }, [returnData, returnXRange, returnDataDateBounds, intradayReturns])
 
-  const { data: returnPlotData, layout: returnPlotLayout, logScaleActive: returnLogScaleActive } = useMemo(() => {
-    if (!returnData?.series) return { data: [], layout: {}, logScaleActive: false }
+  // Options / Download tools for the return chart. The export reads whatever
+  // chart is current when a menu item is clicked.
+  const latestReturnChartRef = useRef(null)
+  const getReturnChartTable = useCallback(() => {
+    const current = latestReturnChartRef.current
+    if (!current?.chart?.data?.length) return null
+    return chartTableFromTraces(current.chart.data, {
+      start: current.intraday ? null : current.visibleWindow[0],
+      end: current.intraday ? null : current.visibleWindow[1],
+      unit: current.chart.unit,
+    })
+  }, [])
+  const returnMetricInfo = chartMetricInfo(metric)
+  const returnSymbolsForTools = [ticker.trim().toUpperCase(), ...compareTickers].filter(Boolean)
+  const returnChartTools = useChartTools({
+    graphDivRef: returnPlotElementRef,
+    cardRef: returnChartCardRef,
+    getTable: getReturnChartTable,
+    fileStem: exportFileStem(['analysis', ...returnSymbolsForTools, returnMetricInfo.label.replace(/[()$%]/g, ''), new Date().toISOString().slice(0, 10)]),
+    sheetName: returnMetricInfo.label,
+    printTitle: `${returnSymbolsForTools.join(' vs. ')} — ${returnMetricInfo.label}`,
+  })
+  const returnChartHeight = returnChartTools.isFullscreen ? returnChartTools.fullscreenHeight - 70 : 520
+
+  const returnChart = useMemo(() => {
+    if (!returnData?.series) return { data: [], layout: {}, logScaleActive: false, notes: [], unit: '' }
+    const info = chartMetricInfo(metric)
+    const isDividend = info.kind === 'dividend'
+    const isDollar = info.kind === 'dollar'
+    const isGrowth = metric === 'growth'
+    const growthScale = isGrowth ? GROWTH_START_VALUE / 100 : 1
+    const intraday = Boolean(returnData.intraday)
     const traces = []
-    const annotations = []
     const labelCandidates = []
     const visibleYValues = []
+    const notes = []
     // Flask's jsonify() alphabetically sorts object keys, so `series`'s own
     // key order can't be trusted to put the primary ticker first (e.g.
     // primary=SPY, extra=QQQ comes back as QQQ-then-SPY). `requested_symbols`
@@ -3498,23 +3611,37 @@ export default function ETFScreen() {
       : seriesKeys
     // Comparison ticker colors — cycling distinct hues
     const compColors = ['#a0f0c0', '#FFD700', '#ff7eb3', '#b39ddb', '#ff8a65', '#4dd0e1', '#aed581', '#f48fb1']
-    const compDashes = ['solid', 'dash', 'dot', 'dashdot', 'longdash']
-    const activeReturnRange = normalizeReturnRange(returnXRange)
+    const activeReturnRange = intraday ? null : normalizeReturnRange(returnXRange)
     const fallbackRange = returnDataDateBounds[0] && returnDataDateBounds[1] ? returnDataDateBounds : null
-    const effectiveReturnRange = activeReturnRange || fallbackRange
+    const effectiveReturnRange = intraday ? null : (activeReturnRange || fallbackRange)
     // Rebasing, end labels and y-scaling always follow the active date window
     // (typed dates or slider), so the chart visually aligns with the date set.
     const [visibleStart, visibleEnd] = returnVisibleWindow
-    const autoLogScale = shouldUseComparerLogScale(
+    const autoLogScale = !isDividend && shouldUseComparerLogScale(
       returnData.series,
       allSymbols,
-      returnMode,
+      metric === 'total_value' ? 'total' : returnMode,
       visibleStart,
       visibleEnd,
     )
-    const logScaleActive = returnScalePreference === 'log'
-      || (returnScalePreference === 'auto' && autoLogScale)
-    const isActualPrice = returnMode === 'actual'
+    const logScaleActive = !isDividend && (returnScalePreference === 'log'
+      || (returnScalePreference === 'auto' && autoLogScale))
+    const hoverDate = intraday ? '%{x|%b %d, %H:%M}' : '%{x|%b %d, %Y}'
+    const symbolColor = (si, isDimmed) => {
+      if (isDimmed) return DIMMED_RETURN_COLOR
+      return (si === 0 || allSymbols.length === 1)
+        ? resolveCssColor(TRACE_STYLES.total.color, isDark)
+        : compColors[(si - 1) % compColors.length]
+    }
+    const recordVisible = (dates, ys) => {
+      dates.forEach((date, i) => {
+        if (ys[i] == null) return
+        const value = Number(ys[i])
+        if (!Number.isFinite(value)) return
+        const d = dateKey(date)
+        if ((!visibleStart || d >= visibleStart) && (!visibleEnd || d <= visibleEnd)) visibleYValues.push(value)
+      })
+    }
 
     // When a symbol is highlighted, draw it last so its line sits on top of
     // the dimmed ones instead of being covered by them.
@@ -3527,38 +3654,55 @@ export default function ETFScreen() {
       const dates = series.dates || []
       const isPrimary = si === 0
       const isDimmed = highlightedSymbol && highlightedSymbol !== sym
+      const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
 
-      if (isActualPrice) {
-        const values = comparerActualCloses(series, returnData.profiles?.[sym]?.price)
+      if (isDividend) {
+        const color = symbolColor(si, isDimmed)
+        const events = dividendEvents(divHistory?.[sym], series)
+        if (!events.length) notes.push(`${sym} has no dividend history.`)
+        const ys = dividendMetricSeries(metric, dates, events, visibleStart)
+        if (events.length && metric === 'div_growth_yoy' && !ys.some(value => value != null)) {
+          notes.push(`${sym} needs two years of dividends for a year-over-year comparison.`)
+        }
+        recordVisible(dates, ys)
+        const isTtm = metric === 'div_ttm'
+        traces.push({
+          x: dates, y: ys, type: 'scatter', mode: 'lines', name: sym,
+          line: { color, width: 2.6, shape: 'hv' },
+          hovertemplate: isTtm
+            ? `<b>${hoverDate}</b><br>${sym} Dividends (TTM): $%{y:,.4f}<extra></extra>`
+            : `<b>${hoverDate}</b><br>${sym} ${info.label}: %{y:,.2f}%<extra></extra>`,
+        })
+        const last = labelIdx >= 0 && ys[labelIdx] != null ? Number(ys[labelIdx]) : NaN
+        if (showReturnLabels && Number.isFinite(last)) {
+          labelCandidates.push({
+            y: last,
+            text: isTtm ? formatMoney(last, { convert: false, digits: last < 1 ? 4 : 2 }) : signedPct(last),
+            color,
+          })
+        }
+        return
+      }
+
+      if (isDollar) {
+        const values = metric === 'price'
+          ? comparerActualCloses(series, returnData.profiles?.[sym]?.price)
+          : totalReturnDollarSeries(series, 100, returnData.profiles?.[sym]?.price)
         if (!values.length) return
         const style = TRACE_STYLES.actual
-        const color = isDimmed
-          ? DIMMED_RETURN_COLOR
-          : ((isPrimary || allSymbols.length === 1) ? resolveCssColor(style.color, isDark) : compColors[(si - 1) % compColors.length])
-        const name = `${sym} (${style.label})`
-        const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
-        dates.forEach((date, i) => {
-          const value = Number(values[i])
-          if (!Number.isFinite(value)) return
-          const d = dateKey(date)
-          if ((!visibleStart || d >= visibleStart) && (!visibleEnd || d <= visibleEnd)) {
-            visibleYValues.push(value)
-          }
-        })
+        const color = symbolColor(si, isDimmed)
+        recordVisible(dates, values)
         traces.push({
-          x: dates, y: values, type: 'scatter', mode: 'lines', name,
+          x: dates, y: values, type: 'scatter', mode: 'lines',
+          name: metric === 'price' ? `${sym} (${style.label})` : `${sym} (Total Return)`,
           line: { color, dash: style.dash, width: style.width },
-          hovertemplate: `<b>%{x|%b %d, %Y}</b><br>Share Price: $%{y:.2f}<extra></extra>`,
+          hovertemplate: metric === 'price'
+            ? `<b>${hoverDate}</b><br>Share Price: $%{y:,.2f}<extra></extra>`
+            : `<b>${hoverDate}</b><br>Total Return Price: $%{y:,.2f}<extra></extra>`,
         })
-        if (showReturnLabels && labelIdx >= 0) {
-          const last = Number(values[labelIdx])
-          if (Number.isFinite(last)) {
-            labelCandidates.push({
-              y: last,
-              text: formatMoney(last, { convert: false }),
-              color,
-            })
-          }
+        const last = labelIdx >= 0 ? Number(values[labelIdx]) : NaN
+        if (showReturnLabels && Number.isFinite(last)) {
+          labelCandidates.push({ y: last, text: formatMoney(last, { convert: false }), color })
         }
         return
       }
@@ -3596,64 +3740,62 @@ export default function ETFScreen() {
           : (key === 'blend' ? 'Total Return' : style.label || key)
 
         const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
-        const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
         const baseVal = baseIdx >= 0 ? values[baseIdx] : values[0]
-        const normalizedValues = baseVal ? values.map(v => (v / baseVal) * 100) : values
-        const returnValues = normalizedValues.map(v => Number(v) - 100)
-        const yVals = logScaleActive
-          ? normalizedValues
-          : (returnPctMode ? returnValues : normalizedValues)
-        dates.forEach((date, i) => {
-          const value = Number(yVals[i])
-          if (!Number.isFinite(value)) return
-          const d = dateKey(date)
-          if ((!visibleStart || d >= visibleStart) && (!visibleEnd || d <= visibleEnd)) {
-            visibleYValues.push(value)
-          }
-        })
+        const normalizedValues = baseVal ? values.map(v => (v / baseVal) * 100 * growthScale) : values
+        const returnValues = normalizedValues.map(v => Number(v) / growthScale - 100)
+        const yVals = logScaleActive || isGrowth ? normalizedValues : returnValues
+        recordVisible(dates, yVals)
+        let customdata
+        let hovertemplate
+        if (isGrowth) {
+          customdata = returnValues
+          hovertemplate = `<b>${hoverDate}</b><br>${lineLabel}: $%{y:,.2f} (%{customdata:,.2f}%)<extra></extra>`
+        } else if (logScaleActive) {
+          customdata = comparerLogHoverData(returnValues, normalizedValues)
+          hovertemplate = `<b>${hoverDate}</b><br>${lineLabel}: %{customdata[0]}<br>Growth of $100: %{customdata[1]}<extra></extra>`
+        } else {
+          customdata = returnValues
+          hovertemplate = `<b>${hoverDate}</b><br>${lineLabel}: %{y:.2f}%<extra></extra>`
+        }
         traces.push({
           x: dates, y: yVals, type: 'scatter', mode: 'lines', name,
-          customdata: logScaleActive
-            ? comparerLogHoverData(returnValues, normalizedValues)
-            : returnValues,
+          customdata,
+          exportY: !isGrowth && logScaleActive ? returnValues : undefined,
           line: { color, dash, width },
-          hovertemplate: logScaleActive && returnPctMode
-            ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{customdata[0]}<br>Growth of $100: %{customdata[1]}<extra></extra>`
-            : returnPctMode
-              ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}%<extra></extra>`
-            : `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}<extra></extra>`,
+          hovertemplate,
         })
 
-        // Visible-window annotation: percent labels in percent mode, line names in normal mode.
         if (showReturnLabels && labelIdx >= 0) {
-          const labelVal = yVals[labelIdx]
-          const retNum = returnValues[labelIdx]
-          const retPct = retNum.toFixed(2)
-          if (Number.isFinite(Number(labelVal))) {
+          const labelVal = Number(yVals[labelIdx])
+          if (Number.isFinite(labelVal)) {
             labelCandidates.push({
-              y: Number(labelVal),
-              text: returnPctMode ? `${retNum >= 0 ? '+' : ''}${retPct}%` : labelVal.toFixed(2),
+              y: labelVal,
+              text: isGrowth ? formatMoney(labelVal, { convert: false, digits: 0 }) : signedPct(returnValues[labelIdx]),
               color,
-              fontFamily: returnPctMode ? 'monospace' : undefined,
+              fontFamily: isGrowth ? undefined : 'monospace',
             })
           }
         }
       })
     })
 
-    // Baseline reference — skip for Actual Price; $0/$100 is not a useful dollar baseline.
-    if (traces.length && !isActualPrice) {
+    // Baseline reference: 0% (or the $10K / 100 start) for relative charts,
+    // 0% for dividend growth; dollar charts have no useful baseline.
+    let baselineY = null
+    if (info.kind === 'return') baselineY = logScaleActive || isGrowth ? 100 * growthScale : 0
+    else if (metric === 'div_growth' || metric === 'div_growth_yoy') baselineY = 0
+    if (traces.length && baselineY != null) {
       const allDates = Object.values(returnData.series).flatMap(s => s.dates)
       const minDate = allDates.reduce((a, b) => a < b ? a : b)
       const maxDate = allDates.reduce((a, b) => a > b ? a : b)
-      const baseY = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
       traces.push({
-        x: [minDate, maxDate], y: [baseY, baseY], type: 'scatter', mode: 'lines',
+        x: [minDate, maxDate], y: [baselineY, baselineY], type: 'scatter', mode: 'lines',
         name: 'Baseline', line: { color: '#555', dash: 'dash', width: 1 }, showlegend: false,
         // A guide line, not a fund: keep it out of the ranked hover box.
         hoverinfo: 'skip',
       })
     }
+    const axisBase = metric === 'div_ttm' ? 0 : baselineY
 
     // Build title like web version. When a custom date window is active, show
     // the actual span instead of the (now stale) period button label.
@@ -3663,121 +3805,114 @@ export default function ETFScreen() {
       : (RETURN_PERIODS.find(p => p.value === period)?.label || period)
     const titleSymbol = allSymbols[0] || ticker.toUpperCase()
     let titleText = `${titleSymbol} — ${periodLabel}`
-    if (returnMode === 'all3') {
-      titleText += ` — Price vs Custom vs DRIP (${returnData.reinvest_pct}% reinvest)`
-    } else if (returnMode === 'all4') {
-      titleText += ` — Price vs Custom vs DRIP (${returnData.reinvest_pct}% reinvest)`
-    } else if (returnMode === 'both') {
-      titleText += ' — Total Return & Price'
+    if (info.kind === 'return') {
+      if (isGrowth) titleText += ' — Growth of $10K'
+      if (returnMode === 'all3' || returnMode === 'all4') {
+        titleText += ` — Price vs Custom vs DRIP (${returnData.reinvest_pct}% reinvest)`
+      } else if (returnMode === 'both') {
+        titleText += ' — Total Return & Price'
+      } else if (!isGrowth || returnMode !== 'total') {
+        titleText += ` — ${modeInfo.label || returnMode}`
+      }
     } else {
-      titleText += ` — ${modeInfo.label || returnMode}`
+      titleText += ` — ${metric === 'total_value' ? 'Total Return Price ($)' : info.label}`
     }
     if (logScaleActive) titleText += ' — Log Scale'
 
-    if (showReturnLabels && labelCandidates.length) {
-      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
-      const scaleY = value => comparerEndLabelAxisY(value, logScaleActive)
-      const axisBaseY = axisBase == null ? [] : [scaleY(axisBase)]
-      const yMin = Math.min(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
-      const yMax = Math.max(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
-      const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
-      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (isActualPrice ? 0.35 : (returnPctMode ? 0.45 : 1.5)))
-      const sortedLabels = [...labelCandidates]
-        .map(label => ({ ...label, scaledY: scaleY(label.y) }))
-        .sort((a, b) => a.scaledY - b.scaledY)
-
-      sortedLabels.forEach((label, index) => {
-        label.displayY = index === 0
-          ? label.scaledY
-          : Math.max(label.scaledY, sortedLabels[index - 1].displayY + minLabelGap)
-      })
-
-      const overflow = sortedLabels[sortedLabels.length - 1].displayY - yMax
-      if (overflow > 0) {
-        for (let index = sortedLabels.length - 1; index >= 0; index -= 1) {
-          const nextY = index === sortedLabels.length - 1
-            ? sortedLabels[index].displayY - overflow
-            : Math.min(sortedLabels[index].displayY, sortedLabels[index + 1].displayY - minLabelGap)
-          sortedLabels[index].displayY = Math.max(yMin, nextY)
-        }
-      }
-
-      sortedLabels.forEach(label => {
-        annotations.push({
-          x: 1,
-          xref: 'paper',
-          // Log-axis annotations use log10 range coordinates in Plotly.
-          y: label.displayY,
-          text: label.text,
-          showarrow: false,
-          xanchor: 'left',
-          xshift: 8,
-          font: { color: label.color, size: 11, family: label.fontFamily },
-        })
-      })
-    }
+    const badges = showReturnLabels
+      ? placeEndLabelBadges(labelCandidates, { visibleYValues, axisBase, logScaleActive, xshift: scaleRight ? 3 : 6 })
+      : { annotations: [], width: 0 }
 
     // Constrain the y-axis to the visible date window. Plotly autoranges y over
     // all trace data (not just the x-visible portion), so without this the curve
     // stays scaled to the full series and looks misaligned after zooming.
     let yAxisRange = null
+    let visibleAbsMax = 0
     if (visibleYValues.length) {
-      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
       const labelYs = labelCandidates.map(l => l.y)
       const rangeValues = axisBase == null
         ? [...visibleYValues, ...labelYs]
         : [axisBase, ...visibleYValues, ...labelYs]
       const yLo = Math.min(...rangeValues)
       const yHi = Math.max(...rangeValues)
+      visibleAbsMax = Math.max(Math.abs(yLo), Math.abs(yHi))
       if (logScaleActive) {
         const logLo = Math.log10(Math.max(yLo, Number.MIN_VALUE))
         const logHi = Math.log10(Math.max(yHi, Number.MIN_VALUE))
         const pad = Math.max((logHi - logLo) * 0.08, 0.04)
         yAxisRange = [logLo - pad, logHi + pad]
       } else {
-        const pad = Math.max((yHi - yLo) * 0.08, 1)
+        const minPad = metric === 'div_ttm' ? Math.max(Math.abs(yHi) * 0.03, 0.001) : 1
+        const pad = Math.max((yHi - yLo) * 0.08, minPad)
         yAxisRange = [yLo - pad, yHi + pad]
       }
+    }
+
+    const yaxis = {
+      type: logScaleActive ? 'log' : 'linear',
+      side: scaleRight ? 'right' : 'left',
+      automargin: true,
+      ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
+      gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
+    }
+    if (isGrowth || isDollar || metric === 'div_ttm') {
+      yaxis.tickprefix = '$'
+      yaxis.tickformat = isGrowth ? ',.0f' : (metric === 'div_ttm' && visibleAbsMax < 1 ? ',.3f' : ',.2f')
+    } else if (logScaleActive) {
+      yaxis.tickformat = ',.0f'
+    } else {
+      const large = visibleAbsMax >= 1000
+      Object.assign(yaxis, signedPercentTicks(yAxisRange, { decimals: large ? 0 : 2 }) || { ticksuffix: '%', tickformat: ',.2f' })
+    }
+    if (!scaleRight) {
+      let axisTitle
+      if (isGrowth) axisTitle = logScaleActive ? 'Growth of $10K (log scale)' : 'Value ($)'
+      else if (metric === 'total_value') axisTitle = logScaleActive ? 'Total Return Price ($) (log scale)' : 'Total Return Price ($)'
+      else if (metric === 'price') axisTitle = logScaleActive ? 'Share Price ($) (log scale)' : 'Share Price ($)'
+      else if (metric === 'div_ttm') axisTitle = 'Dividends per Share, TTM ($)'
+      else if (isDividend) axisTitle = `${info.label} (%)`
+      else if (logScaleActive) axisTitle = 'Growth of $100 (log scale)'
+      else axisTitle = `${modeInfo.label || 'Return'} (%)`
+      yaxis.title = { text: axisTitle }
     }
 
     const layout = {
       template: 'plotly_dark', paper_bgcolor: '#1e1e2f', plot_bgcolor: '#1e1e2f',
       // Preserve Plotly's interactive range across unrelated renders (such as
-      // typing a ticker). Period and range-slider visibility changes are the
-      // intentional reset boundaries.
-      uirevision: `returns-${period}-${showRangeSlider ? 'slider' : 'plain'}-${logScaleActive ? 'log' : 'linear'}`,
+      // typing a ticker). Period, metric and range-slider visibility changes
+      // are the intentional reset boundaries.
+      uirevision: `returns-${period}-${metric}-${showRangeSlider ? 'slider' : 'plain'}-${logScaleActive ? 'log' : 'linear'}`,
       font: { color: '#e0e0e0', size: 12 },
-      margin: { l: 60, r: 90, t: 70, b: 40 },
-      height: 520,
+      margin: scaleRight
+        ? { l: 20, r: Math.max(64, badges.width + 8), t: 70, b: 40 }
+        : { l: 60, r: Math.max(20, badges.width + 10), t: 70, b: 40 },
+      height: returnChartHeight,
       title: { text: titleText, font: { size: 14, color: '#e0e0e0' }, y: 0.98, x: 0.5, xanchor: 'center' },
       xaxis: {
         type: 'date',
         rangeslider: showRangeSlider ? { visible: true, bgcolor: '#252540', bordercolor: '#555', borderwidth: 1 } : { visible: false },
+        ...(intraday ? { rangebreaks: INTRADAY_RANGEBREAKS } : {}),
         ...(effectiveReturnRange ? { range: effectiveReturnRange, autorange: false } : {}),
         gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
       },
-      yaxis: {
-        type: logScaleActive ? 'log' : 'linear',
-        title: isActualPrice
-          ? (logScaleActive ? 'Share Price ($) (log scale)' : 'Share Price ($)')
-          : logScaleActive
-            ? 'Growth of $100 (log scale)'
-            : returnPctMode
-              ? `${RETURN_MODES.find(mode => mode.value === returnMode)?.label || 'Return'} (%)`
-              : 'Normalized Return (100 = start)',
-        ...(isActualPrice && { tickprefix: '$', tickformat: ',.2f' }),
-        ...(!isActualPrice && !logScaleActive && returnPctMode && { ticksuffix: '%', tickformat: '+.2f' }),
-        ...(!isActualPrice && logScaleActive && { tickformat: ',.0f' }),
-        ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
-        gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
-      },
+      yaxis,
       legend: { orientation: 'h', y: 1.06, x: 0.5, xanchor: 'center', font: { size: 11 } },
       hovermode: returnHoverMode,
-      annotations,
+      annotations: badges.annotations,
     }
-    return { data: traces, layout, logScaleActive }
+    return {
+      data: traces,
+      layout,
+      logScaleActive,
+      notes,
+      unit: isGrowth || isDollar || metric === 'div_ttm' ? '$' : '%',
+    }
     // isDark is a dependency because resolveCssColor reads the live CSS variables.
-  }, [returnData, ticker, period, returnMode, returnScalePreference, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds, highlightedSymbol, returnVisibleWindow, isDark])
+  }, [returnData, ticker, period, metric, returnMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, returnDataDateBounds, highlightedSymbol, returnVisibleWindow, isDark, divHistory, scaleRight, returnChartHeight])
+  const { data: returnPlotData, layout: returnPlotLayout, logScaleActive: returnLogScaleActive } = returnChart
+  useEffect(() => {
+    latestReturnChartRef.current = { chart: returnChart, visibleWindow: returnVisibleWindow, intraday: intradayReturns }
+  }, [returnChart, returnVisibleWindow, intradayReturns])
 
   const yieldOnCostEntries = useMemo(() => {
     if (!returnData?.series) return []
@@ -3866,9 +4001,56 @@ export default function ETFScreen() {
   const isActualPrice = returnMode === 'actual'
   const sliderDisabled = !['all3', 'all4'].includes(returnMode)
   const selectTab = useCallback((nextTab) => {
-    if (nextTab !== 'returns' && period === 'all') setPeriod('max')
+    if (nextTab !== 'returns') {
+      if (period === 'all') setPeriod('max')
+      // The Returns tab's 1D/5D are intraday windows; the technical chart
+      // needs the bar size spelled out or it draws one daily candle.
+      if ((period === '1d' || period === '5d') && !interval) setInterval_(period === '1d' ? '5m' : '15m')
+    }
     setTab(nextTab)
-  }, [period])
+  }, [period, interval])
+
+  // Saved comparisons: the primary ticker plus the comparison chips.
+  const savedSymbols = useMemo(
+    () => [...new Set([ticker.trim().toUpperCase(), ...compareTickers].filter(Boolean))],
+    [ticker, compareTickers],
+  )
+  const loadSavedComparison = useCallback((item) => {
+    const [primary, ...rest] = item.symbols || []
+    if (!primary) return
+    const settings = item.settings || {}
+    setTicker(primary)
+    setCompareTickers(rest.filter(sym => sym !== primary))
+    setHighlightedSymbol('')
+    setMetric(normalizeChartMetric(item.metric))
+    if (RETURN_LINE_MODES.includes(settings.lineMode)) setLineMode(settings.lineMode)
+    if (RETURN_PERIODS.some(p => p.value === settings.period)) {
+      setPeriod(settings.period)
+      setInterval_('')
+    }
+    if (Number.isFinite(Number(settings.reinvest))) setReinvest(Math.max(0, Math.min(100, Number(settings.reinvest))))
+    resetReturnRange()
+    setSavedLoadNonce(value => value + 1)
+  }, [resetReturnRange])
+  const describeSaved = useCallback((item) => {
+    const periodLabel = RETURN_PERIODS.find(p => p.value === item.settings?.period)?.label
+    return [chartMetricInfo(item.metric).label, periodLabel].filter(Boolean).join(' · ')
+  }, [])
+  const returnOptionToggles = [
+    { key: 'labels', label: 'Labels', checked: showReturnLabels, onChange: setShowReturnLabels, title: 'Value badges at the end of each line' },
+    { key: 'datepicker', label: 'Date Picker', checked: showDatePicker, onChange: setShowDatePicker, title: 'Start and end date inputs beside the periods' },
+    { key: 'slider', label: 'Range Slider', checked: showRangeSlider, onChange: (v) => { setShowRangeSlider(v); resetReturnRange() } },
+    {
+      key: 'log',
+      label: returnLogScaleActive && returnScalePreference === 'auto' ? 'Log Scale (Auto)' : 'Log Scale',
+      checked: returnLogScaleActive,
+      disabled: isDividendMetric(metric),
+      onChange: (v) => setReturnScalePreference(v ? 'log' : 'linear'),
+      title: returnScalePreference === 'auto' && returnLogScaleActive ? 'Turned on automatically because the visible range is extreme' : 'Logarithmic growth scale',
+    },
+    { key: 'hover', label: 'Unified Hover', checked: returnHoverMode === 'x unified', onChange: (v) => setReturnHoverMode(v ? 'x unified' : 'closest'), title: 'One hover box listing every line at the hovered date' },
+    { key: 'side', label: 'Scale on Right', checked: scaleRight, onChange: setScaleRight, title: 'Show the value scale on the right-hand side of the chart' },
+  ]
 
   return (
     <div className="page etf-screen">
@@ -3926,7 +4108,7 @@ export default function ETFScreen() {
             }}>{p.label}</button>
           )})}
           <span className="etf-draw-sep">|</span>
-          {tab === 'returns' && returnDataDateBounds[0] && (
+          {tab === 'returns' && showDatePicker && returnDataDateBounds[0] && (
             <>
               <input type="date" className="range-date-input" value={rangeStart} max={rangeEnd}
                 onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
@@ -4131,9 +4313,27 @@ export default function ETFScreen() {
       {/* Returns-only controls */}
       {tab === 'returns' && (
         <div className="etf-return-controls">
-          <div className="etf-mode-bar">
+          <div className="etf-chart-options ctb-bar etf-chart-toolbar">
+            <ChartMetricMenu metric={metric} onChange={chooseMetric} />
+            <SavedComparisonsMenu
+              scope="analysis"
+              current={{ symbols: savedSymbols, metric, settings: { period, lineMode, reinvest } }}
+              onLoad={loadSavedComparison}
+              describe={describeSaved}
+            />
+            <ChartOptionsMenu toggles={returnOptionToggles} groups={chartOptionGroups(returnChartTools)} />
+            <ChartDownloadMenu actions={chartDownloadActions(returnChartTools)} disabled={!returnPlotData.length} />
+            <span className="etf-metric-note">{returnMetricInfo.desc}</span>
+          </div>
+
+          <div className="etf-mode-bar" title="Which return lines a percentage or growth chart draws">
             {RETURN_MODES.map(m => (
-              <button key={m.value} className={`btn btn-sm${returnMode === m.value ? ' btn-active' : ''}`} onClick={() => setReturnMode(m.value)} title={m.desc}>{m.label}</button>
+              <button
+                key={m.value}
+                className={`btn btn-sm${returnMode === m.value && !isDividendMetric(metric) && metric !== 'total_value' ? ' btn-active' : ''}`}
+                onClick={() => chooseLineMode(m.value)}
+                title={m.desc}
+              >{m.label}</button>
             ))}
           </div>
 
@@ -4154,24 +4354,6 @@ export default function ETFScreen() {
               In <strong>declining markets</strong>, lower reinvestment can outperform because cash retains its value while reinvested dividends lose value with the stock.
             </p>
           </details>
-
-          <div className="etf-chart-options">
-            <span className="etf-control-label">Chart</span>
-            <button
-              className={`btn btn-sm${returnPctMode && !isActualPrice ? ' btn-active' : ''}`}
-              onClick={() => setReturnPctMode(v => !v)}
-              disabled={isActualPrice}
-              title={isActualPrice ? 'Return % applies to relative return modes, not actual share prices' : undefined}
-            >Return %</button>
-            <button
-              className={`btn btn-sm${returnLogScaleActive ? ' btn-active' : ''}`}
-              onClick={() => setReturnScalePreference(returnLogScaleActive ? 'linear' : 'log')}
-              title={returnScalePreference === 'auto' && returnLogScaleActive ? 'Automatically enabled because the visible return range is extreme' : 'Use a logarithmic growth scale'}
-            >Log Scale{returnLogScaleActive && returnScalePreference === 'auto' ? ' (Auto)' : ''}</button>
-            <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
-            <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
-            <button className={`btn btn-sm${showRangeSlider ? ' btn-active' : ''}`} onClick={() => { setShowRangeSlider(v => !v); resetReturnRange() }}>Range Slider</button>
-          </div>
 
           <div className="etf-compare">
             <span className="etf-control-label">Compare</span>
@@ -4499,7 +4681,14 @@ export default function ETFScreen() {
                     Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
                   </div>
                 )}
-                <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} rankUnifiedHover onInitialized={rememberReturnPlotElement} onUpdate={rememberReturnPlotElement} onRelayout={handleReturnRelayout} onRelayouting={handleReturnRelayouting} />
+                <ChartToolStatus status={returnChartTools.status} onDismiss={returnChartTools.clearStatus} />
+                {returnChart.notes?.length > 0 && <div className="etfc-chart-notes">{returnChart.notes.join(' ')}</div>}
+                <div className="ctb-chart-card" ref={returnChartCardRef}>
+                  {returnChartTools.isFullscreen && (
+                    <button type="button" className="ctb-trigger ctb-exit-fullscreen" onClick={returnChartTools.fullscreen}>Exit Full Screen</button>
+                  )}
+                  <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%', height: returnChartHeight }} rankUnifiedHover onInitialized={rememberReturnPlotElement} onUpdate={rememberReturnPlotElement} onRelayout={handleReturnRelayout} onRelayouting={handleReturnRelayouting} />
+                </div>
                 <div className="etfc-section" style={{ marginTop: '1rem' }}>
                   <div className="etfc-section-head">
                     <h2 style={{ fontSize: '1.1rem' }}>Yield on Cost</h2>

@@ -134,6 +134,17 @@ function createWindow() {
     }
   })
 
+  // The comparer charts' "Download to Google Sheets" opens a new blank sheet.
+  // Send Google Sheets links to the user's browser, where they are signed in,
+  // rather than a bare app window; every other window.open keeps its behavior.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\/(sheets\.new|docs\.google\.com)(\/|$)/i.test(url)) {
+      shell.openExternal(url)
+      return { action: 'deny' }
+    }
+    return { action: 'allow' }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
