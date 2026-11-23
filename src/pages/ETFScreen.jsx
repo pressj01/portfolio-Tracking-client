@@ -53,7 +53,7 @@ import {
 } from '../utils/priceLevels'
 import { CandlePatternsControl, CandlePatternsStatus, HighLowToggle, OffHighToggle, PatternsControl, PatternsStatus, PercentLevelsControl, SupportResistanceControl } from '../components/ChartLevelControls'
 import { findChartPatterns, sanitizePatternKeys } from '../utils/chartPatterns'
-import { lastFinite, liveQuotePollMs, LIVE_QUOTE_IDLE_MS, LIVE_QUOTE_POLL_MS, mergeLiveQuote, stackAxisTags, tagTextColor } from '../utils/liveQuote'
+import { accumulateLiveBars, lastFinite, liveQuotePollMs, LIVE_QUOTE_IDLE_MS, LIVE_QUOTE_POLL_MS, stackAxisTags, tagTextColor } from '../utils/liveQuote'
 import {
   candleBoxX,
   candlePatternHover,
@@ -2116,7 +2116,7 @@ export default function ETFScreen() {
   const yExpandTopNum = Math.max(0, parseInt(yExpandTop) || 0)
   const yExpandBotNum = Math.max(0, parseInt(yExpandBot) || 0)
   const xExpandNum = Math.max(0, parseInt(xExpand) || 0)
-  // The bars as downloaded. `records` (below) is these with the live quote folded in.
+  // The bars as downloaded. `records` (below) is these with the live quotes folded in.
   const [loadedRecords, setRecords] = useState([])
   // What the loaded bars are: { ticker, period, interval, loadId } with the bar size
   // the backend actually used, so S/R history can be fetched at the same bar size.
@@ -2125,11 +2125,13 @@ export default function ETFScreen() {
   const techLoadCountRef = useRef(0)
   // Yahoo's latest quote for the loaded ticker, polled while the chart is open.
   const [liveQuote, setLiveQuote] = useState(null)
-  const records = useMemo(() => {
-    const source = recordsSource?.ticker?.toUpperCase()
-    if (!liveQuote || !source || liveQuote.ticker !== source) return loadedRecords
-    return mergeLiveQuote(loadedRecords, liveQuote, recordsSource.interval)
-  }, [loadedRecords, liveQuote, recordsSource])
+  // The bars with every quote since the last Load folded in ({ loadId, records }),
+  // built up poll by poll so a live bar keeps its open, high and low. Bars from an
+  // earlier load are ignored, so a Load starts again from what it downloaded.
+  const [liveBars, setLiveBars] = useState(null)
+  const records = liveBars && recordsSource && liveBars.loadId === recordsSource.loadId
+    ? liveBars.records
+    : loadedRecords
   const [srHistory, setSrHistory] = useState(null) // { key, records }
   const [tickerName, setTickerName] = useState('')
   const [loading, setLoading] = useState(false)
@@ -2534,7 +2536,10 @@ export default function ETFScreen() {
   // bar, the moving averages and the price tag follow the market. Every 15 s in the
   // regular session, once a minute outside it, and not at all while the window is
   // hidden. A quote the server could only answer from cache (stale) is not used.
+  // Each quote is folded into the bars the earlier polls built (see liveBars).
   const liveTicker = recordsSource?.ticker?.toUpperCase() || ''
+  const liveLoadId = recordsSource?.loadId ?? 0
+  const liveInterval = recordsSource?.interval || ''
   const liveQuoteWanted = tab !== 'returns' && !!liveTicker && loadedRecords.length > 0
   useEffect(() => {
     if (!liveQuoteWanted) return undefined
@@ -2554,6 +2559,7 @@ export default function ETFScreen() {
               && prev.day_high === q.day_high && prev.day_low === q.day_low && prev.volume === q.volume
               ? prev
               : { ...q, ticker: liveTicker }))
+            setLiveBars(prev => accumulateLiveBars(prev, liveLoadId, loadedRecords, q, liveInterval))
           }
           // No quote for this symbol (or Yahoo cooling down): check back slowly.
           schedule(q && !q.error ? liveQuotePollMs(q) : LIVE_QUOTE_IDLE_MS)
@@ -2566,7 +2572,7 @@ export default function ETFScreen() {
       clearTimeout(timer)
       ctrl?.abort()
     }
-  }, [pf, liveQuoteWanted, liveTicker, loadedRecords])
+  }, [pf, liveQuoteWanted, liveTicker, liveLoadId, liveInterval, loadedRecords])
 
   useEffect(() => {
     if (!requestedTicker || ticker.trim().toUpperCase() !== requestedTicker) return

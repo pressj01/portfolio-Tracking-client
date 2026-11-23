@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  accumulateLiveBars,
   LIVE_QUOTE_IDLE_MS,
   LIVE_QUOTE_POLL_MS,
   intradayBarStart,
@@ -73,6 +74,31 @@ test('intraday bars update the current bar and append the next one', () => {
   assert.equal(next.length, 3)
   assert.deepEqual(next[2], bar('2026-11-23 14:05', 652.26, 652.26, 652.26, 652.26, 0))
   assert.equal(mergeLiveQuote(records, quote({ time: '2026-11-23 13:50' }), '5m'), records)
+})
+
+test('live intraday bars build up poll by poll instead of restarting from the load', () => {
+  const loaded = [bar('2026-11-23 13:55', 100, 101, 99, 100, 10), bar('2026-11-23 14:00', 100, 102, 99, 101, 12)]
+  let live = null
+  live = accumulateLiveBars(live, 1, loaded, quote({ price: 110, time: '2026-11-23 14:06' }), '5m')
+  live = accumulateLiveBars(live, 1, loaded, quote({ price: 105, time: '2026-11-23 14:07' }), '5m')
+  // The 14:05 bar keeps the 110 it opened and peaked at.
+  assert.deepEqual(live.records[2], bar('2026-11-23 14:05', 110, 110, 105, 105, 0))
+  live = accumulateLiveBars(live, 1, loaded, quote({ price: 107, time: '2026-11-23 14:11' }), '5m')
+  // The next bar opens beside it rather than replacing it.
+  assert.deepEqual(live.records.map(r => r.date), ['2026-11-23 13:55', '2026-11-23 14:00', '2026-11-23 14:05', '2026-11-23 14:10'])
+  assert.deepEqual(live.records[2], bar('2026-11-23 14:05', 110, 110, 105, 105, 0))
+  assert.deepEqual(loaded.length, 2, 'the loaded bars are not mutated')
+})
+
+test('a new load drops the bars the polls built, and a no-op quote keeps the same state', () => {
+  const loaded = [bar('2026-11-23', 640, 650, 639, 645, 20)]
+  const first = accumulateLiveBars(null, 1, loaded, quote({ price: 660, day_high: null, day_low: null, volume: 0 }), '1d')
+  assert.equal(first.records[0].high, 660)
+  assert.equal(accumulateLiveBars(first, 1, loaded, quote({ price: 660, day_high: null, day_low: null, volume: 0 }), '1d'), first)
+  const reloaded = [bar('2026-11-23', 640, 652, 639, 648, 25)]
+  const next = accumulateLiveBars(first, 2, reloaded, quote({ price: 649, day_high: null, day_low: null, volume: 0 }), '1d')
+  assert.equal(next.loadId, 2)
+  assert.deepEqual(next.records[0], bar('2026-11-23', 640, 652, 639, 649, 25))
 })
 
 test('intraday bars count from the 09:30 open and stop at the close', () => {

@@ -134,6 +134,21 @@ export function mergeLiveQuote(records, quote, interval) {
 }
 
 /**
+ * The live bars after one more quote: `{ loadId, records }`. Each poll builds on the
+ * bars the earlier polls left (`live`), so a bar keeps the open, high and low it was
+ * seen trading at and a bar appended a few polls ago stays when the next one starts.
+ * Bars from another load, or none yet, start again from `loaded`: a new Load drops
+ * what the polls built. A quote that changes nothing returns `live` itself.
+ */
+export function accumulateLiveBars(live, loadId, loaded, quote, interval) {
+  const current = live && live.loadId === loadId ? live : null
+  const base = current ? current.records : loaded
+  const records = mergeLiveQuote(base, quote, interval)
+  if (current && records === current.records) return current
+  return { loadId, records }
+}
+
+/**
  * Where the tags at the chart's edge go, in axis units. The price tag sits at the
  * price. Each other tag (a moving average) sits at its own value unless that would
  * overlap a neighbour, in which case it moves away from the price one tag height
