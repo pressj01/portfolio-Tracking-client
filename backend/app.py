@@ -167,8 +167,10 @@ from refresh_sessions import (
     apply_extended_prices,
     closes_by_session,
     current_sessions,
+    on_nyse_calendar,
 )
 from dividend_ledger import build_ledger as build_dividend_ledger
+from distribution_analysis import analyze_distribution_market, build_distribution_history
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
@@ -61575,6 +61577,64 @@ def dividend_ledger():
     finally:
         conn.close()
     return jsonify(payload)
+
+
+@app.route("/api/portfolio-distributions", methods=["GET"])
+def portfolio_distributions():
+    """Monthly and lifetime recorded distributions for the selected portfolio."""
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        year = request.args.get("year")
+        year = int(year) if year is not None else None
+        read_ids = _dividend_payment_profile_ids_for_read(conn, pids)
+        return jsonify(build_distribution_history(conn, read_ids, year))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/portfolio-distributions/analyzer", methods=["GET"])
+def portfolio_distributions_analyzer():
+    """Market-history yield and payout statistics, independent of share counts."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    symbols = _comparer_symbols(request.args.get("tickers", ""))
+    if not symbols:
+        return jsonify(error="At least one valid ticker is required."), 400
+    _, pids = get_profile_filter()
+    marks = ",".join("?" for _ in pids)
+    conn = get_connection()
+    try:
+        hints = {str(r["ticker"]).upper(): str(r["frequency"] or "").upper()
+                 for r in conn.execute(
+                     f"SELECT ticker, MAX(div_frequency) AS frequency FROM all_account_info "
+                     f"WHERE profile_id IN ({marks}) AND quantity > 0 GROUP BY ticker", pids)}
+    finally:
+        conn.close()
+    today = datetime.date.today()
+    now_et = eastern_now()
+    prior_session, latest_session = current_sessions(now_et)
+    completed_session = prior_session if latest_session == now_et.date() and not market_has_closed(now_et) else latest_session
+
+    def analyze(symbol):
+        try:
+            market_symbol = _yahoo_symbol_for_ticker(symbol)
+            # Do not use a partial intraday daily bar as the closing price for
+            # TTM yield. Other exchanges have different calendars.
+            end = completed_session if on_nyse_calendar(market_symbol) else today
+            market = _nav_screen_market_history(market_symbol, datetime.date(1900, 1, 1), end)
+            hint = hints.get(symbol)
+            result = analyze_distribution_market(market, end, _distribution_frequency_code(hint) or hint)
+        except Exception:
+            app.logger.warning("Distribution analyzer market history unavailable for %s", symbol, exc_info=True)
+            result = {"status": "unavailable", "message": "Could not load market history. Try again later."}
+        return {"ticker": symbol, **result}
+
+    with ThreadPoolExecutor(max_workers=min(6, len(symbols))) as pool:
+        rows = list(pool.map(analyze, symbols))
+    return jsonify(rows=rows, as_of=today.isoformat())
 
 
 # ── 4-Quadrant Regime & Markov Chain ──────────────────────────────────────────
