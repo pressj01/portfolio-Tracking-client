@@ -89,3 +89,16 @@
 .dist-fit-cash { color: var(--neg); }
 .dist-fit-toss { color: var(--warning); }
 .dist-fit-na { color: var(--text-dim); font-weight: 500; }
+.dist-eval { margin: 0 0 1.4rem; }
+.dist-eval h2 { margin: 0 0 .2rem; }
+.dist-eval-callout { border: 1px solid var(--border); border-left-width: 4px; border-radius: 6px; padding: .6rem .85rem; margin: .5rem 0; background: var(--surface); line-height: 1.45; }
+.dist-eval-callout-bad { border-left-color: var(--neg); }
+.dist-eval-callout-good { border-left-color: var(--pos); }
+.dist-eval-table-wrap { max-height: 45vh; }
+.dist-eval-table td.dist-left, .dist-eval-table th.dist-left { white-space: normal; }
+.dist-eval-desc { color: var(--text-dim); font-weight: 400; font-size: .75rem; }
+.dist-eval-meaning { font-weight: 600; min-width: 260px; }
+.dist-eval-cash { color: var(--neg); }
+.dist-eval-good { color: var(--pos); }
+.dist-eval-toss { color: var(--warning); }
+.dist-eval-na { color: var(--text-dim); font-weight: 500; }

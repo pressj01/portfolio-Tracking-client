@@ -350,6 +350,18 @@ export default function Distributions() {
   const holdings = useMemo(() => currentSnapshot?.rows || [], [currentSnapshot])
   const incomeHoldings = useMemo(() => holdings.filter(isIncomeHolding), [holdings])
   const heldTickers = useMemo(() => new Set(holdings.filter(h => Number(h.quantity) > 0).map(h => String(h.ticker).toUpperCase())), [holdings])
+  // Whether each held ticker reinvests today (the Holdings DRIP boxes); on Owner, in how many of its accounts.
+  const dripStatus = useMemo(() => {
+    const out = new Map()
+    for (const h of holdings) {
+      if (!(Number(h.quantity) > 0)) continue
+      const accounts = Array.isArray(h.reinvest_accounts) ? h.reinvest_accounts : null
+      out.set(String(h.ticker).toUpperCase(), accounts
+        ? { on: accounts.filter(a => a.reinvest).length, total: accounts.length }
+        : { on: h.reinvest === 'Y' ? 1 : 0, total: 1 })
+    }
+    return out
+  }, [holdings])
   const symbols = [...new Set([...(allHoldings ? holdings : incomeHoldings).map(h => h.ticker), ...custom])].sort()
   const symbolKey = symbols.join(',')
   const marketKey = `${snapshotKey}:${marketRefresh}:${symbolKey}`
@@ -396,7 +408,7 @@ export default function Distributions() {
       {tab === 'monthly' && <MonthlyIncome history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={includeEstimates} setIncludeEstimates={setIncludeEstimates} query={monthlyQuery} setQuery={setMonthlyQuery} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} />}
       {tab === 'analyzer' && <Analyzer rows={symbols.map(ticker => market.get(ticker) || { ticker, status: marketReady ? 'unavailable' : 'loading', message: marketReady ? 'No market history returned for this symbol.' : 'Loading…' })} loading={loadingMarket} holdings={incomeHoldings} custom={custom} setCustom={setCustom} allHoldings={allHoldings} setAllHoldings={setAllHoldings} refresh={() => setMarketRefresh(v => v + 1)} />}
       {tab === 'portfolio' && <PortfolioIncome holdings={incomeHoldings} history={data} market={market} loading={loadingMarket} />}
-      {tab === 'drip' && <DistributionDripLedger key={profileQueryString} refreshKey={refresh} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} />}
+      {tab === 'drip' && <DistributionDripLedger key={profileQueryString} refreshKey={refresh} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} dripStatus={dripStatus} />}
       {tab === 'floor' && <DistributionIncomeFloor key={profileQueryString} history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={floorIncludeEstimates} setIncludeEstimates={setFloorIncludeEstimates} />}
     </>}
   </div>

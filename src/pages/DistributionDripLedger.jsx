@@ -33,38 +33,108 @@ const COLUMNS = [
   { key: 'value_of_drip', label: 'Value of DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: 'DRIP shares to date at the month-end closing price' },
   { key: 'source', label: 'Source', type: 'string', text: true, tip: 'Actual: broker reinvestment records. Cash: the payment was not reinvested. Modeled: reinvestment worked out for the "as if reinvested" view' },
 ]
-const FIT_COLUMN = { key: 'drip_fit', label: 'DRIP fit', type: 'string', text: true, csv: r => r.drip_fit,
-  tip: 'Whether reinvesting this ticker beat taking the cash over the selected range or the last 3 years, whichever is longer (the DRIP vs. Cash Analyzer test). Hover a verdict for the numbers.' }
-const FIT_TONE = { 'Good to DRIP': 'dist-fit-good', 'Better as cash': 'dist-fit-cash', 'Toss-up': 'dist-fit-toss', 'Too new to judge': 'dist-fit-na' }
-const FIT_ORDER = ['Good to DRIP', 'Toss-up', 'Better as cash', 'Too new to judge']
+const FIT_TONE = { 'Good DRIP candidate': 'dist-fit-good', 'Not a good DRIP candidate': 'dist-fit-cash', Borderline: 'dist-fit-toss', 'Not enough history': 'dist-fit-na' }
 const BUCKET_HINT = {
-  Compounder: 'a yield of 8% or more, fully supported by total return',
-  Grower: 'a yield under 8%, fully supported by total return',
-  Harvester: 'a yield of 8% or more; total return was positive but below the payout',
-  Fading: 'a yield under 8%; total return was positive but below the payout',
-  Liquidator: 'a yield of 8% or more with a negative total return',
-  Broken: 'a yield under 8% with a negative total return',
+  Compounder: 'high income, fully paid for by total return',
+  Grower: 'modest income, fully paid for by total return',
+  Harvester: 'high income, but the price gave back part of it',
+  Fading: 'modest income, and the price gave back part of it',
+  Liquidator: 'high income paid while the fund lost value overall',
+  Broken: 'little income and a loss overall',
 }
-const pct = (v, digits = 1) => v == null ? DASH : `${(v * 100).toFixed(digits)}%`
+const SUMMARY_WORDS = { 'Good DRIP candidate': 'good DRIP candidates', 'Not a good DRIP candidate': 'not good for DRIP', Borderline: 'borderline', 'Not enough history': 'without enough history' }
+const pct = (v, digits = 1) => v == null ? DASH : `${(Math.abs(v) * 100).toFixed(digits)}%`
+const edgeText = edge => edge == null ? DASH : Math.abs(edge) < 0.02 ? 'About the same' : `${pct(edge, 0)} ${edge > 0 ? 'better' : 'worse'}`
 
-function fitTitle(fit, mine) {
-  if (!fit) return 'Evaluating…'
-  const lines = []
+// Plain-language reason behind a holding's verdict.
+function fitTitle(ticker, fit, mine) {
+  if (!fit) return 'Checking…'
+  const lines = [`${ticker}: ${fit.label}.`]
   if (!fit.call) {
-    lines.push(`${fit.label}. ${fit.reason || ''}`.trim())
+    if (fit.reason) lines.push(fit.reason)
   } else {
-    lines.push(`${fit.label}: ${monthLabel(fit.start.slice(0, 7))} to ${monthLabel(fit.end.slice(0, 7))} (${Number(fit.years).toFixed(1)} years).`)
-    lines.push(`$1 of distributions reinvested became $${Number(fit.re).toFixed(2)}, against $1.00 kept as cash earning ${pct(fit.cash_rate, 0)} a year.`)
-    if (fit.win_rate != null) lines.push(`Reinvesting was ahead at ${pct(fit.win_rate, 0)} of the dates you could have sold${fit.conflicted ? ', which disagrees with the end result, so it was close' : ''}.`)
-    lines.push(`Price ${fit.price_cagr > 0 ? '+' : ''}${pct(fit.price_cagr)} a year; distributions ${pct(fit.annual_yield)} a year${fit.coverage != null ? `, covered ${Number(fit.coverage).toFixed(2)}× by total return` : ''}.`)
-    if (fit.bucket) lines.push(`${fit.bucket}: ${BUCKET_HINT[fit.bucket] || fit.bucket}.`)
+    const edge = fit.re - 1
+    lines.push(`Over ${Number(fit.years).toFixed(1)} years (${monthLabel(fit.start.slice(0, 7))} to ${monthLabel(fit.end.slice(0, 7))}), reinvesting every distribution left you ${Math.abs(edge) < 0.02 ? 'about the same as' : `${pct(edge, 0)} ${edge > 0 ? 'more' : 'less'} than`} taking the cash and earning ${pct(fit.cash_rate, 0)} a year on it.`)
+    if (fit.price_cagr != null) lines.push(`Why: the price ${fit.price_cagr < 0 ? 'fell' : 'rose'} about ${pct(fit.price_cagr)} a year, so shares bought with distributions ${fit.price_cagr < 0 ? 'kept losing value' : 'grew in value'}.`)
+    if (fit.win_rate != null) lines.push(`Reinvesting came out ahead at ${pct(fit.win_rate, 0)} of the dates you could have sold.`)
+    if (fit.bucket) lines.push(`Fund type: ${fit.bucket} (${BUCKET_HINT[fit.bucket] || fit.bucket}).`)
   }
   if (mine && mine.reinvested > 0 && mine.value != null) {
     const change = mine.value / mine.reinvested - 1
-    lines.push(`Your DRIP in this range: ${money(mine.reinvested)} reinvested is worth ${money(mine.value)} now (${change >= 0 ? '+' : ''}${pct(change)}).`)
+    lines.push(`Your own reinvesting in this range: ${money(mine.reinvested)} reinvested bought shares worth ${money(mine.value)} at the latest close (${change >= 0 ? 'up' : 'down'} ${pct(change)}).`)
   }
-  lines.push('Past prices and distributions only; not a prediction.')
+  lines.push('Based on past prices and distributions only; not a prediction.')
   return lines.join('\n')
+}
+
+const EVAL_COLUMNS = [
+  { key: 'ticker', label: 'Holding', type: 'string', text: true },
+  { key: 'status', label: 'You now', type: 'string', text: true, tip: 'Whether you reinvest it today, from the DRIP boxes on the Holdings screen' },
+  { key: 'verdict', label: 'Verdict', type: 'string', text: true, tip: 'Whether reinvesting this ticker has paid more than taking the cash' },
+  { key: 'edge', label: 'DRIP vs cash', type: 'number', tip: 'How much more or less reinvesting every distribution left you than taking the cash and earning 4% a year on it, over the selected range or the last 3 years, whichever is longer' },
+  { key: 'meaning', label: 'What it means', type: 'number', text: true, value: r => r.priority, tip: 'Sorted so the holdings you reinvest but probably should not come first' },
+  { key: 'change', label: 'Your reinvesting in this range', type: 'number', tip: 'What you reinvested in the selected range, and every share it bought valued at the latest close' },
+]
+
+function evaluationRows(latest, fits, mine, dripStatus, heldTickers) {
+  return latest.map(({ ticker, description }) => {
+    const key = String(ticker).toUpperCase()
+    const fit = fits.get(ticker)
+    const current = heldTickers && !heldTickers.has(key) ? null : dripStatus?.get(key)
+    const reinvesting = current ? current.on > 0 : null
+    const status = !current ? 'No longer owned' : current.on === 0 ? 'Taking cash'
+      : current.on === current.total ? 'Reinvesting' : `Reinvesting in ${current.on} of ${current.total} accounts`
+    const call = fit?.call
+    let meaning, tone, priority
+    if (!fit) [meaning, tone, priority] = ['Checking…', 'na', 9]
+    else if (!call) [meaning, tone, priority] = ['Too new to tell', 'na', 8]
+    else if (call === 'Toss-up') [meaning, tone, priority] = ['Little difference either way', 'toss', 5]
+    else if (reinvesting === null) [meaning, tone, priority] = call === 'DRIP' ? ['Paid more reinvested', 'good', 6] : ['Paid more as cash', 'cash', 7]
+    else if (reinvesting && call === 'Take cash') [meaning, tone, priority] = ["Doesn't make much sense to DRIP: taking the cash has paid more", 'cash', 1]
+    else if (!reinvesting && call === 'DRIP') [meaning, tone, priority] = ['Worth reinvesting: DRIP has paid more than cash', 'good', 2]
+    else if (reinvesting) [meaning, tone, priority] = ['Keep reinvesting: DRIP has paid more than cash', 'good', 3]
+    else [meaning, tone, priority] = ['Taking the cash makes sense', 'good', 4]
+    const own = mine.get(ticker)
+    return {
+      ticker, description, status, reinvesting, fit, meaning, tone, priority,
+      verdict: fit?.label ?? null, edge: fit?.re != null ? fit.re - 1 : null,
+      reinvested: own?.reinvested || 0, worth: own?.value ?? null,
+      change: own && own.reinvested > 0 && own.value != null ? own.value / own.reinvested - 1 : null,
+    }
+  })
+}
+
+function DripEvaluation({ rows, mine, loading }) {
+  const { sorted, sort, onSort } = useTableSort(rows, EVAL_COLUMNS, { key: 'meaning', direction: 'asc' })
+  const counts = ['Good DRIP candidate', 'Not a good DRIP candidate', 'Borderline', 'Not enough history']
+    .map(label => [label, rows.filter(r => r.verdict === label).length])
+  const wrongWay = rows.filter(r => r.priority === 1)
+  const missed = rows.filter(r => r.priority === 2)
+  return <section className="dist-eval">
+    <h2>Is DRIP worth it?</h2>
+    <p className="dist-note">For each holding: has reinvesting its distributions paid more than taking the cash? {loading ? 'Checking each holding…' : counts.map(([label, n]) => `${n} ${SUMMARY_WORDS[label]}`).join(' · ')}</p>
+    {wrongWay.length > 0 && <div className="dist-eval-callout dist-eval-callout-bad">
+      <strong>You&apos;re reinvesting {wrongWay.length} {wrongWay.length === 1 ? 'holding' : 'holdings'} where taking the cash has paid more:</strong> {wrongWay.map(r => r.ticker).join(', ')}. It doesn&apos;t make much sense to DRIP {wrongWay.length === 1 ? 'it' : 'these'}.
+    </div>}
+    {missed.length > 0 && <div className="dist-eval-callout dist-eval-callout-good">
+      <strong>{missed.length} {missed.length === 1 ? 'holding' : 'holdings'} you take as cash would have paid more reinvested:</strong> {missed.map(r => r.ticker).join(', ')}.
+    </div>}
+    <div className="holdings-table-wrap dist-table-wrap dist-eval-table-wrap">
+      <table className="holdings-table dist-table dist-eval-table">
+        <thead><tr>{EVAL_COLUMNS.map(column => <DistributionSortHeader key={column.key} column={column} sort={sort} onSort={onSort} />)}</tr></thead>
+        <tbody>{sorted.map(row => <tr key={row.ticker} title={fitTitle(row.ticker, row.fit, mine.get(row.ticker))}>
+          <td className="dist-left"><strong>{row.ticker}</strong>{row.description ? <span className="dist-eval-desc"> {row.description}</span> : null}</td>
+          <td className="dist-left">{row.status}</td>
+          <td className="dist-left"><span className={`dist-fit ${FIT_TONE[row.verdict] || ''}`}>{row.verdict || (loading ? '…' : DASH)}</span></td>
+          <td className={row.edge == null || Math.abs(row.edge) < 0.02 ? '' : row.edge > 0 ? 'dist-positive' : 'dist-negative'}>{edgeText(row.edge)}</td>
+          <td className={`dist-left dist-eval-meaning dist-eval-${row.tone}`}>{row.meaning}</td>
+          <td>{row.reinvested > 0 ? <>{money(row.reinvested)} → {money(row.worth)} <span className={row.change == null ? '' : row.change >= 0 ? 'dist-positive' : 'dist-negative'}>({row.change == null ? DASH : `${row.change >= 0 ? '+' : '−'}${pct(row.change)}`})</span></> : DASH}</td>
+        </tr>)}</tbody>
+      </table>
+      {!rows.length && <div className="dist-empty">No holdings to evaluate in this range.</div>}
+    </div>
+    <p className="dist-note">Hover a row for the reason. &quot;DRIP vs cash&quot; replays each fund&apos;s real prices and distributions over the selected range or the last 3 years, whichever is longer, and compares reinvesting every distribution with taking the cash and earning 4% a year on it (the DRIP vs. Cash Analyzer test). Within 2% either way counts as borderline. &quot;You now&quot; comes from the DRIP boxes on the Holdings screen. This describes the past, not what a fund will do next.</p>
+  </section>
 }
 
 async function readJSON(response) {
@@ -150,7 +220,7 @@ function PaymentDetail({ row, modelAll, span }) {
   </td></tr>
 }
 
-export default function DistributionDripLedger({ refreshKey, showSold = true, setShowSold, heldTickers }) {
+export default function DistributionDripLedger({ refreshKey, showSold = true, setShowSold, heldTickers, dripStatus }) {
   const pf = useProfileFetch()
   const [range, setRange] = useState('last12')
   const [modelAll, setModelAll] = useState(false)
@@ -165,7 +235,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const asOf = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
   const params = rangeParams(range, firstMonth, asOf)
   const loadKey = `${refreshKey}:${range}:${params.start || ''}:${modelAll ? 1 : 0}:${evaluate ? 1 : 0}`
-  const columns = useMemo(() => evaluate ? [COLUMNS[0], COLUMNS[1], FIT_COLUMN, ...COLUMNS.slice(2)] : COLUMNS, [evaluate])
+  const columns = COLUMNS
 
   useEffect(() => {
     let stale = false
@@ -199,21 +269,23 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
 
   const current = state?.key === loadKey ? state : null
   const fits = useMemo(() => new Map((current?.statuses || []).filter(s => s.evaluation).map(s => [s.ticker, s.evaluation])), [current])
-  // Your own result per ticker: what was reinvested in the range and what those shares are worth now.
+  // Your own result per ticker: what was reinvested in the range, and every share
+  // it bought at the latest close (a later sale does not shrink this comparison).
   const mine = useMemo(() => {
     const out = new Map()
     for (const row of current?.rows || []) {
-      const entry = out.get(row.ticker) || { reinvested: 0, value: null, month: '' }
+      const entry = out.get(row.ticker) || { reinvested: 0, shares: 0, price: null, month: '' }
       entry.reinvested += Number(row.drip_amount) || 0
-      if (row.month > entry.month) Object.assign(entry, { month: row.month, value: row.value_of_drip })
+      entry.shares += Number(row.shares_bought) || 0
+      if (row.month > entry.month) Object.assign(entry, { month: row.month, price: row.month_end_price })
       out.set(row.ticker, entry)
     }
+    for (const entry of out.values()) entry.value = entry.price == null ? null : entry.shares * entry.price
     return out
   }, [current])
   const { rows, hidden } = useMemo(() => {
     const needle = filter.trim().toUpperCase()
     const matched = (current?.rows || []).filter(r => !needle || `${r.ticker} ${r.description || ''}`.toUpperCase().includes(needle))
-      .map(r => evaluate ? { ...r, drip_fit: fits.get(r.ticker)?.label ?? null } : r)
     // Holdings no longer owned in any account of this portfolio can be hidden;
     // like the filter box, the cards and totals then cover the rows shown.
     const isSold = r => heldTickers && !heldTickers.has(String(r.ticker).toUpperCase())
@@ -223,7 +295,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       rows: soldRows.length ? matched.filter(r => !isSold(r)) : matched,
       hidden: { tickers, amount: sum(soldRows, 'distribution') },
     }
-  }, [current, filter, showSold, heldTickers, evaluate, fits])
+  }, [current, filter, showSold, heldTickers])
   const { sorted, sort, onSort } = useTableSort(rows, columns, { key: 'month', direction: 'asc' })
   const groupKey = groupBy === 'none' ? null : groupBy
   const groups = useMemo(() => {
@@ -242,7 +314,8 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
     position: positioned.length ? sum(positioned, 'total_value') : null,
     buying: new Set(rows.filter(r => r.shares_bought > 0).map(r => r.ticker)).size,
   }
-  const fitCounts = FIT_ORDER.map(label => [label, latest.filter(r => r.drip_fit === label).length])
+  const evaluation = useMemo(() => evaluate ? evaluationRows(latestByTicker(rows), fits, mine, dripStatus, heldTickers) : [],
+    [evaluate, rows, fits, mine, dripStatus, heldTickers])
   const years = useMemo(() => {
     const first = Number((firstMonth || asOf).slice(0, 4))
     const out = []
@@ -256,14 +329,13 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
 
   const fitBadge = ticker => {
     const fit = fits.get(ticker)
-    return <span className={`dist-fit ${FIT_TONE[fit?.label] || ''}`} title={fitTitle(fit, mine.get(ticker))}>{fit?.label || (loading ? '…' : DASH)}</span>
+    return <span className={`dist-fit ${FIT_TONE[fit?.label] || ''}`} title={fitTitle(ticker, fit, mine.get(ticker))}>{fit?.label || (loading ? '…' : DASH)}</span>
   }
 
   const cellFor = (column, row) => {
     if (column.key === 'month') return <>{monthLabel(row.month)}{row.partial ? '*' : ''}</>
     if (column.key === 'ticker') return <strong title={row.description || row.ticker}>{row.ticker}</strong>
     if (column.key === 'source') return <span className={SOURCE_TONE[row.source] || ''}>{row.source}</span>
-    if (column.key === 'drip_fit') return fitBadge(row.ticker)
     return column.format(row[column.key])
   }
 
@@ -281,8 +353,8 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       <label className="dist-checkbox" title="Reinvest every payment that was taken as cash at that day's close, and model holdings with no payment records from the fund's distribution history">
         <input type="checkbox" checked={modelAll} onChange={e => setModelAll(e.target.checked)} /> Show all holdings as if reinvested
       </label>
-      <label className="dist-checkbox" title="Judge each holding: did reinvesting beat taking the cash over the selected range or the last 3 years, whichever is longer?">
-        <input type="checkbox" checked={evaluate} onChange={e => setEvaluate(e.target.checked)} /> Evaluate DRIP fit
+      <label className="dist-checkbox" title="For each holding: has reinvesting paid more than taking the cash? Flags the ones you reinvest that would have done better as cash.">
+        <input type="checkbox" checked={evaluate} onChange={e => setEvaluate(e.target.checked)} /> Is DRIP worth it?
       </label>
       {setShowSold && <label className="dist-checkbox" title="Holdings no account in this portfolio holds any more">
         <input type="checkbox" checked={showSold} onChange={e => setShowSold(e.target.checked)} /> Show holdings I no longer own
@@ -290,6 +362,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       <button type="button" className="btn" disabled={!rows.length} onClick={() => exportCsv(sorted, range, columns)}>Export CSV</button>
     </div>
     {current?.error && <div className="alert alert-error" role="alert">{current.error}</div>}
+    {evaluate && <DripEvaluation rows={evaluation} mine={mine} loading={loading} />}
     {loading && !current?.error && <div className="dist-loading" role="status"><span className="spinner" /> {current?.total ? `Loading ${current.loaded} of ${current.total} holdings…` : 'Finding reinvested holdings…'}</div>}
     <div className="summary-strip">
       <Metric label="Distributions" value={money(totals.distribution)} sub={rangeLabel} />
@@ -298,7 +371,6 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       <Metric label="Income from DRIP shares" value={money(totals.income)} sub="Paid on shares reinvesting added in this range" color="dist-positive" />
       <Metric label="Value of DRIP shares" value={money(totals.value)} sub={valued.length < latest.length ? `${valued.length} of ${latest.length} holdings priced` : 'At each holding\'s latest month-end close'} />
       {modelAll && <Metric label="Modeled extra income" value={money(totals.extra)} sub="Paid on shares that reinvesting cash payments would have added" />}
-      {evaluate && <Metric label="DRIP fit" value={`${fitCounts[0][1]} good to DRIP`} sub={fitCounts.slice(1).map(([label, n]) => `${n} ${label.toLowerCase()}`).join(' · ')} color="dist-positive" />}
     </div>
     {hidden.tickers.length > 0 && <p className="dist-note">Hiding {hidden.tickers.length} {hidden.tickers.length === 1 ? 'holding' : 'holdings'} you no longer own ({hidden.tickers.join(', ')}), which paid {money(hidden.amount)} in this range. The cards and totals leave {hidden.tickers.length === 1 ? 'it' : 'them'} out; tick “Show holdings I no longer own” to include {hidden.tickers.length === 1 ? 'it' : 'them'}.</p>}
     {meta?.flagged_without_records?.length > 0 && !modelAll && <p className="dist-note">Marked DRIP on Holdings but no reinvestment records in this range: {meta.flagged_without_records.join(', ')}. Tick “Show all holdings as if reinvested” to model them.</p>}
@@ -308,7 +380,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
         <tbody>{groups.map(([name, list]) => <Fragment key={name || 'all'}>
           {name != null && <tr className="dist-group-title-row"><td colSpan={columns.length}>
             {groupKey === 'month' ? monthLabel(name) : `${name}${list[0]?.description ? ` · ${list[0].description}` : ''}`} · {list.length} {groupKey === 'month' ? (list.length === 1 ? 'holding' : 'holdings') : (list.length === 1 ? 'month' : 'months')}
-            {evaluate && groupKey === 'ticker' && <> · DRIP fit: {fitBadge(name)}</>}
+            {evaluate && groupKey === 'ticker' && <> · {fitBadge(name)}</>}
           </td></tr>}
           {list.map(row => {
             const id = `${row.ticker}:${row.month}`
@@ -333,7 +405,6 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       </table>
       {!loading && !rows.length && !current?.error && <div className="dist-empty">{filter ? 'No holdings match this filter.' : modelAll ? 'No holdings paid distributions in this range.' : 'No reinvestment records in this range. Tick “Show all holdings as if reinvested” to model every holding.'}</div>}
     </div>
-    {evaluate && <p className="dist-note">DRIP fit replays each fund&apos;s own prices and distributions over the selected range or the last 3 years, whichever is longer, the same test as the DRIP vs. Cash Analyzer: <em>Good to DRIP</em> when $1 reinvested ended up worth more than $1 kept as cash earning 4% a year, <em>Better as cash</em> when cash finished at least 2% ahead, <em>Toss-up</em> in between, and <em>Too new to judge</em> with under 120 days of prices. Hover a verdict for the numbers and your own result. It describes the past, not what a fund will do next.</p>}
     {problems.length > 0 && <p className="dist-note">{problems.map(s => `${s.ticker}: ${s.message}`).join(' ')}</p>}
     <p className="dist-note">* Current month in progress. Click a row to see each payment and which account it came from. Base shares are counted back from each account's current share count through its buys and sells, so a position opened before your transaction history still starts from the right number. {modelAll
       ? 'Modeled rows reinvest the cash payments at that day\'s closing price; those shares then earn the payments after them. Holdings with no payment records are modeled from the fund\'s distribution history and your share count.'

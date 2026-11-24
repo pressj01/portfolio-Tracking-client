@@ -328,11 +328,11 @@ def test_drip_fit_separates_compounders_from_eroding_funds():
     assert fit_window_start("2021-01", TODAY) == date(2021, 1, 1)
 
     growing = evaluate_drip_fit(trending_market(start, TODAY, 20, 0.10, 0.004), "GROW", start, TODAY)
-    assert growing["label"] == "Good to DRIP" and growing["re"] > 1.02 and growing["bucket"] == "Grower"
+    assert growing["label"] == "Good DRIP candidate" and growing["re"] > 1.02 and growing["bucket"] == "Grower"
     eroding = evaluate_drip_fit(trending_market(start, TODAY, 20, -0.35, 0.03), "MELT", start, TODAY)
-    assert eroding["label"] == "Better as cash" and eroding["re"] < 0.98 and eroding["bucket"] == "Liquidator"
+    assert eroding["label"] == "Not a good DRIP candidate" and eroding["re"] < 0.98 and eroding["bucket"] == "Liquidator"
     young = evaluate_drip_fit(trending_market(TODAY - timedelta(days=60), TODAY, 20, 0.1, 0.01), "NEW", start, TODAY)
-    assert young["label"] == "Too new to judge" and young["call"] is None
+    assert young["label"] == "Not enough history" and young["call"] is None
     assert evaluate_drip_fit({"prices": [], "distributions": []}, "NONE", start, TODAY)["call"] is None
 
 
@@ -354,5 +354,5 @@ def test_ledger_endpoint_adds_drip_fit_when_asked(connection, monkeypatch):
     plain = client.get("/api/portfolio-distributions/drip-ledger?profile_id=2&tickers=MNY").get_json()
     assert "evaluation" not in plain["tickers"][0]
     judged = client.get("/api/portfolio-distributions/drip-ledger?profile_id=2&tickers=MNY&evaluate=1").get_json()
-    assert judged["tickers"][0]["evaluation"]["label"] == "Good to DRIP" and judged["rows"]
+    assert judged["tickers"][0]["evaluation"]["label"] == "Good DRIP candidate" and judged["rows"]
     assert (today - starts[-1]).days >= 365 * 3 - 1  # fetched the longer window

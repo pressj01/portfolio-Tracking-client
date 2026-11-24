@@ -61937,7 +61937,7 @@ def portfolio_drip_ledger():
             market = markets.get(status["ticker"])
             status["evaluation"] = (
                 evaluate_drip_fit(market, status["ticker"], market_start, today) if market
-                else {"label": "Too new to judge", "call": None, "reason": "Price history could not be loaded."}
+                else {"label": "Not enough history", "call": None, "reason": "Price history could not be loaded."}
             )
     return jsonify(start=start, end=end, as_of=today.isoformat(), model_all=model_all, **payload)
 

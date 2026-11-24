@@ -737,7 +737,8 @@ def apply_reinvest_evidence(conn, profile_ids, today=None, evidence=None):
 
 FIT_YEARS = 3
 MIN_FIT_DAYS = 120  # portfolio_tester.MIN_DAYS, the DRIP vs. Cash Analyzer's floor
-FIT_LABELS = {"DRIP": "Good to DRIP", "Take cash": "Better as cash", "Toss-up": "Toss-up"}
+FIT_LABELS = {"DRIP": "Good DRIP candidate", "Take cash": "Not a good DRIP candidate", "Toss-up": "Borderline"}
+NO_FIT = "Not enough history"
 
 
 def fit_window_start(start_key, today):
@@ -766,7 +767,7 @@ def evaluate_drip_fit(payload, ticker, start_day, today):
             prices.append((day, close))
     prices.sort()
     if len(prices) < 2 or (prices[-1][0] - prices[0][0]).days < MIN_FIT_DAYS:
-        return {"label": "Too new to judge", "call": None,
+        return {"label": NO_FIT, "call": None,
                 "reason": f"Needs at least {MIN_FIT_DAYS} days of prices in the window."}
     index = pd.DatetimeIndex([pd.Timestamp(day) for day, _ in prices])
     close = pd.Series([value for _, value in prices], index=index, dtype=float)
@@ -776,15 +777,15 @@ def evaluate_drip_fit(payload, ticker, start_day, today):
         if day is not None and amount > 0 and pd.Timestamp(day) in divs.index:
             divs.loc[pd.Timestamp(day)] += amount
     if not (divs > 0).any():
-        return {"label": "Too new to judge", "call": None,
+        return {"label": NO_FIT, "call": None,
                 "reason": "No distributions in the window, so there is nothing to reinvest."}
     try:
         metrics = drip_score.compute_ticker_metrics(close, divs, ticker)
     except (ValueError, ZeroDivisionError) as problem:
-        return {"label": "Too new to judge", "call": None, "reason": str(problem)}
+        return {"label": NO_FIT, "call": None, "reason": str(problem)}
     call = metrics.get("drip_call")
     return {
-        "label": FIT_LABELS.get(call, "Too new to judge"),
+        "label": FIT_LABELS.get(call, NO_FIT),
         "call": call if call in FIT_LABELS else None,
         "bucket": metrics.get("bucket"),
         "re": metrics.get("re"),
