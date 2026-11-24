@@ -77,42 +77,50 @@ export default function DividendHistory() {
   useEffect(() => {
     if (!data || !window.Plotly || !chartRef.current) return
     const Plotly = window.Plotly
-    const { labels, values, cumulative } = data.series
+    const { labels, values, cumulative, partial_periods: partialPeriods = [] } = data.series
+    const isPartial = (i) => Boolean(partialPeriods[i])
 
     const traces = []
 
     if (view === 'yearly') {
-      // Bar chart for yearly
+      // Bar chart for yearly — dim the incomplete YTD bar so it is not read as a full year.
       traces.push({
         x: labels,
         y: values,
         type: 'bar',
-        marker: { color: '#a855f7' },
+        marker: {
+          color: values.map((_, i) => (isPartial(i) ? 'rgba(168, 85, 247, 0.45)' : '#a855f7')),
+        },
         text: values.map(v => formatMoneyWhole(v)),
         textposition: 'outside',
         hovertemplate: '<b>%{x}</b><br>$%{y:,.2f}<extra></extra>',
         name: 'Annual Dividends',
       })
     } else {
-      // Area chart for monthly/weekly
+      // Area chart for monthly/weekly — mark the in-progress MTD/WTD point.
       traces.push({
         x: labels,
         y: values,
         type: 'scatter',
-        mode: 'lines',
+        mode: 'lines+markers',
         fill: 'tozeroy',
         fillcolor: 'rgba(56, 189, 248, 0.15)',
         line: { color: '#38bdf8', width: 2 },
+        marker: {
+          size: values.map((_, i) => (isPartial(i) ? 9 : 5)),
+          color: values.map((_, i) => (isPartial(i) ? '#f59e0b' : '#38bdf8')),
+        },
         hovertemplate: '<b>%{x}</b><br>$%{y:,.2f}<extra></extra>',
         name: view === 'monthly' ? 'Monthly Dividends' : 'Weekly Dividends',
       })
 
-      // Moving average (3-period for monthly, not for weekly with few points)
+      // Moving average over completed months only so the current MTD does not pull it down.
       if (view === 'monthly' && values.length >= 6) {
         const window = 3
         const ma = values.map((_, i) => {
-          if (i < window - 1) return null
+          if (isPartial(i) || i < window - 1) return null
           const slice = values.slice(i - window + 1, i + 1)
+          if (slice.some((__, offset) => isPartial(i - window + 1 + offset))) return null
           return slice.reduce((a, b) => a + b, 0) / window
         })
         traces.push({
@@ -173,7 +181,8 @@ export default function DividendHistory() {
   }, [data, view, showCumulative, isDark])
 
   const rangeOptions = view === 'monthly' ? MONTHLY_RANGE : view === 'weekly' ? WEEKLY_RANGE : null
-  const trendPeriodLabel = view === 'yearly' ? 'YEAR' : view === 'monthly' ? 'MONTH' : 'PERIOD'
+  const trendPeriodLabel = view === 'yearly' ? 'YEAR' : view === 'monthly' ? 'MONTH' : 'WEEK'
+  const completedPeriodLabel = view === 'yearly' ? 'FULL YEAR' : view === 'monthly' ? 'FULL MONTH' : 'FULL WEEK'
   const growthLabel = `CHANGE VS FIRST ${trendPeriodLabel}`
 
   return (
@@ -305,15 +314,15 @@ export default function DividendHistory() {
               <div className="summary-value">{fmt(data.summary.total)}</div>
             </div>
             <div className="summary-card">
-              <div className="summary-label">AVERAGE</div>
+              <div className="summary-label">AVG {completedPeriodLabel}</div>
               <div className="summary-value">{fmt(data.summary.average)}</div>
             </div>
             <div className="summary-card">
-              <div className="summary-label">MIN</div>
+              <div className="summary-label">MIN {completedPeriodLabel}</div>
               <div className="summary-value">{fmt(data.summary.min)}</div>
             </div>
             <div className="summary-card">
-              <div className="summary-label">MAX</div>
+              <div className="summary-label">MAX {completedPeriodLabel}</div>
               <div className="summary-value">{fmt(data.summary.max)}</div>
             </div>
             <div className="summary-card">
