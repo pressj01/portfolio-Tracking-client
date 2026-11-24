@@ -3403,14 +3403,15 @@ function DistributionsHelp() {
         A spreadsheet of what each holding&apos;s distributions bought, month by month. By default it lists every holding
         that actually reinvested in the selected range, using your broker&apos;s records: each payment is matched to the
         <code> [DRIP]</code> reinvestment buy that followed it. Months a holding took cash show as <em>Cash</em>.
+        For combined accounts, every account holding a listed ticker contributes its shares and payments, even if it takes cash.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Base shares</strong> — shares held at the start of the month, including shares earlier reinvestments bought. They are counted back from each account&apos;s current share count through its buys and sells, so a position opened before your transaction history still starts from the right number.</li>
         <li><strong>Share price</strong> — the ticker&apos;s closing price at month end (the latest close for the current month), the price Total value and Value of DRIP shares use.</li>
         <li><strong>Distribution</strong> — cash the holding paid that month. <strong>DRIP amount</strong> is the part that bought more shares; <strong>Shares repurchased</strong> and <strong>Reinvest price</strong> are what it bought.</li>
-        <li><strong>Other buys/sells</strong> — shares bought or sold that month other than by reinvesting, so Base + Repurchased + Other = Ending shares.</li>
+        <li><strong>Other buys/sells</strong> — shares bought or sold that month other than by reinvesting. Ending shares reflect actual trade dates; a reinvestment linked to a payment may post in a different month.</li>
         <li><strong>DRIP shares to date</strong> — shares bought by reinvesting since the start of the range. A sale reduces them in proportion.</li>
-        <li><strong>Income from DRIP shares</strong> — the part of the month&apos;s distribution paid on those reinvested shares: how much more the holding pays because it reinvested.</li>
+        <li><strong>Income from DRIP shares</strong> — the part of the month&apos;s distribution paid on shares bought through reinvestment before its ex-dividend date (using the payment date when the ex-date is unavailable).</li>
         <li><strong>Total value</strong> — ending shares at the month-end closing price: the whole holding, so you can watch it grow as reinvested shares are added.</li>
         <li><strong>Value of DRIP shares</strong> — DRIP shares to date at the month-end closing price.</li>
         <li><strong>Reinvested?</strong> — what happened to the month&apos;s payments: <em>Reinvested</em> (they all bought more shares, from your broker&apos;s reinvestment records), <em>Part reinvested</em> (some bought shares and some were taken as cash, for example one account reinvests and another does not, DRIP was switched during the month, or the broker reinvests only whole shares), <em>Taken as cash</em> (none were reinvested), or <em>Modeled</em> (the &quot;as if reinvested&quot; view). Hover a cell for the dollars and each account&apos;s share.</li>
@@ -3421,6 +3422,8 @@ function DistributionsHelp() {
           <ul style={{ paddingLeft: '1.25rem' }}>
             <li><em>You now</em> — whether you reinvest it today, from the DRIP boxes on Holdings (on Owner, in how many accounts).</li>
             <li><em>Verdict</em> — <strong>Good DRIP candidate</strong>, <strong>Not a good DRIP candidate</strong>, <strong>Borderline</strong> (within 2% either way), <strong>Not enough history</strong> (under 120 days of prices) or <strong>No distributions</strong> (pays nothing, so nothing to reinvest).</li>
+            <li><em>Shares Held</em> — the number of shares you currently own in the selected account or combined accounts.</li>
+            <li><em>% of Account</em> — the current holding value as a percentage of the entire selected account or combined accounts, regardless of the selected range or holding filter.</li>
             <li><em>DRIP vs cash</em> — how much more or less reinvesting every distribution left you than taking the cash and earning 4% a year on it, over the selected range or the last 3 years, whichever is longer.</li>
             <li><em>Extra payouts from DRIP</em> — how much more the holding was paid in distributions when reinvested than when taken as cash, because the shares DRIP buys earn payouts too. <em>DRIP vs cash</em> already counts these payouts; the hover weighs them against what the reinvested shares are worth now.</li>
             <li><em>What it means</em> — for example <strong>Doesn&apos;t make much sense to DRIP: taking the cash has paid more</strong> for a holding you reinvest, or <strong>Worth reinvesting</strong> for one you take as cash. Those two come first, and boxes above the table list them.</li>

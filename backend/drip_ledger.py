@@ -280,10 +280,18 @@ def replay_position(position, months, today, model_all=False, model_from_market=
                                    "per_share": per_share, "reinvested": 0.0, "shares": 0.0,
                                    "price": None, "source": "market", "from_market": True})
 
-    timeline = [(e["day"], 0, "pay", e) for e in events]
+    # A distribution is earned on its ex-date, but its cash arrives later.
+    # Snapshot the eligible DRIP shares before any activity on the ex-date,
+    # then use that snapshot when the payment is eventually recorded.
+    timeline = []
+    for event in events:
+        entitle_day = event.get("ex") or event["day"]
+        if start_day <= entitle_day:
+            timeline.append((entitle_day, 0, "entitle", event))
+        timeline.append((event["day"], 1, "pay", event))
     for index, trade in enumerate(position.trades):
-        if start_day <= trade["day"] < end_bound and not trade["drip"]:
-            timeline.append((trade["day"], 1, "trade", index))
+        if start_day <= trade["day"] < end_bound:
+            timeline.append((trade["day"], 2, "trade", index))
     timeline.sort(key=lambda item: (item[0], item[1]))
 
     records = {}
@@ -304,8 +312,17 @@ def replay_position(position, months, today, model_all=False, model_from_market=
         while cursor < len(timeline) and timeline[cursor][0] < m1:
             day, _, kind, item = timeline[cursor]
             cursor += 1
+            if kind == "entitle":
+                item["drip_held_at_ex"] = min(drip_cum, position.shares_before(day))
+                item["modeled_held_at_ex"] = modeled
+                continue
             if kind == "trade":
                 trade = position.trades[item]
+                # A paired reinvestment may post on a different day from its
+                # payment. Shares only become eligible on the actual buy date.
+                if trade["drip"]:
+                    drip_cum += trade["shares"]
+                    continue
                 record["other_shares"] += trade["signed"]
                 if trade["signed"] < 0:
                     before, after = position.shares_around(item)
@@ -317,8 +334,9 @@ def replay_position(position, months, today, model_all=False, model_from_market=
             entitle_day = event.get("ex") or event["day"]
             held = position.shares_before(entitle_day)
             per_share = event.get("per_share") or (event["amount"] / held if held > 0 else None)
-            drip_held = min(drip_cum, held) + modeled
-            extra = per_share * modeled if (model_all and per_share) else 0.0
+            modeled_held = event.get("modeled_held_at_ex", 0.0)
+            drip_held = event.get("drip_held_at_ex", 0.0) + modeled_held
+            extra = per_share * modeled_held if (model_all and per_share) else 0.0
             cash = max(0.0, event["amount"] - event["reinvested"])
             modeled_amount = modeled_shares = 0.0
             modeled_price = None
@@ -327,7 +345,6 @@ def replay_position(position, months, today, model_all=False, model_from_market=
                 if modeled_price:
                     modeled_amount = cash + extra
                     modeled_shares = modeled_amount / modeled_price
-            drip_cum += event["shares"]
             modeled += modeled_shares
             is_modeled = bool(modeled_shares or extra or event.get("from_market"))
             record["distribution"] += event["amount"] + extra
@@ -347,7 +364,7 @@ def replay_position(position, months, today, model_all=False, model_from_market=
                 "date": event["day"].isoformat(), "profile_id": position.profile_id,
                 "amount": round(event["amount"] + extra, 2), "paid": round(event["amount"], 2),
                 "extra": round(extra, 2), "per_share": round(per_share, 6) if per_share else None,
-                "shares_held": round(held + (modeled - modeled_shares), 6),
+                "shares_held": round(held + modeled_held, 6),
                 "reinvested": round(event["reinvested"] + modeled_amount, 2),
                 "shares": round(event["shares"] + modeled_shares, 6),
                 "price": round(event["price"], 4) if event.get("price") else (round(modeled_price, 4) if modeled_price else None),
@@ -545,6 +562,7 @@ def build_drip_ledger(conn, profile_ids, tickers, start_key, end_key, *, model_a
         market = Market(payload) if payload else None
         description = ""
         positions = []
+        eligible = False
         for key in by_ticker.get(ticker, ()):
             holding = holdings.get(key) or {}
             description = description or holding.get("description") or ""
@@ -553,11 +571,15 @@ def build_drip_ledger(conn, profile_ids, tickers, start_key, end_key, *, model_a
             reinvested = position.has_drip_buy(start_day, end_bound)
             pays = position.has_payment(start_day, end_bound)
             income_holding = position.quantity > 1e-9 and (_num(holding.get("div")) > 0 or _num(holding.get("estim")) > 0)
-            if reinvested or (model_all and (pays or income_holding)):
-                positions.append((position, model_all and not pays and not reinvested))
+            # Eligibility belongs to the ticker, not each account. Once any
+            # account qualifies, all its positions contribute to the rollup,
+            # including cash payments and shares held in non-DRIP accounts.
+            eligible = eligible or reinvested or (model_all and (pays or income_holding))
+            positions.append((position, model_all and income_holding and not pays and not reinvested))
         status = {"ticker": ticker, "description": description,
-                  "market": "ok" if market and market.days else "unavailable"}
-        if not positions:
+                  "market": "ok" if market and market.days else "unavailable",
+                  "latest_close": market.close_on_or_before(today) if market else None}
+        if not eligible:
             status["message"] = "No reinvestment records in this range."
             statuses.append(status)
             continue

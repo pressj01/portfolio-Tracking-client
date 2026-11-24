@@ -42,6 +42,7 @@ import OpenLotsView from '../components/OpenLotsView'
 import LotSortHeader from '../components/LotSortHeader'
 import { nextLotSort, sortByValue, sortLotRows } from '../utils/lotTableSort'
 import { buildSubcategoryTree, indentedName } from '../utils/categoryHierarchy'
+import { dripCheckboxPayload } from '../utils/dripSettings'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '', subcategory_id: '',
@@ -3564,7 +3565,6 @@ export default function ManageHoldings() {
         // Owner speaks for its accounts: checked when any of them reinvests,
         // with "2/5" when only some do. Its click sets every account.
         const dripSummary = dripAccountsSummary(h)
-        const ownerToggle = profileId === 1 && !isAggregate && dripSummary && dripSummary.total > 1
         const dripTitle = dripCheckboxTitle(h, dripSummary)
         return (
           <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }} title={dripTitle}>
@@ -3574,7 +3574,8 @@ export default function ManageHoldings() {
               aria-label={`DRIP for ${h.ticker}`}
               onChange={async () => {
                 const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
-                if (ownerToggle && !await dialog.confirm(
+                const payload = dripCheckboxPayload(profileId, isAggregate, dripSummary?.total || 0, newVal)
+                if (payload.reinvest_all_accounts && dripSummary.total > 1 && !await dialog.confirm(
                   `Turn DRIP ${newVal === 'Y' ? 'on' : 'off'} for ${h.ticker} in all ${dripSummary.total} accounts that hold it (${dripSummary.accounts.map(a => a.account).join(', ')})?`
                 )) return
                 const mi = Number(h.approx_monthly_income) || 0
@@ -3600,7 +3601,7 @@ export default function ManageHoldings() {
                   await pf(`/api/holdings/${h.ticker}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(ownerToggle ? { reinvest: newVal, reinvest_all_accounts: true } : { reinvest: newVal }),
+                    body: JSON.stringify(payload),
                   })
                   invalidateDashboardCache()
                   // Reconcile with the backend's authoritative split so

@@ -356,9 +356,14 @@ export default function Distributions() {
     for (const h of holdings) {
       if (!(Number(h.quantity) > 0)) continue
       const accounts = Array.isArray(h.reinvest_accounts) ? h.reinvest_accounts : null
-      out.set(String(h.ticker).toUpperCase(), accounts
+      const status = accounts
         ? { on: accounts.filter(a => a.reinvest).length, total: accounts.length }
-        : { on: h.reinvest === 'Y' ? 1 : 0, total: 1 })
+        : { on: h.reinvest === 'Y' ? 1 : 0, total: 1 }
+      out.set(String(h.ticker).toUpperCase(), {
+        ...status,
+        shares_held: Number(h.quantity),
+        percent_of_account: h.percent_of_account,
+      })
     }
     return out
   }, [holdings])

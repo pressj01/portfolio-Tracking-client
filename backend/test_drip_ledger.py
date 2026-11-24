@@ -53,9 +53,9 @@ def trade(conn, ticker, pid, day, shares, price, kind="BUY", notes=""):
                     VALUES (?, ?, ?, ?, ?, ?, ?)""", (ticker, pid, kind, str(day), shares, price, notes))
 
 
-def pay(conn, ticker, pid, day, amount, source="schwab_transactions"):
-    conn.execute("INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source) VALUES (?, ?, ?, ?, ?)",
-                 (ticker, pid, str(day), amount, source))
+def pay(conn, ticker, pid, day, amount, source="schwab_transactions", ex=None):
+    conn.execute("INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, ex_date) VALUES (?, ?, ?, ?, ?, ?)",
+                 (ticker, pid, str(day), amount, source, str(ex) if ex else None))
 
 
 def drip(conn, ticker, pid, day, shares, price, amount=None):
@@ -126,6 +126,79 @@ def test_actual_ledger_replays_base_shares_and_income_from_reinvested_shares(con
     assert (jan["total_value"], mar["total_value"]) == (pytest.approx(10200), pytest.approx(10612.08))
     assert {r["source"] for r in rows.values()} == {"Actual"}
     assert jan["payments"][0]["account"] == "Taxable" and jan["payments"][0]["kind"] == "drip"
+
+
+def test_combined_drip_rows_include_cash_and_nonpaying_accounts(connection):
+    hold(connection, "MIX", 2, 110, "Y")
+    hold(connection, "MIX", 3, 50, "N")
+    hold(connection, "MIX", 4, 25, "N")
+    trade(connection, "MIX", 2, "2025-12-01", 100, 10)
+    drip(connection, "MIX", 2, "2026-01-15", 10, 10)
+    pay(connection, "MIX", 3, "2026-01-15", 50)
+    pay(connection, "MIX", 3, "2026-02-15", 50)
+    connection.commit()
+    market = flat_market(D("2025-12-01"), TODAY, 10)
+    result = build_drip_ledger(connection, [2, 3, 4], ["MIX"], "2026-01", "2026-02",
+                               markets={"MIX": market}, account_names={2: "Taxable", 3: "Roth"}, today=TODAY)
+    rows = by_month(result["rows"], "MIX")
+    jan, feb = rows["2026-01"], rows["2026-02"]
+    assert (jan["base_shares"], jan["end_shares"], jan["total_value"]) == (175, 185, 1850)
+    assert (jan["distribution"], jan["drip_amount"], jan["cash"], jan["source"]) == (150, 100, 50, "Partly cash")
+    assert {(p["account"], p["kind"]) for p in jan["payments"]} == {("Taxable", "drip"), ("Roth", "cash")}
+    assert (feb["base_shares"], feb["distribution"], feb["drip_amount"], feb["source"]) == (185, 50, 0, "Cash")
+    assert build_drip_ledger(connection, [3, 4], ["MIX"], "2026-01", "2026-02", today=TODAY)["rows"] == []
+
+
+@pytest.mark.parametrize("second_ex, entitled", [("2026-01-08", 0), ("2026-01-11", 0),
+                                                  ("2026-01-12", 0), ("2026-01-13", 10)])
+def test_actual_drip_income_uses_ex_date_and_actual_reinvestment_date(connection, second_ex, entitled):
+    hold(connection, "EX", 2, 110, "Y")
+    trade(connection, "EX", 2, "2025-12-01", 100, 10)
+    pay(connection, "EX", 2, "2026-01-10", 100, ex="2026-01-05")
+    trade(connection, "EX", 2, "2026-01-12", 10, 10, notes="[DRIP] Reinvest Shares")
+    pay(connection, "EX", 2, "2026-01-20", 100 + entitled, ex=second_ex)
+    connection.commit()
+    row = build_drip_ledger(connection, [2], ["EX"], "2026-01", "2026-01", today=TODAY)["rows"][0]
+    assert row["income_from_drip"] == entitled
+    assert row["payments"][1]["shares_held"] == 100 + entitled
+    assert row["drip_shares"] == 10
+
+
+def test_drip_income_preserves_entitlement_when_shares_are_sold_before_payment(connection):
+    hold(connection, "EX", 2, 55, "Y")
+    trade(connection, "EX", 2, "2025-12-01", 100, 10)
+    drip(connection, "EX", 2, "2026-01-10", 10, 10)
+    trade(connection, "EX", 2, "2026-01-16", 55, 10, kind="SELL")
+    pay(connection, "EX", 2, "2026-01-20", 110, ex="2026-01-15")
+    connection.commit()
+    row = build_drip_ledger(connection, [2], ["EX"], "2026-01", "2026-01", today=TODAY)["rows"][0]
+    assert row["income_from_drip"] == 10
+    assert row["drip_shares"] == 5
+
+
+def test_modeled_extra_income_uses_shares_owned_on_ex_date(connection):
+    hold(connection, "EX", 2, 100, "N")
+    pay(connection, "EX", 2, "2026-01-10", 100, ex="2026-01-05")
+    pay(connection, "EX", 2, "2026-01-20", 100, ex="2026-01-09")
+    pay(connection, "EX", 2, "2026-02-10", 100, ex="2026-01-25")
+    connection.commit()
+    market = flat_market(D("2025-12-01"), TODAY, 10)
+    result = build_drip_ledger(connection, [2], ["EX"], "2026-01", "2026-02", model_all=True,
+                               markets={"EX": market}, today=TODAY)
+    rows = by_month(result["rows"], "EX")
+    assert rows["2026-01"]["income_from_drip"] == rows["2026-01"]["extra_income"] == 0
+    assert rows["2026-01"]["payments"][1]["shares_held"] == 100
+    feb = rows["2026-02"]
+    assert feb["income_from_drip"] == feb["extra_income"] == 20
+    assert feb["payments"][0]["shares_held"] == 120
+
+
+def test_ticker_latest_close_is_independent_of_last_payment_month(connection):
+    seed_compounding(connection)
+    market = flat_market(D("2025-12-01"), TODAY, lambda day: 10 if day.month < 4 else 13)
+    result = build_drip_ledger(connection, [2], ["MNY"], "2026-01", "2026-03", markets={"MNY": market}, today=TODAY)
+    assert result["rows"][-1]["month_end_price"] == 10
+    assert result["tickers"][0]["latest_close"] == 13
 
 
 def test_cash_payments_show_only_when_the_account_reinvests_and_are_modeled_on_request(connection):
@@ -235,16 +308,34 @@ def test_owner_follows_its_accounts_and_its_checkbox_sets_all_of_them(connection
     assert both["accounts"]["3"]["reinvest"] is False and both["accounts"]["3"]["source"] == "manual"
 
 
+def test_owner_checkbox_sets_the_only_account_that_holds_a_ticker(connection):
+    hold(connection, "SOLE", 1, 40, "N")
+    hold(connection, "SOLE", 2, 40, "N")
+    hold(connection, "SOLE", 4, 5, "N")  # excluded from Owner
+    connection.commit()
+    client = app_module.app.test_client()
+    sole = next(r for r in client.get("/api/holdings?profile_id=1").get_json() if r["ticker"] == "SOLE")
+    assert [a["profile_id"] for a in sole["reinvest_accounts"]] == [2]
+    for flag in ("Y", "N"):
+        response = client.put("/api/holdings/SOLE?profile_id=1", json={"reinvest": flag, "reinvest_all_accounts": True})
+        assert response.status_code == 200, response.get_json()
+        rows = {r["profile_id"]: r["reinvest"] for r in connection.execute(
+            "SELECT profile_id, reinvest FROM all_account_info WHERE ticker = 'SOLE'")}
+        assert rows == {1: flag, 2: flag, 4: "N"}
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 def test_ledger_endpoints_read_owner_member_accounts(connection, monkeypatch):
     today = date.today()
     first = date(today.year, today.month, 1) - timedelta(days=40)
     day = date(first.year, first.month, 15)
-    hold(connection, "MNY", 1, 1020)  # Owner's rollup row has no payments of its own
+    hold(connection, "MNY", 1, 1070)  # Owner's rollup row has no payments of its own
     hold(connection, "MNY", 2, 1020, "Y")
+    hold(connection, "MNY", 3, 50, "N")
     trade(connection, "MNY", 2, day - timedelta(days=30), 1000, 10)
     drip(connection, "MNY", 2, day, 20, 10)
+    pay(connection, "MNY", 3, day, 10)
     connection.commit()
     calls = []
 
@@ -260,7 +351,8 @@ def test_ledger_endpoints_read_owner_member_accounts(connection, monkeypatch):
     assert response.status_code == 200
     row = response.get_json()["rows"][0]
     assert (row["ticker"], row["shares_bought"], row["value_of_drip"]) == ("MNY", 20, 200) and calls == ["MNY"]
-    assert row["payments"][0]["account"] == "Taxable"
+    assert (row["end_shares"], row["distribution"], row["cash"]) == (1070, 210, 10)
+    assert {(p["account"], p["kind"]) for p in row["payments"]} == {("Taxable", "drip"), ("Roth", "cash")}
     assert client.get("/api/portfolio-distributions/drip-ledger").status_code == 400
     assert client.get("/api/portfolio-distributions/drip-ledger/tickers?start=2026-13").status_code == 400
 

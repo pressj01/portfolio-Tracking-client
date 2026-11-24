@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionSortHeader from '../components/DistributionSortHeader'
 import useTableSort from '../utils/useTableSort'
+import { summarizeReinvestment } from '../utils/distributionDripLedger'
 import { convertMoneyValue, formatMoney, getDisplayCurrency } from '../utils/money'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -73,7 +74,7 @@ const COLUMNS = [
   { key: 'end_shares', label: 'Ending shares', type: 'number', format: shares },
   { key: 'total_value', label: 'Total value', type: 'number', format: money, money: true, highlight: true, tip: 'Ending shares at the month-end closing price: the whole holding, including the shares reinvesting added' },
   { key: 'drip_shares', label: 'DRIP shares to date', type: 'number', format: shares, tip: 'Shares bought by reinvesting since the start of the range, reduced in proportion when shares were sold' },
-  { key: 'income_from_drip', label: 'Income from DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: "The part of this month's distribution paid on shares that reinvesting added" },
+  { key: 'income_from_drip', label: 'Income from DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: "The part of this month's distribution paid on shares that reinvesting added before the ex-dividend date" },
   { key: 'value_of_drip', label: 'Value of DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: 'DRIP shares to date at the month-end closing price' },
   { key: 'source', label: 'Reinvested?', type: 'string', text: true, value: r => SOURCE_LABEL[r.source] || r.source, csv: r => SOURCE_LABEL[r.source] || r.source,
     tip: 'What happened to this month\'s payments. Reinvested: they all bought more shares. Part reinvested: some bought shares and some were taken as cash. Taken as cash: none were reinvested. Modeled: the "as if reinvested" view. Hover a cell for the details.' },
@@ -124,6 +125,8 @@ const EVAL_COLUMNS = [
   { key: 'ticker', label: 'Holding', type: 'string', text: true },
   { key: 'status', label: 'You now', type: 'string', text: true, tip: 'Whether you reinvest it today, from the DRIP boxes on the Holdings screen' },
   { key: 'verdict', label: 'Verdict', type: 'string', text: true, tip: 'Whether reinvesting this ticker has paid more than taking the cash' },
+  { key: 'shares_held', label: 'Shares Held', type: 'number', tip: 'Current shares held in the selected account or combined accounts, regardless of the selected date range' },
+  { key: 'percent_of_account', label: '% of Account', type: 'number', tip: 'Current holding value as a percentage of the entire selected account or combined accounts' },
   { key: 'edge', label: 'DRIP vs cash', type: 'number', tip: 'How much more or less reinvesting every distribution left you than taking the cash and earning 4% a year on it, over the selected range or the last 3 years, whichever is longer' },
   { key: 'extra', label: 'Extra payouts from DRIP', type: 'number', tip: 'How much more the holding was paid in distributions when they were reinvested than when they were taken as cash, over the same dates: the shares DRIP buys earn payouts too. DRIP vs cash already counts these payouts; hover a row to see them weighed against the price change.' },
   { key: 'meaning', label: 'What it means', type: 'number', text: true, value: r => r.priority, tip: 'Sorted so the holdings you reinvest but probably should not come first' },
@@ -134,7 +137,8 @@ function evaluationRows(holdings, fits, mine, dripStatus, heldTickers) {
   return holdings.map(({ ticker, description }) => {
     const key = String(ticker).toUpperCase()
     const fit = fits.get(ticker)
-    const current = heldTickers && !heldTickers.has(key) ? null : dripStatus?.get(key)
+    const sold = heldTickers && !heldTickers.has(key)
+    const current = sold ? null : dripStatus?.get(key)
     const reinvesting = current ? current.on > 0 : null
     const status = !current ? 'No longer owned' : current.on === 0 ? 'Taking cash'
       : current.on === current.total ? 'Reinvesting' : `Reinvesting in ${current.on} of ${current.total} accounts`
@@ -152,6 +156,8 @@ function evaluationRows(holdings, fits, mine, dripStatus, heldTickers) {
     const own = mine.get(ticker)
     return {
       ticker, description, status, reinvesting, fit, meaning, tone, priority,
+      shares_held: sold ? 0 : current?.shares_held ?? null,
+      percent_of_account: sold ? 0 : current?.percent_of_account ?? null,
       verdict: fit?.label ?? null, edge: fit?.re != null ? fit.re - 1 : null, extra: fit?.extra_payout_pct ?? null,
       reinvested: own?.reinvested || 0, worth: own?.value ?? null,
       change: own && own.reinvested > 0 && own.value != null ? own.value / own.reinvested - 1 : null,
@@ -248,6 +254,8 @@ function DripEvaluation({ rows, mine, loading }) {
           <td className="dist-left"><strong>{row.ticker}</strong>{row.description ? <span className="dist-eval-desc"> {row.description}</span> : null}</td>
           <td className="dist-left">{row.status}</td>
           <td className="dist-left"><span className={`dist-fit ${FIT_TONE[row.verdict] || ''}`}>{row.verdict || (loading ? '…' : DASH)}</span></td>
+          <td>{shares(row.shares_held)}</td>
+          <td>{row.percent_of_account == null ? DASH : `${(row.percent_of_account * 100).toFixed(2)}%`}</td>
           <td className={row.edge == null || Math.abs(row.edge) < 0.02 ? '' : row.edge > 0 ? 'dist-positive' : 'dist-negative'}>{edgeText(row.edge)}</td>
           <td>{row.extra == null ? DASH : `+${pct(row.extra, 0)} more`}</td>
           <td className={`dist-left dist-eval-meaning dist-eval-${row.tone}`}>{row.meaning}</td>
@@ -394,18 +402,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const fits = useMemo(() => new Map((current?.statuses || []).filter(s => s.evaluation).map(s => [s.ticker, s.evaluation])), [current])
   // Your own result per ticker: what was reinvested in the range, and every share
   // it bought at the latest close (a later sale does not shrink this comparison).
-  const mine = useMemo(() => {
-    const out = new Map()
-    for (const row of current?.rows || []) {
-      const entry = out.get(row.ticker) || { reinvested: 0, shares: 0, price: null, month: '' }
-      entry.reinvested += Number(row.drip_amount) || 0
-      entry.shares += Number(row.shares_bought) || 0
-      if (row.month > entry.month) Object.assign(entry, { month: row.month, price: row.month_end_price })
-      out.set(row.ticker, entry)
-    }
-    for (const entry of out.values()) entry.value = entry.price == null ? null : entry.shares * entry.price
-    return out
-  }, [current])
+  const mine = useMemo(() => summarizeReinvestment(current?.rows, current?.statuses), [current])
   const { rows, hidden } = useMemo(() => {
     const needle = filter.trim().toUpperCase()
     const matched = (current?.rows || []).filter(r => !needle || `${r.ticker} ${r.description || ''}`.toUpperCase().includes(needle))
