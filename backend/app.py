@@ -61881,7 +61881,8 @@ def portfolio_drip_ledger_tickers():
         # Payments and trades are recorded against the accounts, never against
         # the Owner roll-up, so Owner reads its member accounts.
         ids = _dividend_payment_profile_ids_for_read(conn, pids)
-        result = drip_ledger_candidates(conn, ids, start, end, model_all, today)
+        result = drip_ledger_candidates(conn, ids, start, end, model_all, today,
+                                        evaluate=_drip_ledger_flag(request.args.get("evaluate")))
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     finally:

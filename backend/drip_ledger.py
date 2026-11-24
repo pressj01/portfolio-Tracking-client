@@ -389,14 +389,18 @@ def _drip_note_sql(alias=""):
     return f"({prefix}notes LIKE '%[DRIP]%' OR LOWER(COALESCE({prefix}notes, '')) LIKE '%reinvest%')"
 
 
-def ledger_candidates(conn, profile_ids, start_key, end_key, model_all, today):
+def ledger_candidates(conn, profile_ids, start_key, end_key, model_all, today, evaluate=False):
     """Tickers the ledger lists for these accounts and months.
 
     Without ``model_all`` that is every ticker an account reinvested in the
     range. With it, also every ticker that paid anything, and every current
     income holding (modeled from its distribution history if it has no
-    records). Also returns the earliest month any record exists, and the
-    holdings marked DRIP that have no reinvestment records in the range.
+    records). With ``evaluate``, every holding currently owned too, so "Is DRIP
+    worth it?" covers the whole account, including holdings taken as cash and
+    ones that pay nothing; the ledger rows themselves still
+    follow ``model_all`` (a holding that only took cash gets a verdict, no
+    rows). Also returns the earliest month any record exists, and the holdings
+    marked DRIP that have no reinvestment records in the range.
     """
     ids = list(dict.fromkeys(int(pid) for pid in profile_ids))
     if not ids:
@@ -405,6 +409,7 @@ def ledger_candidates(conn, profile_ids, start_key, end_key, model_all, today):
     end = min(next_month(month_start(end_key)) - timedelta(days=1), today).isoformat()
     marks = _marks(ids)
     descriptions = {}
+    held = set()
     held_income = set()
     flagged = set()
     for row in conn.execute(
@@ -415,8 +420,10 @@ def ledger_candidates(conn, profile_ids, start_key, end_key, model_all, today):
             FROM all_account_info WHERE profile_id IN ({marks}) GROUP BY 1""", ids,
     ):
         descriptions[row["ticker"]] = row["description"] or ""
-        if _num(row["quantity"]) > 1e-9 and row["pays"]:
-            held_income.add(row["ticker"])
+        if _num(row["quantity"]) > 1e-9:
+            held.add(row["ticker"])
+            if row["pays"]:
+                held_income.add(row["ticker"])
         if row["flagged"]:
             flagged.add(row["ticker"])
     drip = {row[0] for row in conn.execute(
@@ -434,6 +441,8 @@ def ledger_candidates(conn, profile_ids, start_key, end_key, model_all, today):
             [*ids, start, end, *ESTIMATE_SOURCES],
         )}
         tickers |= held_income
+    if evaluate:
+        tickers |= held
     first = None
     for row in conn.execute(
         f"""SELECT MIN(day) FROM (
@@ -740,6 +749,7 @@ MIN_FIT_DAYS = 120  # portfolio_tester.MIN_DAYS, the DRIP vs. Cash Analyzer's fl
 FIT_DISPLAY_BASE = 1000.0  # payouts and end values are shown per $1,000 invested at the start
 FIT_LABELS = {"DRIP": "Good DRIP candidate", "Take cash": "Not a good DRIP candidate", "Toss-up": "Borderline"}
 NO_FIT = "Not enough history"
+NO_DISTRIBUTIONS = "No distributions"
 
 
 def fit_window_start(start_key, today):
@@ -778,8 +788,8 @@ def evaluate_drip_fit(payload, ticker, start_day, today):
         if day is not None and amount > 0 and pd.Timestamp(day) in divs.index:
             divs.loc[pd.Timestamp(day)] += amount
     if not (divs > 0).any():
-        return {"label": NO_FIT, "call": None,
-                "reason": "No distributions in the window, so there is nothing to reinvest."}
+        return {"label": NO_DISTRIBUTIONS, "call": None,
+                "reason": "It paid no distributions in the window, so there is nothing to reinvest."}
     try:
         metrics = drip_score.compute_ticker_metrics(close, divs, ticker)
         # The same two paths the verdict compares, kept for display: what each

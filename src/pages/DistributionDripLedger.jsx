@@ -13,6 +13,7 @@ const shares = v => v == null ? DASH : Number(v).toLocaleString(undefined, { min
 const signedShares = v => !v ? DASH : `${v > 0 ? '+' : ''}${shares(v)}`
 const sum = (rows, key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0)
 const monthLabel = key => `${MONTHS[Number(key.slice(5, 7)) - 1]} ${key.slice(0, 4)}`
+const NO_RECORDS_MESSAGE = 'No reinvestment records in this range.'
 const SOURCE_TONE = { Actual: 'dist-positive', Modeled: 'dist-drip-modeled', Cash: 'dist-drip-cash', 'Partly cash': 'dist-drip-cash' }
 // What each month's reinvestment status reads as on screen.
 const SOURCE_LABEL = { Actual: 'Reinvested', 'Partly cash': 'Part reinvested', Cash: 'Taken as cash', Modeled: 'Modeled' }
@@ -77,7 +78,7 @@ const COLUMNS = [
   { key: 'source', label: 'Reinvested?', type: 'string', text: true, value: r => SOURCE_LABEL[r.source] || r.source, csv: r => SOURCE_LABEL[r.source] || r.source,
     tip: 'What happened to this month\'s payments. Reinvested: they all bought more shares. Part reinvested: some bought shares and some were taken as cash. Taken as cash: none were reinvested. Modeled: the "as if reinvested" view. Hover a cell for the details.' },
 ]
-const FIT_TONE = { 'Good DRIP candidate': 'dist-fit-good', 'Not a good DRIP candidate': 'dist-fit-cash', Borderline: 'dist-fit-toss', 'Not enough history': 'dist-fit-na' }
+const FIT_TONE = { 'Good DRIP candidate': 'dist-fit-good', 'Not a good DRIP candidate': 'dist-fit-cash', Borderline: 'dist-fit-toss', 'Not enough history': 'dist-fit-na', 'No distributions': 'dist-fit-na' }
 const BUCKET_HINT = {
   Compounder: 'high income, fully paid for by total return',
   Grower: 'modest income, fully paid for by total return',
@@ -86,7 +87,7 @@ const BUCKET_HINT = {
   Liquidator: 'high income paid while the fund lost value overall',
   Broken: 'little income and a loss overall',
 }
-const SUMMARY_WORDS = { 'Good DRIP candidate': 'good DRIP candidates', 'Not a good DRIP candidate': 'not good for DRIP', Borderline: 'borderline', 'Not enough history': 'without enough history' }
+const SUMMARY_WORDS = { 'Good DRIP candidate': 'good DRIP candidates', 'Not a good DRIP candidate': 'not good for DRIP', Borderline: 'borderline', 'Not enough history': 'without enough history', 'No distributions': 'paying no distributions' }
 const pct = (v, digits = 1) => v == null ? DASH : `${(Math.abs(v) * 100).toFixed(digits)}%`
 const edgeText = edge => edge == null ? DASH : Math.abs(edge) < 0.02 ? 'About the same' : `${pct(edge, 0)} ${edge > 0 ? 'better' : 'worse'}`
 
@@ -129,8 +130,8 @@ const EVAL_COLUMNS = [
   { key: 'change', label: 'Your reinvesting in this range', type: 'number', tip: 'What you reinvested in the selected range, and every share it bought valued at the latest close' },
 ]
 
-function evaluationRows(latest, fits, mine, dripStatus, heldTickers) {
-  return latest.map(({ ticker, description }) => {
+function evaluationRows(holdings, fits, mine, dripStatus, heldTickers) {
+  return holdings.map(({ ticker, description }) => {
     const key = String(ticker).toUpperCase()
     const fit = fits.get(ticker)
     const current = heldTickers && !heldTickers.has(key) ? null : dripStatus?.get(key)
@@ -139,7 +140,8 @@ function evaluationRows(latest, fits, mine, dripStatus, heldTickers) {
       : current.on === current.total ? 'Reinvesting' : `Reinvesting in ${current.on} of ${current.total} accounts`
     const call = fit?.call
     let meaning, tone, priority
-    if (!fit) [meaning, tone, priority] = ['Checking…', 'na', 9]
+    if (!fit) [meaning, tone, priority] = ['Checking…', 'na', 10]
+    else if (!call && fit.label === 'No distributions') [meaning, tone, priority] = ['Nothing to reinvest: it pays no distributions', 'na', 9]
     else if (!call) [meaning, tone, priority] = ['Too new to tell', 'na', 8]
     else if (call === 'Toss-up') [meaning, tone, priority] = ['Little difference either way', 'toss', 5]
     else if (reinvesting === null) [meaning, tone, priority] = call === 'DRIP' ? ['Paid more reinvested', 'good', 6] : ['Paid more as cash', 'cash', 7]
@@ -182,7 +184,8 @@ function DripDecisionHelp() {
         <li><strong className="dist-fit-good">Good DRIP candidate:</strong> reinvesting finished more than 2% ahead of the cash.</li>
         <li><strong className="dist-fit-cash">Not a good DRIP candidate:</strong> the cash finished more than 2% ahead of reinvesting.</li>
         <li><strong className="dist-fit-toss">Borderline:</strong> the two finished within 2% of each other, too close to call.</li>
-        <li><strong className="dist-fit-na">Not enough history:</strong> fewer than 120 days of prices, or no distributions, in the window.</li>
+        <li><strong className="dist-fit-na">Not enough history:</strong> fewer than 120 days of prices in the window.</li>
+        <li><strong className="dist-fit-na">No distributions:</strong> it paid nothing in the window, so there is nothing to reinvest. Every holding in the account is listed, these included.</li>
       </ul>
 
       <h4>What usually decides it: the price trend</h4>
@@ -223,13 +226,14 @@ function DripDecisionHelp() {
 
 function DripEvaluation({ rows, mine, loading }) {
   const { sorted, sort, onSort } = useTableSort(rows, EVAL_COLUMNS, { key: 'meaning', direction: 'asc' })
-  const counts = ['Good DRIP candidate', 'Not a good DRIP candidate', 'Borderline', 'Not enough history']
+  const counts = ['Good DRIP candidate', 'Not a good DRIP candidate', 'Borderline', 'Not enough history', 'No distributions']
     .map(label => [label, rows.filter(r => r.verdict === label).length])
+    .filter(([label, n]) => n > 0 || label !== 'No distributions')
   const wrongWay = rows.filter(r => r.priority === 1)
   const missed = rows.filter(r => r.priority === 2)
   return <section className="dist-eval">
     <h2>Is DRIP worth it?</h2>
-    <p className="dist-note">For each holding: has reinvesting its distributions paid more than taking the cash? {loading ? 'Checking each holding…' : counts.map(([label, n]) => `${n} ${SUMMARY_WORDS[label]}`).join(' · ')}</p>
+    <p className="dist-note">Every holding in the account: has reinvesting its distributions paid more than taking the cash? {loading ? 'Checking each holding…' : counts.map(([label, n]) => `${n} ${SUMMARY_WORDS[label]}`).join(' · ')}</p>
     <DripDecisionHelp />
     {wrongWay.length > 0 && <div className="dist-eval-callout dist-eval-callout-bad">
       <strong>You&apos;re reinvesting {wrongWay.length} {wrongWay.length === 1 ? 'holding' : 'holdings'} where taking the cash has paid more:</strong> {wrongWay.map(r => r.ticker).join(', ')}. It doesn&apos;t make much sense to DRIP {wrongWay.length === 1 ? 'it' : 'these'}.
@@ -433,8 +437,22 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
     position: positioned.length ? sum(positioned, 'total_value') : null,
     buying: new Set(rows.filter(r => r.shares_bought > 0).map(r => r.ticker)).size,
   }
-  const evaluation = useMemo(() => evaluate ? evaluationRows(latestByTicker(rows), fits, mine, dripStatus, heldTickers) : [],
-    [evaluate, rows, fits, mine, dripStatus, heldTickers])
+  // Every holding that was judged, including income holdings taken as cash
+  // that the ledger itself does not list; the filter box and the "no longer
+  // own" switch apply here as well.
+  const evaluation = useMemo(() => {
+    if (!evaluate) return []
+    const needle = filter.trim().toUpperCase()
+    const judged = new Map()
+    for (const status of current?.statuses || []) {
+      if (!status.evaluation) continue
+      const ticker = String(status.ticker)
+      if (needle && !`${ticker} ${status.description || ''}`.toUpperCase().includes(needle)) continue
+      if (!showSold && heldTickers && !heldTickers.has(ticker.toUpperCase())) continue
+      judged.set(ticker, { ticker, description: status.description || '' })
+    }
+    return evaluationRows([...judged.values()], fits, mine, dripStatus, heldTickers)
+  }, [evaluate, current, filter, showSold, fits, mine, dripStatus, heldTickers])
   const years = useMemo(() => {
     const first = Number((firstMonth || asOf).slice(0, 4))
     const out = []
@@ -443,7 +461,8 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   }, [firstMonth, asOf]) // eslint-disable-line react-hooks/exhaustive-deps
   const toggle = id => setExpanded(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   const loading = !current || (!current.done && !current.error)
-  const problems = (current?.statuses || []).filter(s => s.message)
+  // A holding that only took cash is expected to have no ledger rows; that is not a problem to report.
+  const problems = (current?.statuses || []).filter(s => s.message && s.message !== NO_RECORDS_MESSAGE)
   const rangeLabel = meta ? `${monthLabel(meta.start)} – ${monthLabel(meta.end)}` : ''
 
   const fitBadge = ticker => {

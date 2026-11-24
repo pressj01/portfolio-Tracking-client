@@ -340,6 +340,8 @@ def test_drip_fit_separates_compounders_from_eroding_funds():
     young = evaluate_drip_fit(trending_market(TODAY - timedelta(days=60), TODAY, 20, 0.1, 0.01), "NEW", start, TODAY)
     assert young["label"] == "Not enough history" and young["call"] is None
     assert evaluate_drip_fit({"prices": [], "distributions": []}, "NONE", start, TODAY)["call"] is None
+    no_pay = evaluate_drip_fit({"prices": trending_market(start, TODAY, 50, 0.1, 0.0)["prices"], "distributions": []}, "GROW", start, TODAY)
+    assert no_pay["label"] == "No distributions" and no_pay["call"] is None
 
 
 def test_ledger_endpoint_adds_drip_fit_when_asked(connection, monkeypatch):
@@ -362,3 +364,36 @@ def test_ledger_endpoint_adds_drip_fit_when_asked(connection, monkeypatch):
     judged = client.get("/api/portfolio-distributions/drip-ledger?profile_id=2&tickers=MNY&evaluate=1").get_json()
     assert judged["tickers"][0]["evaluation"]["label"] == "Good DRIP candidate" and judged["rows"]
     assert (today - starts[-1]).days >= 365 * 3 - 1  # fetched the longer window
+
+
+def test_evaluating_judges_every_holding_in_the_account(connection, monkeypatch):
+    """Every current holding gets a verdict, including one that stopped reinvesting and one that pays nothing."""
+    today = date.today()
+    recent = date(today.year, today.month, 1) - timedelta(days=20)
+    long_ago = recent - timedelta(days=420)
+    hold(connection, "MNY", 8, 1020, "Y")
+    trade(connection, "MNY", 8, recent - timedelta(days=30), 1000, 10)
+    drip(connection, "MNY", 8, recent, 20, 10)
+    hold(connection, "KQ", 8, 100, "N", div=0.35)
+    trade(connection, "KQ", 8, long_ago - timedelta(days=20), 99, 28)
+    drip(connection, "KQ", 8, long_ago, 1, 28)          # reinvested once, long before the range
+    pay(connection, "KQ", 8, recent, 35)                 # cash since
+    hold(connection, "NOPAY", 8, 10, None, div=0)          # a holding that pays nothing is still in the account
+    connection.execute("INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (8, 'IRA', 0)")
+    connection.commit()
+
+    start, end = parse_range(None, None, today)
+    assert [t["ticker"] for t in ledger_candidates(connection, [8], start, end, False, today)["tickers"]] == ["MNY"]
+    judged = ledger_candidates(connection, [8], start, end, False, today, evaluate=True)
+    assert [t["ticker"] for t in judged["tickers"]] == ["KQ", "MNY", "NOPAY"]
+
+    monkeypatch.setattr(app_module, "_nav_screen_market_history",
+                        lambda symbol, start, end: trending_market(start - timedelta(days=5), end, 28, 0.05, 0.012))
+    client = app_module.app.test_client()
+    listed = client.get("/api/portfolio-distributions/drip-ledger/tickers?profile_id=8&evaluate=1").get_json()
+    assert [t["ticker"] for t in listed["tickers"]] == ["KQ", "MNY", "NOPAY"]
+    data = client.get("/api/portfolio-distributions/drip-ledger?profile_id=8&evaluate=1&tickers=KQ,MNY").get_json()
+    statuses = {s["ticker"]: s for s in data["tickers"]}
+    assert {r["ticker"] for r in data["rows"]} == {"MNY"}                     # the ledger lists what reinvested
+    assert statuses["KQ"]["evaluation"]["call"] in ("DRIP", "Take cash", "Toss-up")  # but KQ is still judged
+    assert statuses["KQ"]["message"] == "No reinvestment records in this range."
