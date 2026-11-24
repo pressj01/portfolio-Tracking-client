@@ -3389,17 +3389,18 @@ function DividendHistoryHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Yearly</strong> — shows annual totals as a bar chart.</li>
         <li><strong>Monthly</strong> — shows monthly dividends as an area chart with an optional 3-month moving average.</li>
-        <li><strong>Weekly</strong> — shows weekly dividend history for shorter lookbacks.</li>
+        <li><strong>Weekly</strong> — sums payment days into Monday-start calendar weeks for shorter lookbacks. A quiet single day does not become its own week.</li>
         <li><strong>Range buttons</strong> — Monthly and Weekly views include preset lookback ranges so you can quickly zoom in or out.</li>
-        <li><strong>Partial current period</strong> - The current month is labeled like <em>Apr '26 partial</em>, the current year is labeled like <em>2026 YTD</em>, and today's weekly entry is labeled <em>today</em>. These labels mean the period is still incomplete.</li>
+        <li><strong>Partial current period</strong> - The current month is labeled like <em>Nov '26 MTD</em>, the current year is labeled like <em>2026 YTD</em>, and the current week is labeled like <em>Nov 24 '26 WTD</em>. These labels mean the period is still incomplete.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Sources</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Broker payments</strong> - Imported dividend transactions from Schwab, E*TRADE, Fidelity, Snowball, or generic sources are treated as actual payment history.</li>
+        <li><strong>Owner roll-up</strong> - When Owner is selected, totals sum the linked accounts that actually received the payments. Owner itself does not store payment rows, so the chart does not fall back to incomplete Owner monthly/weekly payout estimates.</li>
         <li><strong>Refresh estimates</strong> - Refresh Prices &amp; Divs can add source <code>refresh_estimate</code> rows when a holding's expected pay date matches the refresh date. These rows let the history chart begin tracking same-day distributions even before a broker transaction file is imported. Dividend repair excludes them from actual payment totals so they do not replace or inflate imported broker actuals.</li>
         <li><strong>Actuals replace estimates</strong> - If a later broker import brings in the actual payment for the same ticker, account, and date, the actual amount replaces the refresh estimate.</li>
-        <li><strong>Legacy payout tables</strong> - If older monthly or weekly payout tables exist for an account, Dividend History keeps using that history and only fills missing periods with refresh-estimated rows. A new refresh estimate will not hide the older history.</li>
+        <li><strong>Legacy payout tables</strong> - If older monthly or weekly payout tables exist for an account, Dividend History keeps using that history and only fills missing periods with refresh-estimated rows. A new refresh estimate will not hide the older history. Linked-account broker payments still take priority over Owner's legacy payout tables.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Overlay</h3>
@@ -3415,10 +3416,12 @@ function DividendHistoryHelp() {
         the first period in the selected range.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>TOTAL</strong> - Sum of every period in the selected range, including the current incomplete MTD/YTD/WTD period.</li>
+        <li><strong>AVERAGE / MIN / MAX</strong> - Always use complete periods only: full calendar months, full Monday–Sunday weeks, or finished years. In-progress MTD/YTD/WTD amounts and lookback-truncated edge weeks are shown on the chart but never used for these three cards.</li>
         <li><strong>CHANGE VS FIRST MONTH</strong> - Monthly view compares the last completed month to the first month in the selected range.</li>
         <li><strong>CHANGE VS FIRST YEAR</strong> - Yearly view compares the latest completed year to the first year when enough completed yearly data exists.</li>
-        <li><strong>CHANGE VS FIRST PERIOD</strong> - Weekly view compares the latest completed period to the first period in the selected range.</li>
-        <li><strong>Partial periods are excluded when possible</strong> - The current incomplete month, year, or day is not used as the ending point for the change calculation when there are at least two completed periods. This prevents a partial current period from looking like a dividend-income collapse.</li>
+        <li><strong>CHANGE VS FIRST PERIOD</strong> - Weekly view compares the latest completed week to the first week in the selected range.</li>
+        <li><strong>Partial periods are excluded when possible</strong> - The current incomplete month, year, or week is not used for AVERAGE, MIN, MAX, or the change calculation when completed periods exist. This prevents a partial current period from looking like a dividend-income collapse.</li>
       </ul>
     </div>
   )
