@@ -3406,6 +3406,7 @@ function DistributionsHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Base shares</strong> — shares held at the start of the month, including shares earlier reinvestments bought. They are counted back from each account&apos;s current share count through its buys and sells, so a position opened before your transaction history still starts from the right number.</li>
+        <li><strong>Share price</strong> — the ticker&apos;s closing price at month end (the latest close for the current month), the price Total value and Value of DRIP shares use.</li>
         <li><strong>Distribution</strong> — cash the holding paid that month. <strong>DRIP amount</strong> is the part that bought more shares; <strong>Shares repurchased</strong> and <strong>Reinvest price</strong> are what it bought.</li>
         <li><strong>Other buys/sells</strong> — shares bought or sold that month other than by reinvesting, so Base + Repurchased + Other = Ending shares.</li>
         <li><strong>DRIP shares to date</strong> — shares bought by reinvesting since the start of the range. A sale reduces them in proportion.</li>

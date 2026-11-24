@@ -20,6 +20,7 @@ const COLUMNS = [
   { key: 'month', label: 'Month', type: 'string', text: true, csv: r => r.month },
   { key: 'ticker', label: 'Ticker', type: 'string', text: true, csv: r => r.ticker },
   { key: 'base_shares', label: 'Base shares', type: 'number', format: shares, tip: 'Shares held at the start of the month, including shares bought by earlier reinvestments' },
+  { key: 'month_end_price', label: 'Share price', type: 'number', format: price, money: true, tip: "The ticker's closing price at month end (the latest close for the current month). Total value and Value of DRIP shares use this price" },
   { key: 'distribution', label: 'Distribution', type: 'number', format: money, money: true, tip: 'Cash the holding paid this month' },
   { key: 'drip_amount', label: 'DRIP amount', type: 'number', format: money, money: true, highlight: true, tip: 'Part of the distribution that bought more shares' },
   { key: 'shares_bought', label: 'Shares repurchased', type: 'number', format: shares, highlight: true },
@@ -72,7 +73,8 @@ function subtotal(list, groupBy) {
   if (groupBy === 'ticker') {
     const last = list.reduce((a, b) => (a.month > b.month ? a : b))
     Object.assign(total, { shares_bought: sum(list, 'shares_bought'), other_shares: sum(list, 'other_shares'),
-      end_shares: last.end_shares, drip_shares: last.drip_shares, value_of_drip: last.value_of_drip, total_value: last.total_value })
+      end_shares: last.end_shares, drip_shares: last.drip_shares, value_of_drip: last.value_of_drip, total_value: last.total_value,
+      month_end_price: last.month_end_price })
   } else {
     for (const key of ['value_of_drip', 'total_value']) {
       const values = list.filter(r => r[key] != null)
@@ -88,7 +90,7 @@ function exportCsv(rows, label) {
   const cell = (column, row) => {
     const value = column.csv ? column.csv(row) : row[column.key]
     if (value == null) return ''
-    if (column.money) return Number(convertMoneyValue(value)).toFixed(column.key === 'avg_price' ? 4 : 2)
+    if (column.money) return Number(convertMoneyValue(value)).toFixed(['avg_price', 'month_end_price'].includes(column.key) ? 4 : 2)
     if (typeof value === 'number') return String(Math.round(value * 1e6) / 1e6)
     const text = String(value)
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
