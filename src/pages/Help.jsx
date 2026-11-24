@@ -3410,6 +3410,7 @@ function DistributionsHelp() {
         <li><strong>Other buys/sells</strong> — shares bought or sold that month other than by reinvesting, so Base + Repurchased + Other = Ending shares.</li>
         <li><strong>DRIP shares to date</strong> — shares bought by reinvesting since the start of the range. A sale reduces them in proportion.</li>
         <li><strong>Income from DRIP shares</strong> — the part of the month&apos;s distribution paid on those reinvested shares: how much more the holding pays because it reinvested.</li>
+        <li><strong>Total value</strong> — ending shares at the month-end closing price: the whole holding, so you can watch it grow as reinvested shares are added.</li>
         <li><strong>Value of DRIP shares</strong> — DRIP shares to date at the month-end closing price.</li>
         <li><strong>Source</strong> — <em>Actual</em> (broker reinvestment records), <em>Partly cash</em>, <em>Cash</em>, or <em>Modeled</em>.</li>
       </ul>
@@ -3419,6 +3420,7 @@ function DistributionsHelp() {
         <li><strong>Group by</strong> — holding (each fund&apos;s months in order, with a subtotal), month (every holding paid that month), or no grouping. Click a column heading to sort.</li>
         <li><strong>Click a row</strong> to see each payment in it: the account, the amount, the per-share rate, what it bought and at what price. Weekly payers show four or five payments in a month.</li>
         <li><strong>Export CSV</strong> — downloads the rows as shown, in your display currency.</li>
+        <li><strong>Show holdings I no longer own</strong> — off by default. Holdings that no account in the selected portfolio holds any more are hidden, and a note says how many and what they paid; the cards and totals cover the holdings shown. The same box on <strong>Monthly Income</strong> hides them from Income by holding. The choice is remembered.</li>
         <li>Owner and combined portfolios add up their accounts. Share counts are in today&apos;s units after any stock split. The current month is marked with *.</li>
       </ul>
     </div>

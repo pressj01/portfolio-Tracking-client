@@ -123,6 +123,7 @@ def test_actual_ledger_replays_base_shares_and_income_from_reinvested_shares(con
     assert (feb["base_shares"], feb["distribution"], feb["income_from_drip"]) == (1020, 204, 4.0)
     assert (mar["base_shares"], mar["income_from_drip"], mar["drip_shares"]) == (1040.4, 8.08, 61.208)
     assert mar["value_of_drip"] == pytest.approx(612.08) and mar["avg_price"] == 10
+    assert (jan["total_value"], mar["total_value"]) == (pytest.approx(10200), pytest.approx(10612.08))
     assert {r["source"] for r in rows.values()} == {"Actual"}
     assert jan["payments"][0]["account"] == "Taxable" and jan["payments"][0]["kind"] == "drip"
 
@@ -178,7 +179,7 @@ def test_a_sale_scales_down_the_reinvested_shares(connection):
     connection.commit()
     rows = by_month(build_drip_ledger(connection, [2], ["MNY"], "2026-01", "2026-03", today=TODAY)["rows"], "MNY")
     assert rows["2026-02"]["other_shares"] == -510 and rows["2026-02"]["drip_shares"] == pytest.approx(40.4 * 530.4 / 1040.4)
-    assert rows["2026-02"]["value_of_drip"] is None  # no market loaded
+    assert rows["2026-02"]["value_of_drip"] is None and rows["2026-02"]["total_value"] is None  # no market loaded
 
 
 # ── DRIP checkbox evidence ────────────────────────────────────────────────────

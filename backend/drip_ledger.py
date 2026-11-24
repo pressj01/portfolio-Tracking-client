@@ -586,6 +586,9 @@ def build_drip_ledger(conn, profile_ids, tickers, start_key, end_key, *, model_a
             close = market.close_on_or_before(price_day) if market else None
             row["month_end_price"] = round(close, 4) if close else None
             row["value_of_drip"] = round(row["drip_shares"] * close, 2) if close else None
+            # The whole holding at the month-end close, so the growth from shares
+            # reinvesting added shows next to the shares themselves.
+            row["total_value"] = round(row["end_shares"] * close, 2) if close else None
             row["avg_price"] = round(row["drip_amount"] / row["shares_bought"], 4) if row["shares_bought"] > 1e-9 else None
             row["source"] = _source_label(row)
             for field in ("base_shares", "shares_bought", "other_shares", "end_shares", "drip_shares"):

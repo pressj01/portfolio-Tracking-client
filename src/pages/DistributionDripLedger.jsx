@@ -26,6 +26,7 @@ const COLUMNS = [
   { key: 'avg_price', label: 'Reinvest price', type: 'number', format: price, money: true, tip: 'Average price paid for the reinvested shares' },
   { key: 'other_shares', label: 'Other buys/sells', type: 'number', format: signedShares, tip: 'Shares bought or sold this month other than by reinvesting' },
   { key: 'end_shares', label: 'Ending shares', type: 'number', format: shares },
+  { key: 'total_value', label: 'Total value', type: 'number', format: money, money: true, highlight: true, tip: 'Ending shares at the month-end closing price: the whole holding, including the shares reinvesting added' },
   { key: 'drip_shares', label: 'DRIP shares to date', type: 'number', format: shares, tip: 'Shares bought by reinvesting since the start of the range, reduced in proportion when shares were sold' },
   { key: 'income_from_drip', label: 'Income from DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: "The part of this month's distribution paid on shares that reinvesting added" },
   { key: 'value_of_drip', label: 'Value of DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: 'DRIP shares to date at the month-end closing price' },
@@ -67,14 +68,16 @@ function latestByTicker(rows) {
 // month (money summed across holdings; share counts of different funds are not added).
 function subtotal(list, groupBy) {
   const total = { distribution: sum(list, 'distribution'), drip_amount: sum(list, 'drip_amount'), shares_bought: null,
-    income_from_drip: sum(list, 'income_from_drip'), other_shares: null, end_shares: null, drip_shares: null, value_of_drip: null }
+    income_from_drip: sum(list, 'income_from_drip'), other_shares: null, end_shares: null, drip_shares: null, value_of_drip: null, total_value: null }
   if (groupBy === 'ticker') {
     const last = list.reduce((a, b) => (a.month > b.month ? a : b))
     Object.assign(total, { shares_bought: sum(list, 'shares_bought'), other_shares: sum(list, 'other_shares'),
-      end_shares: last.end_shares, drip_shares: last.drip_shares, value_of_drip: last.value_of_drip })
+      end_shares: last.end_shares, drip_shares: last.drip_shares, value_of_drip: last.value_of_drip, total_value: last.total_value })
   } else {
-    const values = list.filter(r => r.value_of_drip != null)
-    total.value_of_drip = values.length ? sum(values, 'value_of_drip') : null
+    for (const key of ['value_of_drip', 'total_value']) {
+      const values = list.filter(r => r[key] != null)
+      total[key] = values.length ? sum(values, key) : null
+    }
   }
   return total
 }
@@ -113,7 +116,7 @@ function PaymentDetail({ row, modelAll }) {
   </td></tr>
 }
 
-export default function DistributionDripLedger({ refreshKey }) {
+export default function DistributionDripLedger({ refreshKey, showSold = true, setShowSold, heldTickers }) {
   const pf = useProfileFetch()
   const [range, setRange] = useState('last12')
   const [modelAll, setModelAll] = useState(false)
@@ -159,10 +162,19 @@ export default function DistributionDripLedger({ refreshKey }) {
   }, [pf, loadKey])
 
   const current = state?.key === loadKey ? state : null
-  const rows = useMemo(() => {
+  const { rows, hidden } = useMemo(() => {
     const needle = filter.trim().toUpperCase()
-    return (current?.rows || []).filter(r => !needle || `${r.ticker} ${r.description || ''}`.toUpperCase().includes(needle))
-  }, [current, filter])
+    const matched = (current?.rows || []).filter(r => !needle || `${r.ticker} ${r.description || ''}`.toUpperCase().includes(needle))
+    // Holdings no longer owned in any account of this portfolio can be hidden;
+    // like the filter box, the cards and totals then cover the rows shown.
+    const isSold = r => heldTickers && !heldTickers.has(String(r.ticker).toUpperCase())
+    const soldRows = showSold ? [] : matched.filter(isSold)
+    const tickers = [...new Set(soldRows.map(r => r.ticker))]
+    return {
+      rows: soldRows.length ? matched.filter(r => !isSold(r)) : matched,
+      hidden: { tickers, amount: sum(soldRows, 'distribution') },
+    }
+  }, [current, filter, showSold, heldTickers])
   const { sorted, sort, onSort } = useTableSort(rows, SORT_COLUMNS, { key: 'month', direction: 'asc' })
   const groupKey = groupBy === 'none' ? null : groupBy
   const groups = useMemo(() => {
@@ -174,9 +186,11 @@ export default function DistributionDripLedger({ refreshKey }) {
 
   const latest = latestByTicker(rows)
   const valued = latest.filter(r => r.value_of_drip != null)
+  const positioned = latest.filter(r => r.total_value != null)
   const totals = {
     distribution: sum(rows, 'distribution'), drip: sum(rows, 'drip_amount'), income: sum(rows, 'income_from_drip'),
     extra: sum(rows, 'extra_income'), value: valued.length ? sum(valued, 'value_of_drip') : null,
+    position: positioned.length ? sum(positioned, 'total_value') : null,
     buying: new Set(rows.filter(r => r.shares_bought > 0).map(r => r.ticker)).size,
   }
   const years = useMemo(() => {
@@ -211,6 +225,9 @@ export default function DistributionDripLedger({ refreshKey }) {
       <label className="dist-checkbox" title="Reinvest every payment that was taken as cash at that day's close, and model holdings with no payment records from the fund's distribution history">
         <input type="checkbox" checked={modelAll} onChange={e => setModelAll(e.target.checked)} /> Show all holdings as if reinvested
       </label>
+      {setShowSold && <label className="dist-checkbox" title="Holdings no account in this portfolio holds any more">
+        <input type="checkbox" checked={showSold} onChange={e => setShowSold(e.target.checked)} /> Show holdings I no longer own
+      </label>}
       <button type="button" className="btn" disabled={!rows.length} onClick={() => exportCsv(sorted, range)}>Export CSV</button>
     </div>
     {current?.error && <div className="alert alert-error" role="alert">{current.error}</div>}
@@ -223,6 +240,7 @@ export default function DistributionDripLedger({ refreshKey }) {
       <Metric label="Value of DRIP shares" value={money(totals.value)} sub={valued.length < latest.length ? `${valued.length} of ${latest.length} holdings priced` : 'At each holding\'s latest month-end close'} />
       {modelAll && <Metric label="Modeled extra income" value={money(totals.extra)} sub="Paid on shares that reinvesting cash payments would have added" />}
     </div>
+    {hidden.tickers.length > 0 && <p className="dist-note">Hiding {hidden.tickers.length} {hidden.tickers.length === 1 ? 'holding' : 'holdings'} you no longer own ({hidden.tickers.join(', ')}), which paid {money(hidden.amount)} in this range. The cards and totals leave {hidden.tickers.length === 1 ? 'it' : 'them'} out; tick “Show holdings I no longer own” to include {hidden.tickers.length === 1 ? 'it' : 'them'}.</p>}
     {meta?.flagged_without_records?.length > 0 && !modelAll && <p className="dist-note">Marked DRIP on Holdings but no reinvestment records in this range: {meta.flagged_without_records.join(', ')}. Tick “Show all holdings as if reinvested” to model them.</p>}
     <div className="holdings-table-wrap dist-table-wrap">
       <table className="holdings-table dist-table dist-drip-table">
@@ -249,7 +267,7 @@ export default function DistributionDripLedger({ refreshKey }) {
           })()}
         </Fragment>)}</tbody>
         {rows.length > 0 && <tfoot><tr>{COLUMNS.map((column, i) => <td key={column.key} className={column.text ? 'dist-left' : ''}>
-          {i === 0 ? 'Total' : { distribution: money(totals.distribution), drip_amount: money(totals.drip), income_from_drip: money(totals.income), value_of_drip: money(totals.value) }[column.key] ?? ''}
+          {i === 0 ? 'Total' : { distribution: money(totals.distribution), drip_amount: money(totals.drip), income_from_drip: money(totals.income), value_of_drip: money(totals.value), total_value: money(totals.position) }[column.key] ?? ''}
         </td>)}</tr></tfoot>}
       </table>
       {!loading && !rows.length && !current?.error && <div className="dist-empty">{filter ? 'No holdings match this filter.' : modelAll ? 'No holdings paid distributions in this range.' : 'No reinvestment records in this range. Tick “Show all holdings as if reinvested” to model every holding.'}</div>}
@@ -257,6 +275,6 @@ export default function DistributionDripLedger({ refreshKey }) {
     {problems.length > 0 && <p className="dist-note">{problems.map(s => `${s.ticker}: ${s.message}`).join(' ')}</p>}
     <p className="dist-note">* Current month in progress. Click a row to see each payment and which account it came from. Base shares are counted back from each account's current share count through its buys and sells, so a position opened before your transaction history still starts from the right number. {modelAll
       ? 'Modeled rows reinvest the cash payments at that day\'s closing price; those shares then earn the payments after them. Holdings with no payment records are modeled from the fund\'s distribution history and your share count.'
-      : 'Only holdings that actually reinvested in this range are listed; months they took cash show as Cash.'} Share counts are in today's units after any stock split. Value of DRIP shares uses the month-end closing price.</p>
+      : 'Only holdings that actually reinvested in this range are listed; months they took cash show as Cash.'} Share counts are in today's units after any stock split. Value of DRIP shares and Total value use the month-end closing price; their totals add each holding's latest month.</p>
   </>
 }

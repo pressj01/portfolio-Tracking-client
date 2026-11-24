@@ -13,6 +13,7 @@ import './Distributions.css'
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const TABS = [['monthly', 'Monthly Income'], ['analyzer', 'Distribution Analyzer'], ['portfolio', 'Portfolio Income'], ['floor', 'Income Floor'], ['drip', 'DRIP Ledger']]
 const DASH = '—'
+const SHOW_SOLD_KEY = 'distributions.showSoldHoldings'
 const COLORS = { actual: '#32b979', estimate: '#e4aa45', reference: '#55b9ea', latest: '#e8a543' }
 const money = v => v == null ? DASH : formatMoney(v)
 const money4 = v => v == null ? DASH : formatMoney(v, { digits: 4 })
@@ -62,8 +63,8 @@ function Chart({ title, subtitle, data, layout }) {
 
 function Empty({ children }) { return <div className="dist-empty">{children}</div> }
 
-function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, setIncludeEstimates, query, setQuery }) {
-  const { rows, totals, actual, estimated, prev, completed, elapsed, partial } = useMemo(() => {
+function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, setIncludeEstimates, query, setQuery, showSold, setShowSold, heldTickers }) {
+  const { rows, totals, actual, estimated, prev, completed, elapsed, partial, hidden } = useMemo(() => {
     const currentYear = Number(history.as_of.slice(0, 4))
     const isCurrent = history.year === currentYear
     const elapsed = isCurrent ? Number(history.as_of.slice(5, 7)) : 12
@@ -74,16 +75,21 @@ function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, set
     for (const h of holdings) if (isIncomeHolding(h) && !sources.has(h.ticker)) {
       sources.set(h.ticker, { ticker: h.ticker, actual: Array(12).fill(0), estimated: Array(12).fill(0) })
     }
-    const rows = [...sources.values()].filter(r => `${r.ticker} ${descriptions.get(r.ticker) || ''}`.toUpperCase().includes(query.trim().toUpperCase()))
+    const matched = [...sources.values()].filter(r => `${r.ticker} ${descriptions.get(r.ticker) || ''}`.toUpperCase().includes(query.trim().toUpperCase()))
       .map(r => {
         const values = r.actual.map((v, i) => i >= elapsed ? null : (v || 0) + (includeEstimates ? r.estimated[i] || 0 : 0))
         return { ...r, description: descriptions.get(r.ticker), values, total: sum(values) }
       }).sort((a, b) => a.ticker.localeCompare(b.ticker))
+    // Holdings no longer owned in any account of this portfolio can be hidden;
+    // like the filter box, the totals then cover the rows shown.
+    const sold = showSold ? [] : matched.filter(r => !heldTickers.has(String(r.ticker).toUpperCase()))
+    const rows = sold.length ? matched.filter(r => !sold.includes(r)) : matched
+    const hidden = { count: sold.length, amount: sum(sold.map(r => r.total)), tickers: sold.map(r => r.ticker) }
     const monthTotals = key => MONTHS.map((_, i) => i >= elapsed ? null : sum(rows.map(r => r[key][i])))
     return { rows, totals: monthTotals('values'), actual: monthTotals('actual'), estimated: monthTotals('estimated'),
-      prev: query.trim() ? null : sumKnown([history.previous_december.actual, includeEstimates ? history.previous_december.estimated : null]),
-      elapsed, completed, partial: isCurrent }
-  }, [history, holdings, query, includeEstimates])
+      prev: query.trim() || hidden.count ? null : sumKnown([history.previous_december.actual, includeEstimates ? history.previous_december.estimated : null]),
+      elapsed, completed, partial: isCurrent, hidden }
+  }, [history, holdings, query, includeEstimates, showSold, heldTickers])
   const { sorted, sort, onSort } = useTableSort(rows, MONTHLY_COLUMNS, { key: 'total', direction: 'desc' })
   const changes = totals.map((v, i) => {
     const previous = i === 0 ? prev : totals[i - 1]
@@ -100,7 +106,9 @@ function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, set
       </select></label>
       <label>Filter holdings <input value={query} placeholder="Ticker or fund name" onChange={e => setQuery(e.target.value)} /></label>
       <label className="dist-checkbox"><input type="checkbox" checked={includeEstimates} onChange={e => setIncludeEstimates(e.target.checked)} /> Include recorded projections</label>
+      <label className="dist-checkbox"><input type="checkbox" checked={showSold} onChange={e => setShowSold(e.target.checked)} /> Show holdings I no longer own</label>
     </div>
+    {hidden.count > 0 && <p className="dist-note">Hiding {hidden.count} {hidden.count === 1 ? 'holding' : 'holdings'} you no longer own ({hidden.tickers.join(', ')}), which paid {money(hidden.amount)} in {history.year}. Totals below leave {hidden.count === 1 ? 'it' : 'them'} out; tick “Show holdings I no longer own” to include {hidden.count === 1 ? 'it' : 'them'}.</p>}
     {sum(estimated) !== 0 && <p className="dist-note">{includeEstimates ? <>Cells marked <span className="dist-estimate-mark">est</span> include recorded projections awaiting broker confirmation.</> : `${money(sum(estimated))} in recorded projections is excluded. Enable them to see estimated payments, including holdings without confirmed records.`}</p>}
     {history.excluded_duplicate_estimates?.count > 0 && <p className="dist-note">Excluded {history.excluded_duplicate_estimates.count} unsupported duplicate {history.excluded_duplicate_estimates.count === 1 ? 'projection' : 'projections'} ({money(history.excluded_duplicate_estimates.amount)}) for {history.excluded_duplicate_estimates.tickers.join(', ')}. These estimates matched confirmed payments in another account but had no holding or transaction evidence in their own account.</p>}
     <div className="summary-strip">
@@ -305,6 +313,13 @@ export default function Distributions() {
   const [includeEstimates, setIncludeEstimates] = useState(true)
   const [floorIncludeEstimates, setFloorIncludeEstimates] = useState(false)
   const [monthlyQuery, setMonthlyQuery] = useState('')
+  const [showSold, setShowSoldState] = useState(() => {
+    try { return localStorage.getItem(SHOW_SOLD_KEY) === '1' } catch { return false }
+  })
+  const setShowSold = value => {
+    setShowSoldState(value)
+    try { localStorage.setItem(SHOW_SOLD_KEY, value ? '1' : '0') } catch { /* private mode */ }
+  }
   const [snapshot, setSnapshot] = useState(null)
   const [historyState, setHistoryState] = useState(null)
   const [custom, setCustom] = useState([])
@@ -334,6 +349,7 @@ export default function Distributions() {
   const currentHistory = historyState?.key === historyKey ? historyState : null
   const holdings = useMemo(() => currentSnapshot?.rows || [], [currentSnapshot])
   const incomeHoldings = useMemo(() => holdings.filter(isIncomeHolding), [holdings])
+  const heldTickers = useMemo(() => new Set(holdings.filter(h => Number(h.quantity) > 0).map(h => String(h.ticker).toUpperCase())), [holdings])
   const symbols = [...new Set([...(allHoldings ? holdings : incomeHoldings).map(h => h.ticker), ...custom])].sort()
   const symbolKey = symbols.join(',')
   const marketKey = `${snapshotKey}:${marketRefresh}:${symbolKey}`
@@ -377,10 +393,10 @@ export default function Distributions() {
     {error && <div className="alert alert-error" role="alert">{error}</div>}
     {loading && <div className="dist-loading" role="status"><span className="spinner" /> Loading portfolio distributions…</div>}
     {!loading && !error && data && <>
-      {tab === 'monthly' && <MonthlyIncome history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={includeEstimates} setIncludeEstimates={setIncludeEstimates} query={monthlyQuery} setQuery={setMonthlyQuery} />}
+      {tab === 'monthly' && <MonthlyIncome history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={includeEstimates} setIncludeEstimates={setIncludeEstimates} query={monthlyQuery} setQuery={setMonthlyQuery} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} />}
       {tab === 'analyzer' && <Analyzer rows={symbols.map(ticker => market.get(ticker) || { ticker, status: marketReady ? 'unavailable' : 'loading', message: marketReady ? 'No market history returned for this symbol.' : 'Loading…' })} loading={loadingMarket} holdings={incomeHoldings} custom={custom} setCustom={setCustom} allHoldings={allHoldings} setAllHoldings={setAllHoldings} refresh={() => setMarketRefresh(v => v + 1)} />}
       {tab === 'portfolio' && <PortfolioIncome holdings={incomeHoldings} history={data} market={market} loading={loadingMarket} />}
-      {tab === 'drip' && <DistributionDripLedger key={profileQueryString} refreshKey={refresh} />}
+      {tab === 'drip' && <DistributionDripLedger key={profileQueryString} refreshKey={refresh} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} />}
       {tab === 'floor' && <DistributionIncomeFloor key={profileQueryString} history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={floorIncludeEstimates} setIncludeEstimates={setFloorIncludeEstimates} />}
     </>}
   </div>
