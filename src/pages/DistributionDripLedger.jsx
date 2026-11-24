@@ -104,6 +104,66 @@ function evaluationRows(latest, fits, mine, dripStatus, heldTickers) {
   })
 }
 
+// Collapsed until opened: how a holding is judged a good or poor DRIP candidate.
+function DripDecisionHelp() {
+  return <details className="dist-eval-help">
+    <summary>How is this decided?</summary>
+    <div className="dist-eval-help-body">
+      <h4>What is compared</h4>
+      <p>For each holding, the page replays the fund&apos;s real daily closing prices and every distribution it paid, two ways, starting from the same shares on the same day:</p>
+      <ol>
+        <li><strong>Reinvest:</strong> every distribution buys more shares at that day&apos;s price. Those new shares then earn distributions of their own.</li>
+        <li><strong>Take the cash:</strong> every distribution is set aside as cash earning 4% a year, about what a money-market fund pays.</li>
+      </ol>
+      <p>At the end it compares what the shares bought by reinvesting are worth at the latest price with the cash pile. The <em>DRIP vs cash</em> column is that difference: &quot;24% better&quot; means reinvesting left you 24% more than the cash; &quot;44% worse&quot; means 44% less.</p>
+
+      <h4>Which dates</h4>
+      <p>The selected range or the last 3 years, whichever is longer. A fund younger than that is judged from its first price. The same window is used for every holding, so the results can be compared.</p>
+
+      <h4>The verdict</h4>
+      <ul>
+        <li><strong className="dist-fit-good">Good DRIP candidate:</strong> reinvesting finished more than 2% ahead of the cash.</li>
+        <li><strong className="dist-fit-cash">Not a good DRIP candidate:</strong> the cash finished more than 2% ahead of reinvesting.</li>
+        <li><strong className="dist-fit-toss">Borderline:</strong> the two finished within 2% of each other, too close to call.</li>
+        <li><strong className="dist-fit-na">Not enough history:</strong> fewer than 120 days of prices, or no distributions, in the window.</li>
+      </ul>
+
+      <h4>What usually decides it: the price trend</h4>
+      <p>Reinvesting turns each distribution into shares, so it only pays off if those shares hold their value. Roughly, for 100 shares of a $10 fund that pays $1 a share over a year ($100 of distributions):</p>
+      <ul>
+        <li>If the price <strong>falls to $6</strong>, reinvesting buys about 12.5 shares at an average of $8, worth about $75 at $6. Taking the cash leaves $100 plus about $2 of interest. The cash wins: <em>Not a good DRIP candidate</em>. High-yield funds whose price keeps sliding (NAV erosion) usually land here.</li>
+        <li>If the price <strong>rises to $12</strong>, reinvesting buys about 9 shares at an average of $11, worth about $110 at $12, plus a little more from the payouts those shares earn. That beats $102 of cash: <em>Good DRIP candidate</em>.</li>
+      </ul>
+
+      <h4>You now and What it means</h4>
+      <p><em>You now</em> comes from the DRIP boxes on the Holdings screen (on Owner, how many of its accounts reinvest). It is combined with the verdict:</p>
+      <ul>
+        <li>Reinvesting + not a good candidate → <strong className="dist-fit-cash">Doesn&apos;t make much sense to DRIP: taking the cash has paid more</strong>. These sort first and are listed in the red box.</li>
+        <li>Taking cash + good candidate → <strong className="dist-fit-good">Worth reinvesting: DRIP has paid more than cash</strong>. Listed in the green box.</li>
+        <li>Reinvesting + good candidate → <strong>Keep reinvesting</strong>. Taking cash + not a good candidate → <strong>Taking the cash makes sense</strong>.</li>
+        <li>Borderline → <strong>Little difference either way</strong>. A holding you no longer own shows only whether it paid more reinvested or as cash.</li>
+      </ul>
+
+      <h4>Also on hover</h4>
+      <ul>
+        <li><strong>How often reinvesting was ahead:</strong> the share of the dates you could have sold on (after holding at least six months, or a quarter of the window if longer) where reinvesting was in front. Near 100% or 0% means the answer held up whenever you sold; near 50% means it depended on timing.</li>
+        <li><strong>Fund type:</strong> <em>Compounder</em> and <em>Grower</em>: total return fully paid for the distributions. <em>Harvester</em> and <em>Fading</em>: total return was positive but the price gave back part of the payout. <em>Liquidator</em> and <em>Broken</em>: the fund lost value overall while paying out. &quot;High income&quot; means a yield of 8% or more.</li>
+      </ul>
+
+      <h4>Your reinvesting in this range</h4>
+      <p>Your own record, kept apart from the verdict: the dollars you actually reinvested in the selected range, and every share they bought valued at the latest close. The verdict uses the fund&apos;s full history in the window, not when you happened to buy.</p>
+
+      <h4>Keep in mind</h4>
+      <ul>
+        <li>It is history only. A fund that has done well reinvested can still turn, and the reverse.</li>
+        <li>Taxes and fees are not included, and the 4% cash rate is an assumption.</li>
+        <li>Prices are adjusted for stock splits, so a reverse split does not look like a crash.</li>
+        <li>It is the same test as the DRIP vs. Cash Analyzer page, so the two always agree for the same dates.</li>
+      </ul>
+    </div>
+  </details>
+}
+
 function DripEvaluation({ rows, mine, loading }) {
   const { sorted, sort, onSort } = useTableSort(rows, EVAL_COLUMNS, { key: 'meaning', direction: 'asc' })
   const counts = ['Good DRIP candidate', 'Not a good DRIP candidate', 'Borderline', 'Not enough history']
@@ -113,6 +173,7 @@ function DripEvaluation({ rows, mine, loading }) {
   return <section className="dist-eval">
     <h2>Is DRIP worth it?</h2>
     <p className="dist-note">For each holding: has reinvesting its distributions paid more than taking the cash? {loading ? 'Checking each holding…' : counts.map(([label, n]) => `${n} ${SUMMARY_WORDS[label]}`).join(' · ')}</p>
+    <DripDecisionHelp />
     {wrongWay.length > 0 && <div className="dist-eval-callout dist-eval-callout-bad">
       <strong>You&apos;re reinvesting {wrongWay.length} {wrongWay.length === 1 ? 'holding' : 'holdings'} where taking the cash has paid more:</strong> {wrongWay.map(r => r.ticker).join(', ')}. It doesn&apos;t make much sense to DRIP {wrongWay.length === 1 ? 'it' : 'these'}.
     </div>}
@@ -133,7 +194,7 @@ function DripEvaluation({ rows, mine, loading }) {
       </table>
       {!rows.length && <div className="dist-empty">No holdings to evaluate in this range.</div>}
     </div>
-    <p className="dist-note">Hover a row for the reason. &quot;DRIP vs cash&quot; replays each fund&apos;s real prices and distributions over the selected range or the last 3 years, whichever is longer, and compares reinvesting every distribution with taking the cash and earning 4% a year on it (the DRIP vs. Cash Analyzer test). Within 2% either way counts as borderline. &quot;You now&quot; comes from the DRIP boxes on the Holdings screen. This describes the past, not what a fund will do next.</p>
+    <p className="dist-note">Hover a row for the reason. Open &quot;How is this decided?&quot; above for the full method. This describes the past, not what a fund will do next.</p>
   </section>
 }
 

@@ -102,3 +102,18 @@
 .dist-eval-good { color: var(--pos); }
 .dist-eval-toss { color: var(--warning); }
 .dist-eval-na { color: var(--text-dim); font-weight: 500; }
+.dist-eval-help { margin: .4rem 0 .75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; }
+.dist-eval-help > summary { padding: .55rem .8rem; color: var(--accent-bright); cursor: pointer; font-size: .82rem; font-weight: 700; list-style: none; }
+.dist-eval-help > summary::-webkit-details-marker { display: none; }
+.dist-eval-help > summary::before { content: '?'; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: .45rem; background: color-mix(in srgb, var(--accent) 18%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 50%; font-size: .68rem; }
+.dist-eval-help[open] > summary { border-bottom: 1px solid var(--border); }
+.dist-eval-help-body { padding: .35rem 1rem .8rem; color: var(--text-dim); font-size: .84rem; line-height: 1.55; max-width: 980px; }
+.dist-eval-help-body h4 { color: var(--text); margin: .85rem 0 .25rem; font-size: .88rem; }
+.dist-eval-help-body p { margin: .25rem 0; }
+.dist-eval-help-body ul, .dist-eval-help-body ol { margin: .25rem 0; padding-left: 1.3rem; }
+.dist-eval-help-body li { margin: .15rem 0; }
+.dist-eval-help-body strong { color: var(--text); }
+.dist-eval-help-body strong.dist-fit-good { color: var(--pos); }
+.dist-eval-help-body strong.dist-fit-cash { color: var(--neg); }
+.dist-eval-help-body strong.dist-fit-toss { color: var(--warning); }
+.dist-eval-help-body strong.dist-fit-na { color: var(--text-dim); }
