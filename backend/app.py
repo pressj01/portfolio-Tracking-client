@@ -169,7 +169,7 @@ from refresh_sessions import (
     current_sessions,
     on_nyse_calendar,
 )
-from dividend_ledger import build_ledger as build_dividend_ledger
+from dividend_ledger import build_ledger as build_dividend_ledger, week_start_for
 from distribution_analysis import analyze_distribution_market, build_distribution_history
 from dividend_safety import (
     apply_nav_coverage_overlay,
@@ -61259,6 +61259,11 @@ def dividend_history_data():
     is_agg, pids = get_profile_filter()
     profile_id = pids[0]
     conn = get_connection()
+    # Payments are recorded on the account that received them, never on the
+    # Owner roll-up itself. Reading profile 1 literally returns no payment
+    # rows and falls through to stale monthly/weekly payout tables — the same
+    # Owner expansion the dividend ledger already uses.
+    payment_pids = _dividend_payment_profile_ids_for_read(conn, pids)
 
     # Categories for filter dropdown
     cats = conn.execute(
@@ -61323,10 +61328,11 @@ def dividend_history_data():
     values = []
     partial_periods = []
     placeholders = ",".join("?" * len(pids))
+    payment_placeholders = ",".join("?" * len(payment_pids))
 
     def _payment_query_parts(extra_clauses=(), extra_params=()):
-        clauses = [f"profile_id IN ({placeholders})"]
-        params = list(pids)
+        clauses = [f"profile_id IN ({payment_placeholders})"]
+        params = list(payment_pids)
         if filtered_tickers is not None:
             if filtered_tickers:
                 ticker_ph = ",".join("?" * len(filtered_tickers))
@@ -61392,6 +61398,11 @@ def dividend_history_data():
             total += _estimate_ytd_income(h) if stored_ytd is None else float(stored_ytd or 0)
         return round(total, 2)
 
+    # When Owner expands to linked accounts, recorded payments on those
+    # accounts are authoritative. Owner's legacy monthly/weekly payout rows
+    # are often incomplete estimates and must not hide that history.
+    prefer_recorded_payments = payment_pids != list(pids)
+
     if view == "yearly":
         where_sql, pay_params = _payment_query_parts()
         payment_rows = conn.execute(
@@ -61407,9 +61418,18 @@ def dividend_history_data():
             pids,
         ).fetchall()
 
-        if payment_rows and not payout_rows and _only_refresh_estimate_payments(payment_rows):
+        if (
+            payment_rows
+            and not payout_rows
+            and _only_refresh_estimate_payments(payment_rows)
+            and not prefer_recorded_payments
+        ):
             series_by_year = {str(today.year): _estimated_ytd_total()}
-        elif payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
+        elif payment_rows and (
+            prefer_recorded_payments
+            or not payout_rows
+            or _has_non_refresh_payments(payment_rows)
+        ):
             series_by_year = {str(r["year"]): round(float(r["total"] or 0), 2) for r in payment_rows}
         else:
             series_by_year = {str(r["year"]): round(float(r["total"]) * cat_ratio, 2) for r in payout_rows}
@@ -61451,11 +61471,20 @@ def dividend_history_data():
             pids + [start_key, end_key],
         ).fetchall()
 
-        if payment_rows and not payout_rows and _only_refresh_estimate_payments(payment_rows):
+        if (
+            payment_rows
+            and not payout_rows
+            and _only_refresh_estimate_payments(payment_rows)
+            and not prefer_recorded_payments
+        ):
             series_by_month = _estimated_monthly_series(start_y, start_m, today.year, today.month)
             for r in payment_rows:
                 series_by_month[r["ym"]] = round(float(r["total"] or 0), 2)
-        elif payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
+        elif payment_rows and (
+            prefer_recorded_payments
+            or not payout_rows
+            or _has_non_refresh_payments(payment_rows)
+        ):
             series_by_month = {r["ym"]: round(float(r["total"] or 0), 2) for r in payment_rows}
         else:
             series_by_month = {
@@ -61470,12 +61499,16 @@ def dividend_history_data():
             dt = datetime.date(year, month, 1)
             is_partial = year == today.year and month == today.month
             label = dt.strftime("%b '%y")
-            labels.append(f"{label} partial" if is_partial else label)
+            labels.append(f"{label} MTD" if is_partial else label)
             values.append(series_by_month[ym])
             partial_periods.append(is_partial)
 
     elif view == "weekly":
+        # Bucket payment days into calendar weeks (Monday start). The old path
+        # plotted each payment_date as its own point, so MIN/AVERAGE reflected
+        # quiet single days instead of weekly income across the linked accounts.
         start_date = today - datetime.timedelta(days=months_back * 30)
+        current_week = week_start_for(today).isoformat()
         where_sql, pay_params = _payment_query_parts(
             ["payment_date >= ?", "payment_date <= ?"],
             [start_date.isoformat(), today.isoformat()],
@@ -61494,30 +61527,56 @@ def dividend_history_data():
             pids + [start_date.isoformat()],
         ).fetchall()
 
-        if payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
-            series_by_date = {r["payment_date"]: round(float(r["total"] or 0), 2) for r in payment_rows}
+        if payment_rows and (
+            prefer_recorded_payments
+            or not payout_rows
+            or _has_non_refresh_payments(payment_rows)
+        ):
+            series_by_date = {r["payment_date"]: float(r["total"] or 0) for r in payment_rows}
         else:
-            series_by_date = {r["pay_date"]: round(float(r["amount"]) * cat_ratio, 2) for r in payout_rows}
+            series_by_date = {r["pay_date"]: float(r["amount"]) * cat_ratio for r in payout_rows}
             for r in payment_rows:
-                series_by_date.setdefault(r["payment_date"], round(float(r["total"] or 0), 2))
+                series_by_date.setdefault(r["payment_date"], float(r["total"] or 0))
 
-        for pay_date in sorted(series_by_date):
-            is_partial = pay_date == today.isoformat()
-            labels.append(f"{pay_date} today" if is_partial else pay_date)
-            values.append(series_by_date[pay_date])
+        series_by_week = defaultdict(float)
+        for pay_date, amount in series_by_date.items():
+            try:
+                day = datetime.date.fromisoformat(str(pay_date)[:10])
+            except ValueError:
+                continue
+            series_by_week[week_start_for(day).isoformat()] += amount
+
+        for week in sorted(series_by_week):
+            week_start = datetime.date.fromisoformat(week)
+            week_end = week_start + datetime.timedelta(days=6)
+            # A week counts as complete only when all 7 calendar days sit inside
+            # the selected lookback. The current WTD week and a lookback that
+            # starts mid-week are both partial.
+            is_partial = week_start < start_date or week_end > today
+            label = week_start.strftime("%b %d '%y")
+            if week == current_week:
+                labels.append(f"{label} WTD")
+            elif is_partial:
+                labels.append(f"{label} partial")
+            else:
+                labels.append(label)
+            values.append(round(series_by_week[week], 2))
             partial_periods.append(is_partial)
 
     conn.close()
 
-    # Summary stats
+    # Summary stats. TOTAL includes every period in range (money actually
+    # received). AVERAGE / MIN / MAX use completed periods only — never an
+    # in-progress MTD/YTD/WTD amount or a lookback-truncated edge week.
     total = sum(values) if values else 0
-    avg = total / len(values) if values else 0
-    mn = min(values) if values else 0
-    mx = max(values) if values else 0
+    completed_values = [v for v, is_partial in zip(values, partial_periods) if not is_partial]
+    avg = (sum(completed_values) / len(completed_values)) if completed_values else 0
+    mn = min(completed_values) if completed_values else 0
+    mx = max(completed_values) if completed_values else 0
     # Growth: compare the first and last completed periods so partial current
     # month/year/week data doesn't make the portfolio look like it collapsed.
     trend_pct = 0.0
-    growth_values = [v for v, is_partial in zip(values, partial_periods) if not is_partial]
+    growth_values = completed_values
     trend_basis = "completed periods"
     if len(growth_values) < 2:
         growth_values = values
@@ -61548,6 +61607,8 @@ def dividend_history_data():
             "max": round(mx, 2),
             "trend_pct": trend_pct,
             "trend_basis": trend_basis,
+            "stats_basis": "completed periods" if completed_values else "none",
+            "completed_periods": len(completed_values),
         },
     })
 
