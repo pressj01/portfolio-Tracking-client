@@ -41,7 +41,10 @@ class DividendAnalysisLockingTest(unittest.TestCase):
                     broker_snapshot_at TEXT,
                     broker_file_position TEXT,
                     dist_since_file_value REAL DEFAULT 0,
-                    dist_since_file_detail TEXT
+                    dist_since_file_detail TEXT,
+                    reinvest_source TEXT,
+                    reinvest_as_of TEXT,
+                    drip_quantity REAL
                 );
                 CREATE TABLE holdings (description TEXT);
                 INSERT INTO all_account_info (
