@@ -175,6 +175,8 @@ from drip_ledger import (
     apply_reinvest_evidence,
     build_drip_ledger,
     detect_reinvest_evidence,
+    evaluate_drip_fit,
+    fit_window_start as drip_fit_window_start,
     ledger_candidates as drip_ledger_candidates,
     parse_range as parse_drip_ledger_range,
 )
@@ -61903,11 +61905,15 @@ def portfolio_drip_ledger():
     _, pids = get_profile_filter()
     today = datetime.date.today()
     model_all = _drip_ledger_flag(request.args.get("model_all"))
+    evaluate = _drip_ledger_flag(request.args.get("evaluate"))
     try:
         start, end = parse_drip_ledger_range(request.args.get("start"), request.args.get("end"), today)
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     market_start = datetime.date(int(start[:4]), int(start[5:7]), 1)
+    if evaluate:
+        # One fetch serves both: the DRIP fit needs the longer window.
+        market_start = drip_fit_window_start(start, today)
 
     def load_market(symbol):
         try:
@@ -61926,6 +61932,13 @@ def portfolio_drip_ledger():
                                     markets=markets, account_names=names, today=today)
     finally:
         conn.close()
+    if evaluate:
+        for status in payload["tickers"]:
+            market = markets.get(status["ticker"])
+            status["evaluation"] = (
+                evaluate_drip_fit(market, status["ticker"], market_start, today) if market
+                else {"label": "Too new to judge", "call": None, "reason": "Price history could not be loaded."}
+            )
     return jsonify(start=start, end=end, as_of=today.isoformat(), model_all=model_all, **payload)
 
 

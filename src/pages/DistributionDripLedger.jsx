@@ -33,7 +33,39 @@ const COLUMNS = [
   { key: 'value_of_drip', label: 'Value of DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: 'DRIP shares to date at the month-end closing price' },
   { key: 'source', label: 'Source', type: 'string', text: true, tip: 'Actual: broker reinvestment records. Cash: the payment was not reinvested. Modeled: reinvestment worked out for the "as if reinvested" view' },
 ]
-const SORT_COLUMNS = COLUMNS.map(column => ({ ...column, type: column.type }))
+const FIT_COLUMN = { key: 'drip_fit', label: 'DRIP fit', type: 'string', text: true, csv: r => r.drip_fit,
+  tip: 'Whether reinvesting this ticker beat taking the cash over the selected range or the last 3 years, whichever is longer (the DRIP vs. Cash Analyzer test). Hover a verdict for the numbers.' }
+const FIT_TONE = { 'Good to DRIP': 'dist-fit-good', 'Better as cash': 'dist-fit-cash', 'Toss-up': 'dist-fit-toss', 'Too new to judge': 'dist-fit-na' }
+const FIT_ORDER = ['Good to DRIP', 'Toss-up', 'Better as cash', 'Too new to judge']
+const BUCKET_HINT = {
+  Compounder: 'a yield of 8% or more, fully supported by total return',
+  Grower: 'a yield under 8%, fully supported by total return',
+  Harvester: 'a yield of 8% or more; total return was positive but below the payout',
+  Fading: 'a yield under 8%; total return was positive but below the payout',
+  Liquidator: 'a yield of 8% or more with a negative total return',
+  Broken: 'a yield under 8% with a negative total return',
+}
+const pct = (v, digits = 1) => v == null ? DASH : `${(v * 100).toFixed(digits)}%`
+
+function fitTitle(fit, mine) {
+  if (!fit) return 'Evaluating…'
+  const lines = []
+  if (!fit.call) {
+    lines.push(`${fit.label}. ${fit.reason || ''}`.trim())
+  } else {
+    lines.push(`${fit.label}: ${monthLabel(fit.start.slice(0, 7))} to ${monthLabel(fit.end.slice(0, 7))} (${Number(fit.years).toFixed(1)} years).`)
+    lines.push(`$1 of distributions reinvested became $${Number(fit.re).toFixed(2)}, against $1.00 kept as cash earning ${pct(fit.cash_rate, 0)} a year.`)
+    if (fit.win_rate != null) lines.push(`Reinvesting was ahead at ${pct(fit.win_rate, 0)} of the dates you could have sold${fit.conflicted ? ', which disagrees with the end result, so it was close' : ''}.`)
+    lines.push(`Price ${fit.price_cagr > 0 ? '+' : ''}${pct(fit.price_cagr)} a year; distributions ${pct(fit.annual_yield)} a year${fit.coverage != null ? `, covered ${Number(fit.coverage).toFixed(2)}× by total return` : ''}.`)
+    if (fit.bucket) lines.push(`${fit.bucket}: ${BUCKET_HINT[fit.bucket] || fit.bucket}.`)
+  }
+  if (mine && mine.reinvested > 0 && mine.value != null) {
+    const change = mine.value / mine.reinvested - 1
+    lines.push(`Your DRIP in this range: ${money(mine.reinvested)} reinvested is worth ${money(mine.value)} now (${change >= 0 ? '+' : ''}${pct(change)}).`)
+  }
+  lines.push('Past prices and distributions only; not a prediction.')
+  return lines.join('\n')
+}
 
 async function readJSON(response) {
   const data = await response.json()
@@ -84,9 +116,9 @@ function subtotal(list, groupBy) {
   return total
 }
 
-function exportCsv(rows, label) {
+function exportCsv(rows, label, columns) {
   const currency = getDisplayCurrency()
-  const header = COLUMNS.map(c => c.money ? `${c.label} (${currency})` : c.label)
+  const header = columns.map(c => c.money ? `${c.label} (${currency})` : c.label)
   const cell = (column, row) => {
     const value = column.csv ? column.csv(row) : row[column.key]
     if (value == null) return ''
@@ -95,7 +127,7 @@ function exportCsv(rows, label) {
     const text = String(value)
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
   }
-  const csv = [header.join(','), ...rows.map(row => COLUMNS.map(column => cell(column, row)).join(','))].join('\n')
+  const csv = [header.join(','), ...rows.map(row => columns.map(column => cell(column, row)).join(','))].join('\n')
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
   const link = document.createElement('a')
   link.href = url
@@ -104,8 +136,8 @@ function exportCsv(rows, label) {
   URL.revokeObjectURL(url)
 }
 
-function PaymentDetail({ row, modelAll }) {
-  return <tr className="dist-drip-detail"><td colSpan={COLUMNS.length}>
+function PaymentDetail({ row, modelAll, span }) {
+  return <tr className="dist-drip-detail"><td colSpan={span}>
     <table className="dist-drip-payments">
       <thead><tr><th>Paid</th><th>Account</th><th>Amount</th>{modelAll && <th>From modeled shares</th>}<th>$/share</th><th>Shares held</th><th>Reinvested</th><th>Shares bought</th><th>Price</th><th>Cash kept</th><th>What happened</th></tr></thead>
       <tbody>{row.payments.map((p, i) => <tr key={`${p.date}-${p.account}-${i}`}>
@@ -122,6 +154,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const pf = useProfileFetch()
   const [range, setRange] = useState('last12')
   const [modelAll, setModelAll] = useState(false)
+  const [evaluate, setEvaluate] = useState(false)
   const [groupBy, setGroupBy] = useState('ticker')
   const [filter, setFilter] = useState('')
   const [expanded, setExpanded] = useState(() => new Set())
@@ -131,11 +164,12 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const today = new Date()
   const asOf = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
   const params = rangeParams(range, firstMonth, asOf)
-  const loadKey = `${refreshKey}:${range}:${params.start || ''}:${modelAll ? 1 : 0}`
+  const loadKey = `${refreshKey}:${range}:${params.start || ''}:${modelAll ? 1 : 0}:${evaluate ? 1 : 0}`
+  const columns = useMemo(() => evaluate ? [COLUMNS[0], COLUMNS[1], FIT_COLUMN, ...COLUMNS.slice(2)] : COLUMNS, [evaluate])
 
   useEffect(() => {
     let stale = false
-    const base = { ...params, model_all: modelAll ? 1 : 0 }
+    const base = { ...params, model_all: modelAll ? 1 : 0, evaluate: evaluate ? 1 : '' }
     const load = async () => {
       setState({ key: loadKey, rows: [], statuses: [], loaded: 0, total: null })
       const list = await readJSON(await pf(`/api/portfolio-distributions/drip-ledger/tickers?${query(base)}`))
@@ -164,9 +198,22 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   }, [pf, loadKey])
 
   const current = state?.key === loadKey ? state : null
+  const fits = useMemo(() => new Map((current?.statuses || []).filter(s => s.evaluation).map(s => [s.ticker, s.evaluation])), [current])
+  // Your own result per ticker: what was reinvested in the range and what those shares are worth now.
+  const mine = useMemo(() => {
+    const out = new Map()
+    for (const row of current?.rows || []) {
+      const entry = out.get(row.ticker) || { reinvested: 0, value: null, month: '' }
+      entry.reinvested += Number(row.drip_amount) || 0
+      if (row.month > entry.month) Object.assign(entry, { month: row.month, value: row.value_of_drip })
+      out.set(row.ticker, entry)
+    }
+    return out
+  }, [current])
   const { rows, hidden } = useMemo(() => {
     const needle = filter.trim().toUpperCase()
     const matched = (current?.rows || []).filter(r => !needle || `${r.ticker} ${r.description || ''}`.toUpperCase().includes(needle))
+      .map(r => evaluate ? { ...r, drip_fit: fits.get(r.ticker)?.label ?? null } : r)
     // Holdings no longer owned in any account of this portfolio can be hidden;
     // like the filter box, the cards and totals then cover the rows shown.
     const isSold = r => heldTickers && !heldTickers.has(String(r.ticker).toUpperCase())
@@ -176,8 +223,8 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       rows: soldRows.length ? matched.filter(r => !isSold(r)) : matched,
       hidden: { tickers, amount: sum(soldRows, 'distribution') },
     }
-  }, [current, filter, showSold, heldTickers])
-  const { sorted, sort, onSort } = useTableSort(rows, SORT_COLUMNS, { key: 'month', direction: 'asc' })
+  }, [current, filter, showSold, heldTickers, evaluate, fits])
+  const { sorted, sort, onSort } = useTableSort(rows, columns, { key: 'month', direction: 'asc' })
   const groupKey = groupBy === 'none' ? null : groupBy
   const groups = useMemo(() => {
     if (!groupKey) return [[null, sorted]]
@@ -195,6 +242,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
     position: positioned.length ? sum(positioned, 'total_value') : null,
     buying: new Set(rows.filter(r => r.shares_bought > 0).map(r => r.ticker)).size,
   }
+  const fitCounts = FIT_ORDER.map(label => [label, latest.filter(r => r.drip_fit === label).length])
   const years = useMemo(() => {
     const first = Number((firstMonth || asOf).slice(0, 4))
     const out = []
@@ -206,10 +254,16 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const problems = (current?.statuses || []).filter(s => s.message)
   const rangeLabel = meta ? `${monthLabel(meta.start)} – ${monthLabel(meta.end)}` : ''
 
+  const fitBadge = ticker => {
+    const fit = fits.get(ticker)
+    return <span className={`dist-fit ${FIT_TONE[fit?.label] || ''}`} title={fitTitle(fit, mine.get(ticker))}>{fit?.label || (loading ? '…' : DASH)}</span>
+  }
+
   const cellFor = (column, row) => {
     if (column.key === 'month') return <>{monthLabel(row.month)}{row.partial ? '*' : ''}</>
     if (column.key === 'ticker') return <strong title={row.description || row.ticker}>{row.ticker}</strong>
     if (column.key === 'source') return <span className={SOURCE_TONE[row.source] || ''}>{row.source}</span>
+    if (column.key === 'drip_fit') return fitBadge(row.ticker)
     return column.format(row[column.key])
   }
 
@@ -227,10 +281,13 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       <label className="dist-checkbox" title="Reinvest every payment that was taken as cash at that day's close, and model holdings with no payment records from the fund's distribution history">
         <input type="checkbox" checked={modelAll} onChange={e => setModelAll(e.target.checked)} /> Show all holdings as if reinvested
       </label>
+      <label className="dist-checkbox" title="Judge each holding: did reinvesting beat taking the cash over the selected range or the last 3 years, whichever is longer?">
+        <input type="checkbox" checked={evaluate} onChange={e => setEvaluate(e.target.checked)} /> Evaluate DRIP fit
+      </label>
       {setShowSold && <label className="dist-checkbox" title="Holdings no account in this portfolio holds any more">
         <input type="checkbox" checked={showSold} onChange={e => setShowSold(e.target.checked)} /> Show holdings I no longer own
       </label>}
-      <button type="button" className="btn" disabled={!rows.length} onClick={() => exportCsv(sorted, range)}>Export CSV</button>
+      <button type="button" className="btn" disabled={!rows.length} onClick={() => exportCsv(sorted, range, columns)}>Export CSV</button>
     </div>
     {current?.error && <div className="alert alert-error" role="alert">{current.error}</div>}
     {loading && !current?.error && <div className="dist-loading" role="status"><span className="spinner" /> {current?.total ? `Loading ${current.loaded} of ${current.total} holdings…` : 'Finding reinvested holdings…'}</div>}
@@ -241,39 +298,42 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
       <Metric label="Income from DRIP shares" value={money(totals.income)} sub="Paid on shares reinvesting added in this range" color="dist-positive" />
       <Metric label="Value of DRIP shares" value={money(totals.value)} sub={valued.length < latest.length ? `${valued.length} of ${latest.length} holdings priced` : 'At each holding\'s latest month-end close'} />
       {modelAll && <Metric label="Modeled extra income" value={money(totals.extra)} sub="Paid on shares that reinvesting cash payments would have added" />}
+      {evaluate && <Metric label="DRIP fit" value={`${fitCounts[0][1]} good to DRIP`} sub={fitCounts.slice(1).map(([label, n]) => `${n} ${label.toLowerCase()}`).join(' · ')} color="dist-positive" />}
     </div>
     {hidden.tickers.length > 0 && <p className="dist-note">Hiding {hidden.tickers.length} {hidden.tickers.length === 1 ? 'holding' : 'holdings'} you no longer own ({hidden.tickers.join(', ')}), which paid {money(hidden.amount)} in this range. The cards and totals leave {hidden.tickers.length === 1 ? 'it' : 'them'} out; tick “Show holdings I no longer own” to include {hidden.tickers.length === 1 ? 'it' : 'them'}.</p>}
     {meta?.flagged_without_records?.length > 0 && !modelAll && <p className="dist-note">Marked DRIP on Holdings but no reinvestment records in this range: {meta.flagged_without_records.join(', ')}. Tick “Show all holdings as if reinvested” to model them.</p>}
     <div className="holdings-table-wrap dist-table-wrap">
       <table className="holdings-table dist-table dist-drip-table">
-        <thead><tr>{COLUMNS.map(column => <DistributionSortHeader key={column.key} column={column} sort={sort} onSort={onSort} />)}</tr></thead>
+        <thead><tr>{columns.map(column => <DistributionSortHeader key={column.key} column={column} sort={sort} onSort={onSort} />)}</tr></thead>
         <tbody>{groups.map(([name, list]) => <Fragment key={name || 'all'}>
-          {name != null && <tr className="dist-group-title-row"><td colSpan={COLUMNS.length}>
+          {name != null && <tr className="dist-group-title-row"><td colSpan={columns.length}>
             {groupKey === 'month' ? monthLabel(name) : `${name}${list[0]?.description ? ` · ${list[0].description}` : ''}`} · {list.length} {groupKey === 'month' ? (list.length === 1 ? 'holding' : 'holdings') : (list.length === 1 ? 'month' : 'months')}
+            {evaluate && groupKey === 'ticker' && <> · DRIP fit: {fitBadge(name)}</>}
           </td></tr>}
           {list.map(row => {
             const id = `${row.ticker}:${row.month}`
             const open = expanded.has(id)
             return <Fragment key={id}>
               <tr className={`dist-drip-row${open ? ' dist-selected-row' : ''}`} onClick={() => toggle(id)} title="Click to show each payment">
-                {COLUMNS.map(column => <td key={column.key} className={`${column.text ? 'dist-left' : ''} ${column.highlight ? 'dist-highlight' : ''}`}>{cellFor(column, row)}</td>)}
+                {columns.map(column => <td key={column.key} className={`${column.text ? 'dist-left' : ''} ${column.highlight ? 'dist-highlight' : ''}`}>{cellFor(column, row)}</td>)}
               </tr>
-              {open && <PaymentDetail row={row} modelAll={modelAll} />}
+              {open && <PaymentDetail row={row} modelAll={modelAll} span={columns.length} />}
             </Fragment>
           })}
           {name != null && list.length > 1 && (() => {
             const total = subtotal(list, groupKey)
-            return <tr className="dist-group-total">{COLUMNS.map((column, i) => <td key={column.key} className={column.text ? 'dist-left' : ''}>
+            return <tr className="dist-group-total">{columns.map((column, i) => <td key={column.key} className={column.text ? 'dist-left' : ''}>
               {i === 0 ? 'Subtotal' : column.key in total ? (total[column.key] == null ? '' : column.format(total[column.key])) : ''}
             </td>)}</tr>
           })()}
         </Fragment>)}</tbody>
-        {rows.length > 0 && <tfoot><tr>{COLUMNS.map((column, i) => <td key={column.key} className={column.text ? 'dist-left' : ''}>
+        {rows.length > 0 && <tfoot><tr>{columns.map((column, i) => <td key={column.key} className={column.text ? 'dist-left' : ''}>
           {i === 0 ? 'Total' : { distribution: money(totals.distribution), drip_amount: money(totals.drip), income_from_drip: money(totals.income), value_of_drip: money(totals.value), total_value: money(totals.position) }[column.key] ?? ''}
         </td>)}</tr></tfoot>}
       </table>
       {!loading && !rows.length && !current?.error && <div className="dist-empty">{filter ? 'No holdings match this filter.' : modelAll ? 'No holdings paid distributions in this range.' : 'No reinvestment records in this range. Tick “Show all holdings as if reinvested” to model every holding.'}</div>}
     </div>
+    {evaluate && <p className="dist-note">DRIP fit replays each fund&apos;s own prices and distributions over the selected range or the last 3 years, whichever is longer, the same test as the DRIP vs. Cash Analyzer: <em>Good to DRIP</em> when $1 reinvested ended up worth more than $1 kept as cash earning 4% a year, <em>Better as cash</em> when cash finished at least 2% ahead, <em>Toss-up</em> in between, and <em>Too new to judge</em> with under 120 days of prices. Hover a verdict for the numbers and your own result. It describes the past, not what a fund will do next.</p>}
     {problems.length > 0 && <p className="dist-note">{problems.map(s => `${s.ticker}: ${s.message}`).join(' ')}</p>}
     <p className="dist-note">* Current month in progress. Click a row to see each payment and which account it came from. Base shares are counted back from each account's current share count through its buys and sells, so a position opened before your transaction history still starts from the right number. {modelAll
       ? 'Modeled rows reinvest the cash payments at that day\'s closing price; those shares then earn the payments after them. Holdings with no payment records are modeled from the fund\'s distribution history and your share count.'

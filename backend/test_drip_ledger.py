@@ -303,3 +303,56 @@ def test_owner_with_up_to_ten_accounts_is_checked_when_any_reinvests_and_lists_t
     row = next(t for t in matrix["tickers"] if t["ticker"] == "MANY")
     assert row["owner_drip"] is bool(reinvesting) and row["drip_qty"] == (dripping if reinvesting else 0)
     assert sum(1 for a in row["accounts"].values() if a["reinvest"]) == len(reinvesting)
+
+
+# ── DRIP fit evaluation ───────────────────────────────────────────────────────
+
+def trending_market(start, end, first_price, yearly_change, monthly_payout_rate):
+    """Weekday closes changing steadily, paying a share of the price on each month's first weekday."""
+    prices, distributions, paid, day = [], [], set(), start
+    while day <= end:
+        if day.weekday() < 5:
+            price = first_price * (1 + yearly_change) ** ((day - start).days / 365.25)
+            prices.append({"date": day.isoformat(), "close": price})
+            if (day.year, day.month) not in paid:
+                paid.add((day.year, day.month))
+                distributions.append({"date": day.isoformat(), "amount": price * monthly_payout_rate})
+        day += timedelta(days=1)
+    return {"prices": prices, "distributions": distributions}
+
+
+def test_drip_fit_separates_compounders_from_eroding_funds():
+    from drip_ledger import evaluate_drip_fit, fit_window_start
+    start = fit_window_start("2026-01", TODAY)
+    assert start == date(2023, 6, 20)  # three years beats a six-month range
+    assert fit_window_start("2021-01", TODAY) == date(2021, 1, 1)
+
+    growing = evaluate_drip_fit(trending_market(start, TODAY, 20, 0.10, 0.004), "GROW", start, TODAY)
+    assert growing["label"] == "Good to DRIP" and growing["re"] > 1.02 and growing["bucket"] == "Grower"
+    eroding = evaluate_drip_fit(trending_market(start, TODAY, 20, -0.35, 0.03), "MELT", start, TODAY)
+    assert eroding["label"] == "Better as cash" and eroding["re"] < 0.98 and eroding["bucket"] == "Liquidator"
+    young = evaluate_drip_fit(trending_market(TODAY - timedelta(days=60), TODAY, 20, 0.1, 0.01), "NEW", start, TODAY)
+    assert young["label"] == "Too new to judge" and young["call"] is None
+    assert evaluate_drip_fit({"prices": [], "distributions": []}, "NONE", start, TODAY)["call"] is None
+
+
+def test_ledger_endpoint_adds_drip_fit_when_asked(connection, monkeypatch):
+    today = date.today()
+    day = date(today.year, today.month, 1) - timedelta(days=20)
+    hold(connection, "MNY", 2, 1020, "Y")
+    trade(connection, "MNY", 2, day - timedelta(days=30), 1000, 10)
+    drip(connection, "MNY", 2, day, 20, 10)
+    connection.commit()
+    starts = []
+
+    def loader(symbol, start, end):
+        starts.append(start)
+        return trending_market(start - timedelta(days=5), end, 10, 0.08, 0.005)
+
+    monkeypatch.setattr(app_module, "_nav_screen_market_history", loader)
+    client = app_module.app.test_client()
+    plain = client.get("/api/portfolio-distributions/drip-ledger?profile_id=2&tickers=MNY").get_json()
+    assert "evaluation" not in plain["tickers"][0]
+    judged = client.get("/api/portfolio-distributions/drip-ledger?profile_id=2&tickers=MNY&evaluate=1").get_json()
+    assert judged["tickers"][0]["evaluation"]["label"] == "Good to DRIP" and judged["rows"]
+    assert (today - starts[-1]).days >= 365 * 3 - 1  # fetched the longer window

@@ -84,3 +84,8 @@
 .dist-drip-payments th, .dist-drip-payments td { padding: .3rem .65rem; text-align: right; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); white-space: nowrap; }
 .dist-drip-payments th:nth-child(-n+2), .dist-drip-payments td:nth-child(-n+2), .dist-drip-payments td:last-child, .dist-drip-payments th:last-child { text-align: left; }
 .dist-drip-table .dist-drip-payments td:first-child, .dist-drip-table .dist-drip-payments th:first-child { position: static; box-shadow: none; background: none; color: var(--text); font-weight: 400; }
+.dist-fit { font-weight: 650; white-space: nowrap; cursor: help; }
+.dist-fit-good { color: var(--pos); }
+.dist-fit-cash { color: var(--neg); }
+.dist-fit-toss { color: var(--warning); }
+.dist-fit-na { color: var(--text-dim); font-weight: 500; }

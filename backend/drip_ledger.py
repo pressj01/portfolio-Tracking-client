@@ -731,3 +731,70 @@ def apply_reinvest_evidence(conn, profile_ids, today=None, evidence=None):
                              (found["flag"], key[0], _row_value(row, "ticker", 1)))
             changed.add(key[1])
     return changed
+
+
+# ── Is this a good ticker to DRIP into? ───────────────────────────────────────
+
+FIT_YEARS = 3
+MIN_FIT_DAYS = 120  # portfolio_tester.MIN_DAYS, the DRIP vs. Cash Analyzer's floor
+FIT_LABELS = {"DRIP": "Good to DRIP", "Take cash": "Better as cash", "Toss-up": "Toss-up"}
+
+
+def fit_window_start(start_key, today):
+    """The selected range or the last FIT_YEARS years, whichever starts earlier."""
+    floor = date(today.year - FIT_YEARS, today.month, min(today.day, 28))
+    return min(month_start(start_key), floor)
+
+
+def evaluate_drip_fit(payload, ticker, start_day, today):
+    """Would reinvesting this ticker have beaten taking the cash?
+
+    The DRIP vs. Cash Analyzer's own test (``drip_score``), run on the
+    ticker's split-adjusted closes and distributions from ``start_day`` to
+    ``today``: what $1 of distributions became when reinvested versus kept as
+    cash earning the analyzer's cash rate (RE), how often DRIP was ahead across
+    every possible sell date, and what kind of fund the history describes.
+    History only; it says nothing certain about what comes next.
+    """
+    import pandas as pd
+    import drip_score
+
+    prices = []
+    for point in (payload or {}).get("prices") or ():
+        day, close = _day(point.get("date")), _num(point.get("close"))
+        if day is not None and start_day <= day <= today and close > 0:
+            prices.append((day, close))
+    prices.sort()
+    if len(prices) < 2 or (prices[-1][0] - prices[0][0]).days < MIN_FIT_DAYS:
+        return {"label": "Too new to judge", "call": None,
+                "reason": f"Needs at least {MIN_FIT_DAYS} days of prices in the window."}
+    index = pd.DatetimeIndex([pd.Timestamp(day) for day, _ in prices])
+    close = pd.Series([value for _, value in prices], index=index, dtype=float)
+    divs = pd.Series(0.0, index=index)
+    for point in (payload or {}).get("distributions") or ():
+        day, amount = _day(point.get("date")), _num(point.get("amount"))
+        if day is not None and amount > 0 and pd.Timestamp(day) in divs.index:
+            divs.loc[pd.Timestamp(day)] += amount
+    if not (divs > 0).any():
+        return {"label": "Too new to judge", "call": None,
+                "reason": "No distributions in the window, so there is nothing to reinvest."}
+    try:
+        metrics = drip_score.compute_ticker_metrics(close, divs, ticker)
+    except (ValueError, ZeroDivisionError) as problem:
+        return {"label": "Too new to judge", "call": None, "reason": str(problem)}
+    call = metrics.get("drip_call")
+    return {
+        "label": FIT_LABELS.get(call, "Too new to judge"),
+        "call": call if call in FIT_LABELS else None,
+        "bucket": metrics.get("bucket"),
+        "re": metrics.get("re"),
+        "win_rate": metrics.get("win_rate"),
+        "conflicted": bool(metrics.get("conflicted")),
+        "price_cagr": metrics.get("nav_annual"),
+        "coverage": metrics.get("coverage"),
+        "annual_yield": metrics.get("annual_yield"),
+        "cash_rate": drip_score.DEFAULT_CASH_RATE,
+        "start": metrics.get("effective_start"),
+        "end": metrics.get("effective_end"),
+        "years": metrics.get("years"),
+    }
