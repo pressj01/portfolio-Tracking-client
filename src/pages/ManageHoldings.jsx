@@ -2164,6 +2164,34 @@ const GRADE_RANK = {
   'C+': 7, C: 6, 'C-': 5, 'D+': 4, D: 3, 'D-': 2, F: 1,
 }
 
+const DRIP_SOURCE_TEXT = {
+  broker_file: as_of => `From the broker positions file${as_of ? ` dated ${as_of}` : ''}.`,
+  records: as_of => `From payment records${as_of ? ` (${as_of})` : ''}.`,
+  manual: as_of => `Set by hand${as_of ? ` on ${as_of}` : ''}. A newer payment record can change it.`,
+}
+
+// Which accounts reinvest a rollup (Owner/aggregate) holding, for the DRIP box.
+function dripAccountsSummary(h) {
+  const accounts = Array.isArray(h.reinvest_accounts) ? h.reinvest_accounts : []
+  if (!accounts.length) return null
+  const on = accounts.filter(a => a.reinvest).length
+  return { accounts, on, total: accounts.length, partial: on > 0 && on < accounts.length }
+}
+
+function dripCheckboxTitle(h, summary) {
+  if (summary) {
+    const shares = v => Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
+    const head = summary.on === 0 ? 'No account reinvests'
+      : summary.on === summary.total ? `All ${summary.total} accounts reinvest`
+        : `${summary.on} of ${summary.total} accounts reinvest (${Number(h.reinvest_share_pct || 0).toFixed(1)}% of shares)`
+    const lines = summary.accounts.map(a => `${a.reinvest ? '✓' : '✗'} ${a.account} — ${shares(a.quantity)} sh${a.note ? ` · ${a.note}` : ''}`)
+    return [head, ...lines, '', 'Clicking turns DRIP on or off in every account above.'].join('\n')
+  }
+  if (h.reinvest_note) return h.reinvest_note
+  const describe = DRIP_SOURCE_TEXT[h.reinvest_source]
+  return describe ? describe(h.reinvest_as_of) : 'Whether dividends are being reinvested.'
+}
+
 function GradeBadge({ grade }) {
   if (!grade || grade === 'N/A') return <span className="grade-badge grade-na">N/A</span>
   const letter = grade[0]
@@ -2228,7 +2256,7 @@ const COLUMNS = [
   { key: 'div_frequency', label: 'Freq', type: 'string', width: 56, tip: 'Dividend payment frequency (M = Monthly, Q = Quarterly, W = Weekly, A = Annual)' },
   { key: 'ex_div_date', label: 'Ex-Div', type: 'string', width: 80, tip: 'Ex-dividend date — you must own shares before this date to receive the next dividend' },
   { key: 'div_pay_date', label: 'Pay Date', type: 'string', width: 80, tip: 'Date the dividend is actually paid to shareholders' },
-  { key: 'reinvest', label: 'DRIP', type: 'string', width: 56, tip: 'Whether dividends are being reinvested (Y = reinvesting, N = taking as cash)' },
+  { key: 'reinvest', label: 'DRIP', type: 'string', width: 72, tip: 'Whether dividends are being reinvested. Set from the newest evidence: a broker positions file, whether the latest payment was reinvested, or your own click. On Owner it is checked when any account reinvests; 2/5 means two of five accounts do (hover for the list).' },
   { key: 'estim_payment_per_year', label: 'Yr$', type: 'number', width: 84, tip: 'Estimated total annual dividend income from this holding' },
   { key: 'approx_monthly_income', label: 'Mo$', type: 'number', width: 80, tip: 'Estimated monthly dividend income from this holding' },
   { key: 'monthly_income_reinvested', label: 'DRIP$', type: 'number', width: 80, tip: 'Estimated monthly income being reinvested (DRIP)' },
@@ -2498,7 +2526,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
           </div>
         </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--p-888)', margin: '0 0 0.5rem', flexShrink: 0 }}>
-          Toggle DRIP per ticker per account. Click "Sync to Owner" to update Owner's DRIP flags and share counts.
+          Toggle DRIP per ticker per account. Boxes follow the newest evidence (a broker positions file, whether the latest payment was reinvested, or your click); hover a box to see which. Owner is checked when any account reinvests.
         </p>
 
         {!loading && tickers.length > 0 && (() => {
@@ -2576,7 +2604,8 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
                       if (!a) return <td key={p.id} style={{ ...tdStyle, textAlign: 'center', color: 'var(--p-555)' }}>—</td>
                       return (
                         <td key={p.id} style={{ ...tdStyle, textAlign: 'center' }}>
-                          <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                            title={dripCheckboxTitle({ reinvest_note: a.note, reinvest_source: a.source, reinvest_as_of: a.as_of })}>
                             <input
                               type="checkbox" checked={a.reinvest}
                               onChange={() => handleToggle(t.ticker, p.id, a.reinvest)}
@@ -2591,6 +2620,13 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
                     })}
                     <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 600, color: t.owner_drip ? 'var(--pos-muted)' : 'var(--p-888)' }}>
                       {t.owner_drip ? `✓ ${t.drip_qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
+                      {(() => {
+                        const held = Object.values(t.accounts)
+                        const on = held.filter(a => a.reinvest).length
+                        return on > 0 && on < held.length
+                          ? <div style={{ fontSize: '0.7rem', fontWeight: 400, color: 'var(--warning)' }}>{on}/{held.length} accounts</div>
+                          : null
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -3524,14 +3560,23 @@ export default function ManageHoldings() {
             {h.div_pay_date_estimated ? '~' : ''}{formatMDY(h.div_pay_date) || '-'}
           </td>
         )
-      case 'reinvest':
+      case 'reinvest': {
+        // Owner speaks for its accounts: checked when any of them reinvests,
+        // with "2/5" when only some do. Its click sets every account.
+        const dripSummary = dripAccountsSummary(h)
+        const ownerToggle = profileId === 1 && !isAggregate && dripSummary && dripSummary.total > 1
+        const dripTitle = dripCheckboxTitle(h, dripSummary)
         return (
-          <td style={{ textAlign: 'center' }}>
+          <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }} title={dripTitle}>
             <input
               type="checkbox"
               checked={h.reinvest === 'Y'}
+              aria-label={`DRIP for ${h.ticker}`}
               onChange={async () => {
                 const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
+                if (ownerToggle && !await dialog.confirm(
+                  `Turn DRIP ${newVal === 'Y' ? 'on' : 'off'} for ${h.ticker} in all ${dripSummary.total} accounts that hold it (${dripSummary.accounts.map(a => a.account).join(', ')})?`
+                )) return
                 const mi = Number(h.approx_monthly_income) || 0
                 const ri = Number(h.monthly_income_reinvested) || 0
                 // Only fake an all-or-nothing split when the holding is
@@ -3555,7 +3600,7 @@ export default function ManageHoldings() {
                   await pf(`/api/holdings/${h.ticker}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ reinvest: newVal }),
+                    body: JSON.stringify(ownerToggle ? { reinvest: newVal, reinvest_all_accounts: true } : { reinvest: newVal }),
                   })
                   invalidateDashboardCache()
                   // Reconcile with the backend's authoritative split so
@@ -3568,10 +3613,19 @@ export default function ManageHoldings() {
                   setError(e.message)
                 }
               }}
-              style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+              style={{ cursor: 'pointer', width: '16px', height: '16px', verticalAlign: 'middle' }}
             />
+            {dripSummary?.partial && (
+              <span
+                className="drip-partial-badge"
+                style={{ marginLeft: 4, fontSize: '0.7rem', fontWeight: 600, color: 'var(--warning)', verticalAlign: 'middle', cursor: 'help' }}
+              >
+                {dripSummary.on}/{dripSummary.total}
+              </span>
+            )}
           </td>
         )
+      }
       case 'estim_payment_per_year':
         return <td>{fmtM(h.estim_payment_per_year, 3)}</td>
       case 'approx_monthly_income':

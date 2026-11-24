@@ -4,13 +4,14 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useCurrency } from '../context/CurrencyContext'
 import ThemedPlot from '../components/ThemedPlot'
 import DistributionIncomeFloor from './DistributionIncomeFloor'
+import DistributionDripLedger from './DistributionDripLedger'
 import DistributionSortHeader from '../components/DistributionSortHeader'
 import useTableSort from '../utils/useTableSort'
 import { formatMoney, formatMoneyDelta } from '../utils/money'
 import './Distributions.css'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const TABS = [['monthly', 'Monthly Income'], ['analyzer', 'Distribution Analyzer'], ['portfolio', 'Portfolio Income'], ['floor', 'Income Floor']]
+const TABS = [['monthly', 'Monthly Income'], ['analyzer', 'Distribution Analyzer'], ['portfolio', 'Portfolio Income'], ['floor', 'Income Floor'], ['drip', 'DRIP Ledger']]
 const DASH = '—'
 const COLORS = { actual: '#32b979', estimate: '#e4aa45', reference: '#55b9ea', latest: '#e8a543' }
 const money = v => v == null ? DASH : formatMoney(v)
@@ -379,6 +380,7 @@ export default function Distributions() {
       {tab === 'monthly' && <MonthlyIncome history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={includeEstimates} setIncludeEstimates={setIncludeEstimates} query={monthlyQuery} setQuery={setMonthlyQuery} />}
       {tab === 'analyzer' && <Analyzer rows={symbols.map(ticker => market.get(ticker) || { ticker, status: marketReady ? 'unavailable' : 'loading', message: marketReady ? 'No market history returned for this symbol.' : 'Loading…' })} loading={loadingMarket} holdings={incomeHoldings} custom={custom} setCustom={setCustom} allHoldings={allHoldings} setAllHoldings={setAllHoldings} refresh={() => setMarketRefresh(v => v + 1)} />}
       {tab === 'portfolio' && <PortfolioIncome holdings={incomeHoldings} history={data} market={market} loading={loadingMarket} />}
+      {tab === 'drip' && <DistributionDripLedger key={profileQueryString} refreshKey={refresh} />}
       {tab === 'floor' && <DistributionIncomeFloor key={profileQueryString} history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={floorIncludeEstimates} setIncludeEstimates={setFloorIncludeEstimates} />}
     </>}
   </div>

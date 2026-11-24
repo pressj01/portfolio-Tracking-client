@@ -73,3 +73,14 @@
 .dist-stress-exposure { align-self: flex-end; min-height: 2rem; color: var(--text-dim); font-size: .85rem; line-height: 1.4; padding-bottom: .35rem; }
 .dist-stress-exposure strong { color: var(--text); }
 @media (max-width: 800px) { .dist-yearly { grid-template-columns: 1fr; } .dist-tabs .tab { padding: .65rem .85rem; } }
+.dist-drip-table .dist-drip-row { cursor: pointer; }
+.dist-drip-table .dist-drip-row:hover td { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.dist-drip-modeled { color: var(--accent-bright); }
+.dist-drip-cash { color: var(--warning); }
+.dist-drip-table .dist-drip-detail > td { position: static; background: color-mix(in srgb, var(--surface) 70%, var(--border)); padding: .5rem .75rem .75rem 1.5rem; box-shadow: none; }
+.dist-drip-table tbody .dist-drip-detail > td:first-child { color: var(--text); font-weight: 400; }
+.dist-drip-payments { border-collapse: collapse; font-size: .78rem; width: auto; }
+.dist-drip-payments th { position: static; background: none; color: var(--text-dim); font-weight: 600; min-width: 0; box-shadow: none; z-index: auto; }
+.dist-drip-payments th, .dist-drip-payments td { padding: .3rem .65rem; text-align: right; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); white-space: nowrap; }
+.dist-drip-payments th:nth-child(-n+2), .dist-drip-payments td:nth-child(-n+2), .dist-drip-payments td:last-child, .dist-drip-payments th:last-child { text-align: left; }
+.dist-drip-table .dist-drip-payments td:first-child, .dist-drip-table .dist-drip-payments th:first-child { position: static; box-shadow: none; background: none; color: var(--text); font-weight: 400; }

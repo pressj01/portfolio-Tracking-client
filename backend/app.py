@@ -171,6 +171,13 @@ from refresh_sessions import (
 )
 from dividend_ledger import build_ledger as build_dividend_ledger, week_start_for
 from distribution_analysis import analyze_distribution_market, build_distribution_history
+from drip_ledger import (
+    apply_reinvest_evidence,
+    build_drip_ledger,
+    detect_reinvest_evidence,
+    ledger_candidates as drip_ledger_candidates,
+    parse_range as parse_drip_ledger_range,
+)
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
@@ -6249,6 +6256,11 @@ def _ensure_basis_columns(conn):
         # only once the pay date it names has actually passed.
         "div_dates_manual_until": "TEXT",
         "div_dates_manual_set_at": "TEXT",
+        # Where the DRIP flag came from ('broker_file', 'records', 'manual') and
+        # the date of that evidence; the newest evidence wins (drip_ledger.py).
+        "reinvest_source": "TEXT",
+        "reinvest_as_of": "TEXT",
+        "drip_quantity": "REAL",
         # When a broker positions file last set this holding's share count:
         # the file's date, and the moment it was imported (SQLite UTC, the
         # same clock as transactions.created_at). A manual trade moves that
@@ -9486,6 +9498,10 @@ def _reconcile_owner_rollup(conn):
     # for Owner (Dividend Analysis, the dividends list) showed that.
     _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id, only_tracked=True)
 
+    # The field sync copies MAX(reinvest) but not the DRIP share count for a
+    # ticker only some accounts reinvest; keep both in step.
+    _sync_owner_drip_flags(conn)
+
     conn.commit()
 
     # Refresh derived tables for Owner
@@ -10818,6 +10834,10 @@ def reconcile_owner():
 
     # Same refresh the automatic reconcile does; see _reconcile_owner_rollup.
     _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id, only_tracked=True)
+
+    # The field sync copies MAX(reinvest) but not the DRIP share count for a
+    # ticker only some accounts reinvest; keep both in step.
+    _sync_owner_drip_flags(conn)
 
     conn.commit()
 
@@ -12384,8 +12404,11 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                     update_sets.append("dividend_actuals_source = ?")
                     update_values.append("snapshot")
                 if "reinvest_dividends" in pos and pos["reinvest_dividends"] is not None:
-                    update_sets.append("reinvest = ?")
-                    update_values.append("Y" if pos["reinvest_dividends"] else "N")
+                    # The file's Reinvest column is the broker's own setting,
+                    # dated by the file, so later payment evidence can still
+                    # overrule a stale export (drip_ledger.apply_reinvest_evidence).
+                    update_sets.extend(["reinvest = ?", "reinvest_source = ?", "reinvest_as_of = ?"])
+                    update_values.extend(["Y" if pos["reinvest_dividends"] else "N", "broker_file", snapshot_date])
                 conn.execute(
                     f"""UPDATE all_account_info SET
                         {', '.join(update_sets)}
@@ -12426,8 +12449,8 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                     columns.append("dividend_actuals_source")
                     values.append("snapshot")
                 if "reinvest_dividends" in pos and pos["reinvest_dividends"] is not None:
-                    columns.append("reinvest")
-                    values.append("Y" if pos["reinvest_dividends"] else "N")
+                    columns.extend(["reinvest", "reinvest_source", "reinvest_as_of"])
+                    values.extend(["Y" if pos["reinvest_dividends"] else "N", "broker_file", snapshot_date])
                 conn.execute(
                     f"""INSERT INTO all_account_info
                         ({', '.join(columns)})
@@ -23693,6 +23716,9 @@ def list_holdings():
         )
     if _repair_drip_tracking_for_profiles(conn, pids):
         conn.commit()
+    # Bring the DRIP boxes up to the newest payment evidence before reading them.
+    reinvest_evidence = _refresh_reinvest_flags(conn, pids)
+    conn.commit()
 
     if is_agg and len(pids) > 1:
         # Each account's stored total is authoritative for that account (see
@@ -23947,6 +23973,8 @@ def list_holdings():
                         r["monthly_income_reinvested"] = 0
                         r["monthly_income_not_reinvested"] = mi
 
+    _attach_reinvest_details(conn, results, pids, reinvest_evidence)
+
     # Reuse an already-resolved calendar date when one is available, but never
     # make the latency-sensitive holdings request populate that cache. Calendar
     # and background paths own the external issuer/Yahoo lookups.
@@ -24156,6 +24184,31 @@ def update_holding(ticker):
         updates.append(f"{field} = ?")
         vals.append(value)
 
+    # A DRIP box ticked by hand is evidence dated today. It holds until a newer
+    # payment shows what the broker actually did (drip_ledger.apply_reinvest_evidence).
+    # Owner's box speaks for its accounts: the Holdings checkbox sends
+    # reinvest_all_accounts, and every member holding the ticker follows.
+    reinvest_members = []
+    if "reinvest" in data:
+        new_flag = "Y" if str(data["reinvest"] or "").strip().upper() == "Y" else "N"
+        data["reinvest"] = new_flag
+        current = conn.execute(
+            "SELECT reinvest FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (old_ticker, profile_id),
+        ).fetchone()
+        current_flag = "Y" if str((current[0] if current else "") or "").strip().upper() == "Y" else "N"
+        if new_flag != current_flag or data.get("reinvest_all_accounts"):
+            updates.extend(["reinvest_source = ?", "reinvest_as_of = ?"])
+            vals.extend(["manual", datetime.date.today().isoformat()])
+        if profile_id == 1 and data.get("reinvest_all_accounts") and _owner_profile_is_active(conn):
+            reinvest_members = [
+                row[0] for row in conn.execute(
+                    """SELECT a.profile_id FROM all_account_info a JOIN profiles p ON p.id = a.profile_id
+                       WHERE a.ticker = ? AND p.id != 1 AND p.include_in_owner = 1""",
+                    (old_ticker,),
+                ).fetchall()
+            ]
+
     # When quantity is manually changed, reset base_quantity and import_date
     # so DRIP simulation restarts from this point (the user's new share count
     # already accounts for any DRIP up to now)
@@ -24225,10 +24278,18 @@ def update_holding(ticker):
     propagated_pids = _propagate_security_level_fields(
         conn, ticker, data, profile_id, extra_shared=div_shared
     )
+    if reinvest_members:
+        member_marks = ",".join("?" * len(reinvest_members))
+        conn.execute(
+            f"""UPDATE all_account_info SET reinvest = ?, reinvest_source = 'manual', reinvest_as_of = ?
+                WHERE ticker = ? AND profile_id IN ({member_marks})""",
+            [data["reinvest"], datetime.date.today().isoformat(), ticker, *reinvest_members],
+        )
+        _sync_owner_drip_flags(conn, [ticker])
     conn.commit()
 
     refresh_profile_ids = list(dict.fromkeys(
-        [profile_id] + rename_result["profile_ids"] + propagated_pids
+        [profile_id] + rename_result["profile_ids"] + propagated_pids + reinvest_members
     ))
     for pid in refresh_profile_ids:
         populate_holdings(pid)
@@ -38186,57 +38247,51 @@ def dividend_safety_data():
     return jsonify(rows=out, summary=summary)
 
 
-@app.route("/api/sync-drip-to-owner", methods=["POST"])
-def sync_drip_to_owner():
-    """Copy reinvest flags from sub-profiles to Owner.
+def _sync_owner_drip_flags(conn, tickers=None):
+    """Set Owner's DRIP flag and DRIP share count from its member accounts.
 
-    For each ticker in Owner (profile 1):
-    - Set reinvest='Y' if ANY sub-profile has reinvest='Y' (only 'N' if all are 'N').
-    - Set drip_quantity = sum of shares from sub-profiles where reinvest='Y'.
-      This way DRIP income calculations use only the DRIP-eligible shares,
-      not the full aggregate quantity.
+    Owner reinvests a ticker when ANY member does. ``drip_quantity`` holds the
+    shares in the members that reinvest when only some do, and is None when
+    all do (use every share). The automatic Owner reconcile copied the flag
+    but never this count, so a partly reinvested ticker kept whatever count
+    the last manual "Sync DRIP from Accounts" left (17 tickers had drifted).
+    Returns the number of Owner rows changed. The caller commits.
     """
-    conn = get_connection()
-    ensure_tables_exist(conn)
     owner_id = 1
-
-    # Get sub-profile ids that are included in owner
     rows = conn.execute(
-        "SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1",
-        (owner_id,),
+        "SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1", (owner_id,)
     ).fetchall()
     sub_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
-
     if not sub_ids:
-        return jsonify({"message": "No sub-profiles found", "updated": 0})
-
-    # Build lookup: ticker -> (any_drip, drip_shares)
+        return 0
+    # Narrow test schemas and very old databases may lack the count column or
+    # the derived dividends table; never fail an Owner reconcile over them.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(all_account_info)").fetchall()}
+    if "drip_quantity" not in columns:
+        return 0
+    has_dividends = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dividends'"
+    ).fetchone() is not None
+    wanted = None if tickers is None else {str(t).strip().upper() for t in tickers}
     placeholders = ",".join("?" * len(sub_ids))
-    sub_rows = conn.execute(
-        f"SELECT ticker, reinvest, COALESCE(quantity, 0) as qty FROM all_account_info WHERE profile_id IN ({placeholders})",
+    drip_map = {}
+    for r in conn.execute(
+        f"SELECT ticker, reinvest, COALESCE(quantity, 0) AS qty FROM all_account_info WHERE profile_id IN ({placeholders})",
         sub_ids,
-    ).fetchall()
-
-    drip_map = {}  # ticker -> {"any_drip": bool, "all_drip": bool, "drip_qty": float, "total_qty": float}
-    for r in sub_rows:
-        t = r["ticker"] if isinstance(r, dict) else r[0]
-        v = r["reinvest"] if isinstance(r, dict) else r[1]
-        q = float(r["qty"] if isinstance(r, dict) else r[2] or 0)
-        if t not in drip_map:
-            drip_map[t] = {"any_drip": False, "all_drip": True, "drip_qty": 0.0, "total_qty": 0.0}
-        drip_map[t]["total_qty"] += q
-        if v == "Y":
-            drip_map[t]["any_drip"] = True
-            drip_map[t]["drip_qty"] += q
+    ).fetchall():
+        ticker = r["ticker"]
+        if wanted is not None and str(ticker).strip().upper() not in wanted:
+            continue
+        info = drip_map.setdefault(ticker, {"any_drip": False, "all_drip": True, "drip_qty": 0.0})
+        if r["reinvest"] == "Y":
+            info["any_drip"] = True
+            info["drip_qty"] += float(r["qty"] or 0)
         else:
-            drip_map[t]["all_drip"] = False
+            info["all_drip"] = False
 
-    # Update owner holdings
     updated = 0
     for ticker, info in drip_map.items():
         new_val = "Y" if info["any_drip"] else "N"
-        # If ALL accounts have DRIP on, use None (meaning use total shares).
-        # If only SOME have DRIP on, store the partial DRIP-eligible share count.
         new_drip_qty = None if info["all_drip"] else (round(info["drip_qty"], 6) if info["any_drip"] else None)
         cur = conn.execute(
             "SELECT reinvest, drip_quantity FROM all_account_info WHERE ticker = ? AND profile_id = ?",
@@ -38251,8 +38306,106 @@ def sync_drip_to_owner():
                 "UPDATE all_account_info SET reinvest = ?, drip_quantity = ? WHERE ticker = ? AND profile_id = ?",
                 (new_val, new_drip_qty, ticker, owner_id),
             )
+            if old_val != new_val and has_dividends:
+                conn.execute(
+                    "UPDATE dividends SET reinvest = ? WHERE ticker = ? AND profile_id = ?",
+                    (new_val, ticker, owner_id),
+                )
             updated += 1
+    return updated
 
+
+def _refresh_reinvest_flags(conn, profile_ids, today=None):
+    """Update the accounts' DRIP flags from their newest payment evidence.
+
+    Owner expands to its member accounts; when a member's flag changes, Owner's
+    flag and DRIP share count follow. Returns the evidence per
+    (profile_id, TICKER) for the checkbox tooltips. The caller commits.
+    """
+    ids = [pid for pid in _dividend_payment_profile_ids_for_read(conn, profile_ids)]
+    try:
+        evidence = detect_reinvest_evidence(conn, ids, today)
+        changed = apply_reinvest_evidence(conn, ids, today, evidence)
+    except sqlite3.OperationalError:
+        # Minimal read-only schemas used by a few narrow callers/tests.
+        return {}
+    if changed and _owner_profile_is_active(conn):
+        _sync_owner_drip_flags(conn, changed)
+    return evidence
+
+
+def _attach_reinvest_details(conn, results, profile_ids, evidence):
+    """Say where each row's DRIP flag came from; for a rollup, which accounts reinvest.
+
+    ``reinvest_share_pct`` is the share of the position held in accounts that
+    reinvest, so Owner can show a partly reinvested ticker as partial instead
+    of a full tick.
+    """
+    ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+    if not ids or not results:
+        return
+    marks = ",".join("?" * len(ids))
+    try:
+        rows = conn.execute(
+            f"""SELECT a.profile_id, COALESCE(p.name, '') AS name, UPPER(TRIM(a.ticker)) AS ticker,
+                       a.reinvest, a.reinvest_source, a.reinvest_as_of, COALESCE(a.quantity, 0) AS quantity
+                FROM all_account_info a LEFT JOIN profiles p ON p.id = a.profile_id
+                WHERE a.profile_id IN ({marks}) AND COALESCE(a.quantity, 0) > 1e-9
+                ORDER BY p.name""",
+            ids,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return
+    by_ticker = {}
+    for row in rows:
+        found = (evidence or {}).get((int(row["profile_id"]), row["ticker"]))
+        by_ticker.setdefault(row["ticker"], []).append({
+            "profile_id": int(row["profile_id"]), "account": row["name"],
+            "reinvest": row["reinvest"] == "Y", "quantity": round(float(row["quantity"] or 0), 4),
+            "source": row["reinvest_source"], "as_of": row["reinvest_as_of"],
+            "note": found["note"] if found else None,
+        })
+    rollup = len(ids) > 1 or [int(pid) for pid in profile_ids] != ids
+    for result in results:
+        accounts = by_ticker.get(str(result.get("ticker") or "").strip().upper())
+        if not accounts:
+            continue
+        total = sum(a["quantity"] for a in accounts)
+        reinvesting = sum(a["quantity"] for a in accounts if a["reinvest"])
+        result["reinvest_share_pct"] = round(reinvesting / total * 100, 2) if total > 0 else None
+        if rollup:
+            result["reinvest_accounts"] = accounts
+        else:
+            result["reinvest_source"] = accounts[0]["source"]
+            result["reinvest_as_of"] = accounts[0]["as_of"]
+            result["reinvest_note"] = accounts[0]["note"]
+
+
+@app.route("/api/sync-drip-to-owner", methods=["POST"])
+def sync_drip_to_owner():
+    """Copy reinvest flags from sub-profiles to Owner.
+
+    First brings each member account's flag up to its newest payment evidence,
+    then for each ticker in Owner (profile 1):
+    - Set reinvest='Y' if ANY sub-profile has reinvest='Y' (only 'N' if all are 'N').
+    - Set drip_quantity = sum of shares from sub-profiles where reinvest='Y'.
+      This way DRIP income calculations use only the DRIP-eligible shares,
+      not the full aggregate quantity.
+    """
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    owner_id = 1
+
+    rows = conn.execute(
+        "SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1",
+        (owner_id,),
+    ).fetchall()
+    if not rows:
+        conn.close()
+        return jsonify({"message": "No sub-profiles found", "updated": 0})
+
+    _refresh_reinvest_flags(conn, [owner_id])
+    updated = _sync_owner_drip_flags(conn)
     conn.commit()
     conn.close()
 
@@ -38284,10 +38437,15 @@ def drip_matrix():
         conn.close()
         return jsonify(profiles=[], tickers=[])
 
+    # Bring each account's box up to its newest payment evidence first.
+    evidence = _refresh_reinvest_flags(conn, sub_ids)
+    conn.commit()
+
     # Get all holdings across sub-profiles
     placeholders = ",".join("?" * len(sub_ids))
     rows = conn.execute(
-        f"""SELECT ticker, profile_id, reinvest, COALESCE(quantity, 0) as qty
+        f"""SELECT ticker, profile_id, reinvest, COALESCE(quantity, 0) as qty,
+                   reinvest_source, reinvest_as_of
             FROM all_account_info
             WHERE profile_id IN ({placeholders})
             ORDER BY ticker""",
@@ -38301,9 +38459,13 @@ def drip_matrix():
         pid = r["profile_id"]
         if t not in ticker_map:
             ticker_map[t] = {}
+        found = evidence.get((int(pid), str(t or "").strip().upper()))
         ticker_map[t][pid] = {
             "reinvest": r["reinvest"] == "Y",
             "qty": round(float(r["qty"] or 0), 2),
+            "source": r["reinvest_source"],
+            "as_of": r["reinvest_as_of"],
+            "note": found["note"] if found else None,
         }
 
     # Get Owner totals
@@ -38328,7 +38490,7 @@ def drip_matrix():
         for pid in sub_ids:
             if pid in ticker_map.get(t, {}):
                 info = ticker_map[t][pid]
-                accounts[str(pid)] = {"reinvest": info["reinvest"], "qty": info["qty"]}
+                accounts[str(pid)] = {key: info[key] for key in ("reinvest", "qty", "source", "as_of", "note")}
         # Income proportional to DRIP shares vs total shares
         drip_income = round(annual_income * drip_qty / total_qty, 2) if (owner_drip and total_qty > 0) else 0
         tickers.append({
@@ -38356,10 +38518,13 @@ def drip_matrix_toggle():
         return jsonify(error="Missing ticker or profile_id"), 400
 
     conn = get_connection()
+    _ensure_basis_columns(conn)
     new_val = "Y" if reinvest else "N"
+    # Ticked by hand: dated today, so it holds until a newer payment says otherwise.
     conn.execute(
-        "UPDATE all_account_info SET reinvest = ? WHERE ticker = ? AND profile_id = ?",
-        (new_val, ticker, profile_id),
+        """UPDATE all_account_info SET reinvest = ?, reinvest_source = 'manual', reinvest_as_of = ?
+           WHERE ticker = ? AND profile_id = ?""",
+        (new_val, datetime.date.today().isoformat(), ticker, profile_id),
     )
     conn.commit()
     conn.close()
@@ -61696,6 +61861,72 @@ def portfolio_distributions_analyzer():
     with ThreadPoolExecutor(max_workers=min(6, len(symbols))) as pool:
         rows = list(pool.map(analyze, symbols))
     return jsonify(rows=rows, as_of=today.isoformat())
+
+
+def _drip_ledger_flag(value):
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+@app.route("/api/portfolio-distributions/drip-ledger/tickers", methods=["GET"])
+def portfolio_drip_ledger_tickers():
+    """The tickers the DRIP ledger lists for this portfolio and month range."""
+    _, pids = get_profile_filter()
+    today = datetime.date.today()
+    model_all = _drip_ledger_flag(request.args.get("model_all"))
+    conn = get_connection()
+    try:
+        start, end = parse_drip_ledger_range(request.args.get("start"), request.args.get("end"), today)
+        # Payments and trades are recorded against the accounts, never against
+        # the Owner roll-up, so Owner reads its member accounts.
+        ids = _dividend_payment_profile_ids_for_read(conn, pids)
+        result = drip_ledger_candidates(conn, ids, start, end, model_all, today)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    finally:
+        conn.close()
+    return jsonify(start=start, end=end, as_of=today.isoformat(), model_all=model_all, **result)
+
+
+@app.route("/api/portfolio-distributions/drip-ledger", methods=["GET"])
+def portfolio_drip_ledger():
+    """Month-by-month DRIP rows: base shares, payments, shares bought and their value.
+
+    Reads up to 30 tickers per call so the page can fill in as market history
+    arrives. Market closes value the reinvested shares at each month end and
+    price the modeled reinvestment of cash payments.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    symbols = _comparer_symbols(request.args.get("tickers", ""))
+    if not symbols:
+        return jsonify(error="At least one valid ticker is required."), 400
+    _, pids = get_profile_filter()
+    today = datetime.date.today()
+    model_all = _drip_ledger_flag(request.args.get("model_all"))
+    try:
+        start, end = parse_drip_ledger_range(request.args.get("start"), request.args.get("end"), today)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    market_start = datetime.date(int(start[:4]), int(start[5:7]), 1)
+
+    def load_market(symbol):
+        try:
+            return _nav_screen_market_history(_yahoo_symbol_for_ticker(symbol), market_start, today)
+        except Exception:
+            app.logger.warning("DRIP ledger market history unavailable for %s", symbol, exc_info=True)
+            return None
+
+    with ThreadPoolExecutor(max_workers=min(6, len(symbols))) as pool:
+        markets = dict(zip(symbols, pool.map(load_market, symbols)))
+    conn = get_connection()
+    try:
+        ids = _dividend_payment_profile_ids_for_read(conn, pids)
+        names = {int(row["id"]): row["name"] for row in conn.execute("SELECT id, name FROM profiles")}
+        payload = build_drip_ledger(conn, ids, symbols, start, end, model_all=model_all,
+                                    markets=markets, account_names=names, today=today)
+    finally:
+        conn.close()
+    return jsonify(start=start, end=end, as_of=today.isoformat(), model_all=model_all, **payload)
 
 
 # ── 4-Quadrant Regime & Markov Chain ──────────────────────────────────────────

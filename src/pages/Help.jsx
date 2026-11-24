@@ -70,6 +70,7 @@ const GROUPS = [
       { id: 'div-calendar', label: 'Div Calendar' },
       { id: 'earnings-calendar', label: 'Earnings Calendar' },
       { id: 'div-compare', label: 'Div Compare' },
+      { id: 'distributions', label: 'Distributions' },
       { id: 'dividend-history', label: 'Dividend History' },
       { id: 'dividend-ledger', label: 'Daily, Weekly & Monthly Payments' },
       { id: 'total-return', label: 'Total Return' },
@@ -880,6 +881,20 @@ function DashboardHelp() {
         To change a ticker's DRIP setting, go to the Holdings page and toggle the DRIP checkbox, or use
         the DRIP Matrix to manage DRIP across all accounts at once.
       </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>How the DRIP checkbox is set.</strong> Each account&apos;s box follows the newest evidence: the Reinvest
+        column of a broker positions file (Schwab), whether the account&apos;s latest payment was reinvested (a payment
+        followed by a <code>[DRIP]</code> buy means on; a payment with no buy, from a broker file at least a few days
+        older than the account&apos;s newest record, means off), or your own click. A box you tick by hand holds until a
+        newer payment shows otherwise. Hover a box to see which evidence set it. Typed-in payments never change it.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Owner.</strong> Owner&apos;s box is checked when <em>any</em> of its accounts reinvests, however many
+        accounts it has. When only some do, a badge such as <strong>2/5</strong> sits next to the box, and hovering it lists
+        every account with its shares and whether it reinvests. Clicking Owner&apos;s box (after you confirm) turns DRIP on
+        or off in every account that holds the ticker. Owner&apos;s DRIP share count (the shares in the accounts that
+        reinvest) is now kept in step automatically whenever Owner is reconciled.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic DRIP Share Growth on Refresh</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -1389,7 +1404,9 @@ function HoldingsHelp() {
         income-reinvestment impact of any change before committing.
       </p>
       <p style={{ marginBottom: '0.5rem' }}>
-        Each toggle writes immediately to the underlying sub-account's <code>reinvest</code> flag.
+        Each toggle writes immediately to the underlying sub-account's <code>reinvest</code> flag. Boxes also update
+        on their own from the newest evidence (a broker positions file or whether the latest payment was reinvested);
+        hover a box to see which. The Owner column notes how many accounts reinvest, e.g. <em>2/5 accounts</em>.
         Click <strong>Sync to Owner</strong> inside the modal (or use the toolbar's
         <strong> Sync DRIP from Accounts</strong> button afterwards) to propagate those changes into
         Owner's <code>reinvest</code> flags and partial DRIP-eligible share counts.
@@ -3367,6 +3384,43 @@ function DivCompareHelp() {
           your records.
         </li>
       </ol>
+    </div>
+  )
+}
+
+function DistributionsHelp() {
+  return (
+    <div>
+      <h2>Distributions</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Distributions page tracks what your holdings paid. Its tabs are <strong>Monthly Income</strong>,
+        <strong> Distribution Analyzer</strong>, <strong>Portfolio Income</strong>, <strong>Income Floor</strong> and
+        <strong> DRIP Ledger</strong>.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP Ledger</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A spreadsheet of what each holding&apos;s distributions bought, month by month. By default it lists every holding
+        that actually reinvested in the selected range, using your broker&apos;s records: each payment is matched to the
+        <code> [DRIP]</code> reinvestment buy that followed it. Months a holding took cash show as <em>Cash</em>.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Base shares</strong> — shares held at the start of the month, including shares earlier reinvestments bought. They are counted back from each account&apos;s current share count through its buys and sells, so a position opened before your transaction history still starts from the right number.</li>
+        <li><strong>Distribution</strong> — cash the holding paid that month. <strong>DRIP amount</strong> is the part that bought more shares; <strong>Shares repurchased</strong> and <strong>Reinvest price</strong> are what it bought.</li>
+        <li><strong>Other buys/sells</strong> — shares bought or sold that month other than by reinvesting, so Base + Repurchased + Other = Ending shares.</li>
+        <li><strong>DRIP shares to date</strong> — shares bought by reinvesting since the start of the range. A sale reduces them in proportion.</li>
+        <li><strong>Income from DRIP shares</strong> — the part of the month&apos;s distribution paid on those reinvested shares: how much more the holding pays because it reinvested.</li>
+        <li><strong>Value of DRIP shares</strong> — DRIP shares to date at the month-end closing price.</li>
+        <li><strong>Source</strong> — <em>Actual</em> (broker reinvestment records), <em>Partly cash</em>, <em>Cash</em>, or <em>Modeled</em>.</li>
+      </ul>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Show all holdings as if reinvested</strong> — reinvests every payment that was taken as cash at that day&apos;s closing price. Those shares then earn the payments after them, so the effect compounds from the start of the range. Holdings with no payment records are modeled from the fund&apos;s distribution history and your share count. The <em>Modeled extra income</em> card totals what the modeled shares would have paid.</li>
+        <li><strong>Range</strong> — the last 12 months, a calendar year, or all history since your first reinvestment or payment record. Running totals start at the beginning of the range.</li>
+        <li><strong>Group by</strong> — holding (each fund&apos;s months in order, with a subtotal), month (every holding paid that month), or no grouping. Click a column heading to sort.</li>
+        <li><strong>Click a row</strong> to see each payment in it: the account, the amount, the per-share rate, what it bought and at what price. Weekly payers show four or five payments in a month.</li>
+        <li><strong>Export CSV</strong> — downloads the rows as shown, in your display currency.</li>
+        <li>Owner and combined portfolios add up their accounts. Share counts are in today&apos;s units after any stock split. The current month is marked with *.</li>
+      </ul>
     </div>
   )
 }
@@ -13588,6 +13642,7 @@ const CONTENT_MAP = {
   'div-calendar': DivCalendarHelp,
   'earnings-calendar': EarningsCalendarHelp,
   'div-compare': DivCompareHelp,
+  'distributions': DistributionsHelp,
   'dividend-history': DividendHistoryHelp,
   'dividend-ledger': DividendLedgerHelp,
   'total-return': TotalReturnHelp,
