@@ -737,6 +737,7 @@ def apply_reinvest_evidence(conn, profile_ids, today=None, evidence=None):
 
 FIT_YEARS = 3
 MIN_FIT_DAYS = 120  # portfolio_tester.MIN_DAYS, the DRIP vs. Cash Analyzer's floor
+FIT_DISPLAY_BASE = 1000.0  # payouts and end values are shown per $1,000 invested at the start
 FIT_LABELS = {"DRIP": "Good DRIP candidate", "Take cash": "Not a good DRIP candidate", "Toss-up": "Borderline"}
 NO_FIT = "Not enough history"
 
@@ -781,10 +782,28 @@ def evaluate_drip_fit(payload, ticker, start_day, today):
                 "reason": "No distributions in the window, so there is nothing to reinvest."}
     try:
         metrics = drip_score.compute_ticker_metrics(close, divs, ticker)
+        # The same two paths the verdict compares, kept for display: what each
+        # was paid and what it ended with, per $1,000 invested at the start.
+        # The verdict already counts the reinvested path's extra payouts (they
+        # bought the shares valued below); this only makes them visible.
+        reinvest = drip_score.simulate_drip(close, divs, initial=FIT_DISPLAY_BASE, reinvest=1.0)
+        cash = drip_score.simulate_drip(close, divs, initial=FIT_DISPLAY_BASE, reinvest=0.0,
+                                        cash_rate=drip_score.DEFAULT_CASH_RATE)
     except (ValueError, ZeroDivisionError) as problem:
         return {"label": NO_FIT, "call": None, "reason": str(problem)}
     call = metrics.get("drip_call")
+    paid_cash = cash["gross_distributions"]
+    paid_drip = reinvest["gross_distributions"]
+    payouts = {
+        "base": FIT_DISPLAY_BASE,
+        "paid_cash": round(paid_cash, 2),
+        "paid_drip": round(paid_drip, 2),
+        "extra_payout_pct": (paid_drip / paid_cash - 1) if paid_cash > 0 else None,
+        "cash_value": round(cash["cash_end"], 2),
+        "drip_shares_value": round((reinvest["shares_end"] - reinvest["shares_start"]) * reinvest["end_price"], 2),
+    }
     return {
+        **payouts,
         "label": FIT_LABELS.get(call, NO_FIT),
         "call": call if call in FIT_LABELS else None,
         "bucket": metrics.get("bucket"),

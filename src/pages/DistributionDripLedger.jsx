@@ -99,6 +99,14 @@ function fitTitle(ticker, fit, mine) {
   } else {
     const edge = fit.re - 1
     lines.push(`Over ${Number(fit.years).toFixed(1)} years (${monthLabel(fit.start.slice(0, 7))} to ${monthLabel(fit.end.slice(0, 7))}), reinvesting every distribution left you ${Math.abs(edge) < 0.02 ? 'about the same as' : `${pct(edge, 0)} ${edge > 0 ? 'more' : 'less'} than`} taking the cash and earning ${pct(fit.cash_rate, 0)} a year on it.`)
+    if (fit.paid_cash > 0 && fit.paid_drip != null && fit.cash_value != null && fit.drip_shares_value != null) {
+      const per = `For every ${formatMoney(fit.base, { digits: 0 })} invested at the start`
+      const extra = fit.paid_drip - fit.paid_cash
+      lines.push(`${per}: reinvesting was paid ${money(fit.paid_drip)} in distributions, ${money(extra)} (${pct(fit.extra_payout_pct, 0)}) more than the ${money(fit.paid_cash)} taking the cash would pay, because the new shares earn payouts too.`)
+      lines.push(`Those payouts bought shares now worth ${money(fit.drip_shares_value)}, while taking the cash would have left ${money(fit.cash_value)} with interest. ${fit.drip_shares_value >= fit.cash_value
+        ? 'So the extra payouts, plus what the shares did, put reinvesting ahead.'
+        : 'So the extra payouts did not make up for the shares losing value.'}`)
+    }
     if (fit.price_cagr != null) lines.push(`Why: the price ${fit.price_cagr < 0 ? 'fell' : 'rose'} about ${pct(fit.price_cagr)} a year, so shares bought with distributions ${fit.price_cagr < 0 ? 'kept losing value' : 'grew in value'}.`)
     if (fit.win_rate != null) lines.push(`Reinvesting came out ahead at ${pct(fit.win_rate, 0)} of the dates you could have sold.`)
     if (fit.bucket) lines.push(`Fund type: ${fit.bucket} (${BUCKET_HINT[fit.bucket] || fit.bucket}).`)
@@ -116,6 +124,7 @@ const EVAL_COLUMNS = [
   { key: 'status', label: 'You now', type: 'string', text: true, tip: 'Whether you reinvest it today, from the DRIP boxes on the Holdings screen' },
   { key: 'verdict', label: 'Verdict', type: 'string', text: true, tip: 'Whether reinvesting this ticker has paid more than taking the cash' },
   { key: 'edge', label: 'DRIP vs cash', type: 'number', tip: 'How much more or less reinvesting every distribution left you than taking the cash and earning 4% a year on it, over the selected range or the last 3 years, whichever is longer' },
+  { key: 'extra', label: 'Extra payouts from DRIP', type: 'number', tip: 'How much more the holding was paid in distributions when they were reinvested than when they were taken as cash, over the same dates: the shares DRIP buys earn payouts too. DRIP vs cash already counts these payouts; hover a row to see them weighed against the price change.' },
   { key: 'meaning', label: 'What it means', type: 'number', text: true, value: r => r.priority, tip: 'Sorted so the holdings you reinvest but probably should not come first' },
   { key: 'change', label: 'Your reinvesting in this range', type: 'number', tip: 'What you reinvested in the selected range, and every share it bought valued at the latest close' },
 ]
@@ -141,7 +150,7 @@ function evaluationRows(latest, fits, mine, dripStatus, heldTickers) {
     const own = mine.get(ticker)
     return {
       ticker, description, status, reinvesting, fit, meaning, tone, priority,
-      verdict: fit?.label ?? null, edge: fit?.re != null ? fit.re - 1 : null,
+      verdict: fit?.label ?? null, edge: fit?.re != null ? fit.re - 1 : null, extra: fit?.extra_payout_pct ?? null,
       reinvested: own?.reinvested || 0, worth: own?.value ?? null,
       change: own && own.reinvested > 0 && own.value != null ? own.value / own.reinvested - 1 : null,
     }
@@ -160,6 +169,10 @@ function DripDecisionHelp() {
         <li><strong>Take the cash:</strong> every distribution is set aside as cash earning 4% a year, about what a money-market fund pays.</li>
       </ol>
       <p>At the end it compares what the shares bought by reinvesting are worth at the latest price with the cash pile. The <em>DRIP vs cash</em> column is that difference: &quot;24% better&quot; means reinvesting left you 24% more than the cash; &quot;44% worse&quot; means 44% less.</p>
+
+      <h4>What about the extra payouts DRIP brings in?</h4>
+      <p>They are counted. On the reinvest path every new share is paid on every distribution after it, and those payouts buy more shares too; on the cash path only the original shares are paid. So reinvesting is always paid more, and the <em>Extra payouts from DRIP</em> column shows how much more over the same dates (for example &quot;+38% more&quot;). Those payouts end up as shares, so <em>DRIP vs cash</em> already includes them; adding them again would count them twice.</p>
+      <p>Hover a row to see them weighed against the price: for every $1,000 invested at the start, how much each path was paid, what the reinvested shares are worth now, and what the cash would be. A fund can pay a lot more when reinvested and still be <em>Not a good DRIP candidate</em> when its price falls faster than the extra payouts add up.</p>
 
       <h4>Which dates</h4>
       <p>The selected range or the last 3 years, whichever is longer. A fund younger than that is judged from its first price. The same window is used for every holding, so the results can be compared.</p>
@@ -232,6 +245,7 @@ function DripEvaluation({ rows, mine, loading }) {
           <td className="dist-left">{row.status}</td>
           <td className="dist-left"><span className={`dist-fit ${FIT_TONE[row.verdict] || ''}`}>{row.verdict || (loading ? '…' : DASH)}</span></td>
           <td className={row.edge == null || Math.abs(row.edge) < 0.02 ? '' : row.edge > 0 ? 'dist-positive' : 'dist-negative'}>{edgeText(row.edge)}</td>
+          <td>{row.extra == null ? DASH : `+${pct(row.extra, 0)} more`}</td>
           <td className={`dist-left dist-eval-meaning dist-eval-${row.tone}`}>{row.meaning}</td>
           <td>{row.reinvested > 0 ? <>{money(row.reinvested)} → {money(row.worth)} <span className={row.change == null ? '' : row.change >= 0 ? 'dist-positive' : 'dist-negative'}>({row.change == null ? DASH : `${row.change >= 0 ? '+' : '−'}${pct(row.change)}`})</span></> : DASH}</td>
         </tr>)}</tbody>

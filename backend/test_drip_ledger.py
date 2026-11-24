@@ -331,6 +331,12 @@ def test_drip_fit_separates_compounders_from_eroding_funds():
     assert growing["label"] == "Good DRIP candidate" and growing["re"] > 1.02 and growing["bucket"] == "Grower"
     eroding = evaluate_drip_fit(trending_market(start, TODAY, 20, -0.35, 0.03), "MELT", start, TODAY)
     assert eroding["label"] == "Not a good DRIP candidate" and eroding["re"] < 0.98 and eroding["bucket"] == "Liquidator"
+    # Reinvesting is always paid more (the new shares earn too), yet it can still lose:
+    # the extra payouts are already inside the end value the verdict compares.
+    for fit in (growing, eroding):
+        assert fit["paid_drip"] > fit["paid_cash"] > 0 and fit["extra_payout_pct"] > 0
+        assert fit["drip_shares_value"] / fit["cash_value"] == pytest.approx(fit["re"], rel=1e-3)
+    assert eroding["drip_shares_value"] < eroding["cash_value"] < eroding["paid_drip"]
     young = evaluate_drip_fit(trending_market(TODAY - timedelta(days=60), TODAY, 20, 0.1, 0.01), "NEW", start, TODAY)
     assert young["label"] == "Not enough history" and young["call"] is None
     assert evaluate_drip_fit({"prices": [], "distributions": []}, "NONE", start, TODAY)["call"] is None

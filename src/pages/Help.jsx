@@ -3422,6 +3422,7 @@ function DistributionsHelp() {
             <li><em>You now</em> — whether you reinvest it today, from the DRIP boxes on Holdings (on Owner, in how many accounts).</li>
             <li><em>Verdict</em> — <strong>Good DRIP candidate</strong>, <strong>Not a good DRIP candidate</strong>, <strong>Borderline</strong> (within 2% either way) or <strong>Not enough history</strong> (under 120 days of prices).</li>
             <li><em>DRIP vs cash</em> — how much more or less reinvesting every distribution left you than taking the cash and earning 4% a year on it, over the selected range or the last 3 years, whichever is longer.</li>
+            <li><em>Extra payouts from DRIP</em> — how much more the holding was paid in distributions when reinvested than when taken as cash, because the shares DRIP buys earn payouts too. <em>DRIP vs cash</em> already counts these payouts; the hover weighs them against what the reinvested shares are worth now.</li>
             <li><em>What it means</em> — for example <strong>Doesn&apos;t make much sense to DRIP: taking the cash has paid more</strong> for a holding you reinvest, or <strong>Worth reinvesting</strong> for one you take as cash. Those two come first, and boxes above the table list them.</li>
             <li><em>Your reinvesting in this range</em> — what you reinvested and what those shares are worth now.</li>
           </ul>
