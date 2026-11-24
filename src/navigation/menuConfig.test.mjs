@@ -79,6 +79,14 @@ test('menuIdForPath maps routes, query strings, and CEF detail pages', () => {
   assert.equal(menuIdForPath('/growth?tab=lots'), 'growth')
   assert.equal(menuIdForPath('/closed-cef-info/AGD'), 'closed-cef-information')
   assert.equal(menuIdForPath('/div-calendar'), 'dividend-calendar')
+  assert.equal(menuIdForPath('/distributions'), 'distributions')
+})
+
+test('Distributions is visible under Portfolio and selectable in Split View', () => {
+  const portfolio = visibleNavigation({}, []).find(item => item.id === 'portfolio')
+  assert.ok(portfolio.items.some(item => item.id === 'distributions' && item.path === '/distributions'))
+  const groups = splitViewNavigationGroups({}, [])
+  assert.ok(groups.find(group => group.group === 'Portfolio').pages.some(item => item.id === 'distributions'))
 })
 
 test('Split View groups follow customized menu order and parent visibility', () => {

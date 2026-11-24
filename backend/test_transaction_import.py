@@ -207,6 +207,36 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["filtered"], 1)
         self.assertEqual([t["dividend_amount"] for t in result["transactions"]], [-1.39, 2.0])
 
+    def test_schwab_qualified_stock_dividends_and_reinvested_cash_are_imported(self):
+        content = "\n".join([
+            "Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount",
+            "02/02/2026,Qualified Dividend,CVS,CVS HEALTH CORP,,,,13.30",
+            "03/10/2026,Qual Div Reinvest,JNJ,JOHNSON & JOHNSON,,,,63.62",
+            "03/10/2026,Reinvest Shares,JNJ,JOHNSON & JOHNSON,0.2608,243.94,0,-63.62",
+            "01/09/2026,Qual Div Reinvest,MO,ALTRIA GROUP,,,,92.59",
+            "04/01/2026,Special Qual Div,ABC,Special qualified dividend,,,,4.00",
+            "04/02/2026,Pr Yr Non-Qual Div,ABC,Prior year dividend,,,,1.50",
+            "04/03/2026,qualified dividend,ABC,Lowercase export label,,,,2.50",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab-qualified.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_schwab_transactions_csv(str(path), path.name)
+
+        dividends = [t for t in result["transactions"] if t["type"] == "DIVIDEND"]
+        self.assertEqual([(t["ticker"], t["date"], t["dividend_amount"]) for t in dividends], [
+            ("CVS", "2026-02-02", 13.30), ("JNJ", "2026-03-10", 63.62),
+            ("MO", "2026-01-09", 92.59),
+            ("ABC", "2026-04-01", 4.00), ("ABC", "2026-04-02", 1.50),
+            ("ABC", "2026-04-03", 2.50),
+        ])
+        buys = [t for t in result["transactions"] if t["type"] == "BUY"]
+        self.assertEqual(len(buys), 1)
+        self.assertEqual(buys[0]["ticker"], "JNJ")
+        self.assertEqual(buys[0]["shares"], 0.2608)
+        self.assertIn("DRIP", buys[0]["notes"])
+        self.assertEqual(result["summary"]["filtered"], 0)
+
     def test_schwab_captures_optional_account_activity_without_changing_trades(self):
         content = "\n".join([
             "Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount",

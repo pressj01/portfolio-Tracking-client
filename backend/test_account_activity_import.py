@@ -136,6 +136,54 @@ class AccountActivityImportEndpointTest(unittest.TestCase):
             conn.close()
         self.assertEqual(spans, [("2026-04-01", "2026-04-03")])
 
+    def test_qualified_stock_dividends_reach_confirmed_distribution_history(self):
+        conn = self._get_connection()
+        try:
+            for ticker, payment_date, estimate in [("CVS", "2026-02-03", 13.30), ("JNJ", "2026-03-11", 60), ("MO", "2026-01-10", 90)]:
+                conn.execute("INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, current_price, current_value, div_frequency, import_date) VALUES (?, 2, 20, 100, 2000, 100, 2000, 'Q', '2026-04-01')", (ticker,))
+                conn.execute("INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source) VALUES (?, 2, ?, ?, 'refresh_estimate')", (ticker, payment_date, estimate))
+            conn.commit()
+        finally:
+            conn.close()
+
+        content = "\n".join([
+            "Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount",
+            "01/09/2026,Qual Div Reinvest,MO,ALTRIA GROUP,,,,$92.59",
+            "02/02/2026,Qualified Dividend,CVS,CVS HEALTH CORP,,,,$13.30",
+            "03/10/2026,Qual Div Reinvest,JNJ,JOHNSON & JOHNSON,,,,$63.62",
+            "03/10/2026,Reinvest Shares,JNJ,JOHNSON & JOHNSON,0.2608,243.94,0,-63.62",
+        ]).encode("utf-8")
+
+        def import_file():
+            response = self.client.post("/api/import/transactions?profile_id=2", data={
+                "file": (io.BytesIO(content), "Schwab_Qualified_Transactions.csv"), "format": "schwab_transactions",
+            }, content_type="multipart/form-data")
+            self.assertEqual(response.status_code, 200, response.get_json())
+            return response.get_json()
+
+        import_file()
+        import_file()  # safe to re-import previously processed statements
+        conn = self._get_connection()
+        try:
+            rows = [tuple(row) for row in conn.execute(
+                "SELECT ticker, payment_date, amount, source FROM dividend_payments WHERE profile_id=2 ORDER BY ticker"
+            )]
+            buys = conn.execute("SELECT COUNT(*) FROM transactions WHERE profile_id=2 AND ticker='JNJ' AND transaction_type='BUY'").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(rows, [
+            ("CVS", "2026-02-02", 13.30, "schwab_transactions"),
+            ("JNJ", "2026-03-10", 63.62, "schwab_transactions"),
+            ("MO", "2026-01-09", 92.59, "schwab_transactions"),
+        ])
+        self.assertEqual(buys, 1)
+        result = self.client.get("/api/portfolio-distributions?profile_id=2&year=2026")
+        self.assertEqual(result.status_code, 200)
+        history = {row["ticker"]: row for row in result.get_json()["rows"]}
+        for ticker, month, amount in [("CVS", 1, 13.30), ("JNJ", 2, 63.62), ("MO", 0, 92.59)]:
+            self.assertEqual(history[ticker]["actual"][month], amount)
+            self.assertEqual(sum(value or 0 for value in history[ticker]["estimated"]), 0)
+
     def _call(self, method, url, body=None):
         response = getattr(self.client, method)(url, json=body)
         return response.status_code, response.get_json()

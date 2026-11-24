@@ -26,6 +26,7 @@ import Settings from './pages/Settings'
 import Categories from './pages/Categories'
 import GrowthWorkspace from './pages/GrowthWorkspace'
 import DividendAnalysis from './pages/DividendAnalysis'
+import Distributions from './pages/Distributions'
 import TotalReturn from './pages/TotalReturn'
 import ETFScreen from './pages/ETFScreen'
 import DividendCalendar from './pages/DividendCalendar'
@@ -127,6 +128,7 @@ export const PAGE_GROUPS = [
       { path: '/retirement-readiness', label: 'Retirement Readiness', element: <RetirementReadiness /> },
       { path: '/cash-flow', label: 'Cash Flow & Sustainability', element: <CashFlowSustainability /> },
       { path: '/dividends', label: 'Dividends', element: <DividendAnalysis /> },
+      { path: '/distributions', label: 'Distributions', element: <Distributions /> },
       { path: '/dividend-ledger', label: 'Daily, Weekly & Monthly Payments', element: <DividendLedger /> },
       { path: '/div-calendar', label: 'Dividend Calendar', element: <DividendCalendar /> },
       { path: '/earnings-calendar', label: 'Earnings Calendar', element: <EarningsCalendar /> },

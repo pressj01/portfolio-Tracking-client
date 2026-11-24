@@ -2322,10 +2322,18 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
 # Action types that represent dividend/distribution income
 _SCHWAB_DIVIDEND_ACTIONS = {
     "Cash Dividend", "Non-Qualified Div", "Reinvest Dividend",
+    # Schwab reports qualified stock dividends separately from ordinary cash
+    # dividends. A reinvested qualified dividend is the cash leg of a DRIP;
+    # the separate Reinvest Shares row is the purchase leg.
+    "Qualified Dividend", "Qualified Div", "Qual Div Reinvest",
+    "Qualified Div Reinvest", "Qualified Dividend Reinvest", "Special Qual Div",
+    "Non-Qualified Dividend", "Non Qual Div Reinvest", "Non-Qual Div Reinvest",
     "Div Adjustment", "Long Term Cap Gain", "Long Term Cap Gain Reinvest",
     "Short Term Cap Gain Reinvest", "Ret Cap Reinvest",
-    "Pr Yr Cash Div", "Pr Yr Non Qual Div", "Pr Yr Div Reinvest",
+    "Pr Yr Cash Div", "Pr Yr Non Qual Div", "Pr Yr Non-Qual Div", "Pr Yr Div Reinvest",
+    "Pr Yr Qual Div", "Pr Yr Qual Div Reinvest", "Dividend", "Dividends",
 }
+_SCHWAB_DIVIDEND_ACTION_KEYS = {action.lower() for action in _SCHWAB_DIVIDEND_ACTIONS}
 
 # Action types that represent share purchases from reinvested dividends/distributions
 _SCHWAB_DRIP_ACTIONS = {"Reinvest Shares"}
@@ -2427,7 +2435,7 @@ def parse_schwab_transactions_csv(file_path, filename):
         valid_symbol = bool(symbol and TICKER_RE.match(symbol))
 
         # â”€â”€ Dividend / distribution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if action in _SCHWAB_DIVIDEND_ACTIONS or action_key in {"dividend", "dividends", "cash dividend"}:
+        if action_key in _SCHWAB_DIVIDEND_ACTION_KEYS:
             if not valid_symbol or amount is None or amount == 0:
                 filtered_count += 1
                 continue

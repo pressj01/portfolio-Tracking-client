@@ -607,6 +607,15 @@ def ensure_tables_exist(conn=None):
     except Exception:
         pass  # column already exists
 
+    # Where the DRIP (reinvest) flag came from and the date of that evidence:
+    # 'broker_file' (a positions export's Reinvest column), 'records' (whether
+    # the newest payment was reinvested) or 'manual'. The newest evidence wins.
+    for _reinvest_column in ("reinvest_source", "reinvest_as_of"):
+        try:
+            cur.execute(f"ALTER TABLE all_account_info ADD COLUMN {_reinvest_column} TEXT")
+        except Exception:
+            pass  # column already exists
+
     try:
         cur.execute("ALTER TABLE all_account_info ADD COLUMN dividend_actuals_source TEXT")
     except Exception:
