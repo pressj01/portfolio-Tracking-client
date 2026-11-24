@@ -14,6 +14,49 @@ const signedShares = v => !v ? DASH : `${v > 0 ? '+' : ''}${shares(v)}`
 const sum = (rows, key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0)
 const monthLabel = key => `${MONTHS[Number(key.slice(5, 7)) - 1]} ${key.slice(0, 4)}`
 const SOURCE_TONE = { Actual: 'dist-positive', Modeled: 'dist-drip-modeled', Cash: 'dist-drip-cash', 'Partly cash': 'dist-drip-cash' }
+// What each month's reinvestment status reads as on screen.
+const SOURCE_LABEL = { Actual: 'Reinvested', 'Partly cash': 'Part reinvested', Cash: 'Taken as cash', Modeled: 'Modeled' }
+
+// Hover text for the Reinvested? cell: what happened to this month's payments, account by account.
+function sourceTitle(row) {
+  const lines = []
+  const paid = money(row.distribution)
+  if (row.source === 'Actual') {
+    lines.push(`Reinvested: all ${paid} paid this month bought more shares (${shares(row.shares_bought)} shares), according to your broker's reinvestment records.`)
+  } else if (row.source === 'Partly cash') {
+    lines.push(`Part reinvested: ${money(row.drip_amount)} of the ${paid} paid this month bought more shares; ${money(row.cash)} was taken as cash.`)
+    lines.push('That happens when one account reinvests and another takes cash, when DRIP was turned on or off during the month, or when the broker reinvests only whole shares and pays out the rest.')
+  } else if (row.source === 'Cash') {
+    lines.push(`Taken as cash: none of the ${paid} paid this month was reinvested; it was paid out as cash.`)
+  } else if (row.source === 'Modeled') {
+    lines.push(`Modeled: this is the "as if reinvested" view. Payments that were really taken as cash are treated as if they had bought shares at that day's closing price, and those shares earn the payments after them. ${money(row.drip_amount)} of ${paid} counts as reinvested here.`)
+  }
+  const accounts = new Map()
+  for (const p of row.payments || []) {
+    const entry = accounts.get(p.account) || { paid: 0, reinvested: 0, cash: 0, modeled: 0, shares: 0 }
+    const modeled = p.kind === 'modeled' ? p.reinvested : (p.extra || 0)
+    entry.paid += p.amount || 0
+    entry.reinvested += (p.reinvested || 0) - modeled
+    entry.modeled += modeled
+    entry.cash += p.cash || 0
+    entry.shares += p.shares || 0
+    accounts.set(p.account, entry)
+  }
+  if (accounts.size) {
+    lines.push('')
+    for (const [account, a] of accounts) {
+      const parts = []
+      if (a.reinvested > 0.005) parts.push(`${money(a.reinvested)} reinvested`)
+      if (a.modeled > 0.005) parts.push(`${money(a.modeled)} modeled as reinvested`)
+      if (a.cash > 0.005) parts.push(`${money(a.cash)} taken as cash`)
+      const summary = parts.length === 1 && a.cash > 0.005 ? 'all taken as cash'
+        : parts.length === 1 && a.reinvested > 0.005 ? `all reinvested (${shares(a.shares)} shares)` : parts.join(', ')
+      lines.push(`${account}: ${money(a.paid)} paid, ${summary}`)
+    }
+  }
+  lines.push('', 'Click the row to see each payment.')
+  return lines.join('\n')
+}
 const KIND_LABEL = { drip: 'Reinvested', partial: 'Reinvested, rest cash', cash: 'Cash', modeled: 'Modeled reinvestment' }
 
 const COLUMNS = [
@@ -31,7 +74,8 @@ const COLUMNS = [
   { key: 'drip_shares', label: 'DRIP shares to date', type: 'number', format: shares, tip: 'Shares bought by reinvesting since the start of the range, reduced in proportion when shares were sold' },
   { key: 'income_from_drip', label: 'Income from DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: "The part of this month's distribution paid on shares that reinvesting added" },
   { key: 'value_of_drip', label: 'Value of DRIP shares', type: 'number', format: money, money: true, highlight: true, tip: 'DRIP shares to date at the month-end closing price' },
-  { key: 'source', label: 'Source', type: 'string', text: true, tip: 'Actual: broker reinvestment records. Cash: the payment was not reinvested. Modeled: reinvestment worked out for the "as if reinvested" view' },
+  { key: 'source', label: 'Reinvested?', type: 'string', text: true, value: r => SOURCE_LABEL[r.source] || r.source, csv: r => SOURCE_LABEL[r.source] || r.source,
+    tip: 'What happened to this month\'s payments. Reinvested: they all bought more shares. Part reinvested: some bought shares and some were taken as cash. Taken as cash: none were reinvested. Modeled: the "as if reinvested" view. Hover a cell for the details.' },
 ]
 const FIT_TONE = { 'Good DRIP candidate': 'dist-fit-good', 'Not a good DRIP candidate': 'dist-fit-cash', Borderline: 'dist-fit-toss', 'Not enough history': 'dist-fit-na' }
 const BUCKET_HINT = {
@@ -396,7 +440,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const cellFor = (column, row) => {
     if (column.key === 'month') return <>{monthLabel(row.month)}{row.partial ? '*' : ''}</>
     if (column.key === 'ticker') return <strong title={row.description || row.ticker}>{row.ticker}</strong>
-    if (column.key === 'source') return <span className={SOURCE_TONE[row.source] || ''}>{row.source}</span>
+    if (column.key === 'source') return <span className={`dist-drip-source ${SOURCE_TONE[row.source] || ''}`} title={sourceTitle(row)}>{SOURCE_LABEL[row.source] || row.source}</span>
     return column.format(row[column.key])
   }
 
@@ -469,6 +513,6 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
     {problems.length > 0 && <p className="dist-note">{problems.map(s => `${s.ticker}: ${s.message}`).join(' ')}</p>}
     <p className="dist-note">* Current month in progress. Click a row to see each payment and which account it came from. Base shares are counted back from each account's current share count through its buys and sells, so a position opened before your transaction history still starts from the right number. {modelAll
       ? 'Modeled rows reinvest the cash payments at that day\'s closing price; those shares then earn the payments after them. Holdings with no payment records are modeled from the fund\'s distribution history and your share count.'
-      : 'Only holdings that actually reinvested in this range are listed; months they took cash show as Cash.'} Share counts are in today's units after any stock split. Value of DRIP shares and Total value use the month-end closing price; their totals add each holding's latest month.</p>
+      : 'Only holdings that actually reinvested in this range are listed; months they took cash show as Taken as cash. Hover the Reinvested? column for what happened in each month.'} Share counts are in today's units after any stock split. Value of DRIP shares and Total value use the month-end closing price; their totals add each holding's latest month.</p>
   </>
 }

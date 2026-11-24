@@ -3413,7 +3413,7 @@ function DistributionsHelp() {
         <li><strong>Income from DRIP shares</strong> — the part of the month&apos;s distribution paid on those reinvested shares: how much more the holding pays because it reinvested.</li>
         <li><strong>Total value</strong> — ending shares at the month-end closing price: the whole holding, so you can watch it grow as reinvested shares are added.</li>
         <li><strong>Value of DRIP shares</strong> — DRIP shares to date at the month-end closing price.</li>
-        <li><strong>Source</strong> — <em>Actual</em> (broker reinvestment records), <em>Partly cash</em>, <em>Cash</em>, or <em>Modeled</em>.</li>
+        <li><strong>Reinvested?</strong> — what happened to the month&apos;s payments: <em>Reinvested</em> (they all bought more shares, from your broker&apos;s reinvestment records), <em>Part reinvested</em> (some bought shares and some were taken as cash, for example one account reinvests and another does not, DRIP was switched during the month, or the broker reinvests only whole shares), <em>Taken as cash</em> (none were reinvested), or <em>Modeled</em> (the &quot;as if reinvested&quot; view). Hover a cell for the dollars and each account&apos;s share.</li>
       </ul>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Show all holdings as if reinvested</strong> — reinvests every payment that was taken as cash at that day&apos;s closing price. Those shares then earn the payments after them, so the effect compounds from the start of the range. Holdings with no payment records are modeled from the fund&apos;s distribution history and your share count. The <em>Modeled extra income</em> card totals what the modeled shares would have paid.</li>

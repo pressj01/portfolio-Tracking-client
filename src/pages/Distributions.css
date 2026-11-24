@@ -117,3 +117,4 @@
 .dist-eval-help-body strong.dist-fit-cash { color: var(--neg); }
 .dist-eval-help-body strong.dist-fit-toss { color: var(--warning); }
 .dist-eval-help-body strong.dist-fit-na { color: var(--text-dim); }
+.dist-drip-source { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
