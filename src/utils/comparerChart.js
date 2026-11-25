@@ -166,6 +166,18 @@ export function placeEndLabelBadges(candidates, { visibleYValues = [], axisBase 
   }
 }
 
+// Keep the endpoint badges immediately beside their lines and put right-axis
+// ticks in a separate column. Reserve space for the maximum 160% text setting
+// as chart fonts can also be enlarged after the layout has been built.
+export function endBadgeAxisSpacing(badges, scaleRight) {
+  const badgeWidth = badges.width ? Math.ceil(badges.width * 1.6) : 0
+  const tickStandoff = scaleRight && badgeWidth ? badgeWidth + 6 : 0
+  return {
+    tickStandoff,
+    rightMargin: scaleRight ? 64 + tickStandoff : Math.max(20, badgeWidth + 10),
+  }
+}
+
 // The 1-2-2.5-5 step whose tick count lands closest to `target`.
 function niceStep(span, target = 6) {
   const raw = span / target
@@ -328,7 +340,7 @@ export function buildComparerChart({
         line: { color: baseColor, width: style.width, dash: style.dash },
         hovertemplate: metric === 'price'
           ? `<b>${sym}</b><br>%{x}<br>Share Price: $%{y:,.2f}<extra></extra>`
-          : `<b>${sym}</b><br>%{x}<br>Total Return Price: $%{y:,.2f}<extra></extra>`,
+          : `<b>${sym}</b><br>%{x}<br>Dividend-Adjusted Price: $%{y:,.2f}<extra></extra>`,
       })
       const last = labelIdx >= 0 ? Number(values[labelIdx]) : NaN
       if (showReturnLabels && Number.isFinite(last)) {
@@ -420,6 +432,7 @@ export function buildComparerChart({
   const badges = showReturnLabels
     ? placeEndLabelBadges(labelCandidates, { visibleYValues, axisBase, logScaleActive, xshift: badgeShift })
     : { annotations: [], width: 0 }
+  const { tickStandoff, rightMargin } = endBadgeAxisSpacing(badges, scaleRight)
 
   // Plotly autoranges y over every point, not just the visible window, so a
   // zoomed chart would stay scaled to the whole series. Fit it to the window.
@@ -451,7 +464,7 @@ export function buildComparerChart({
   if (metric === 'total_pct') baseTitle = returnMode === 'total' ? 'Total Return (%)' : `${returnModeLabel} (%)`
   else if (metric === 'price_pct') baseTitle = 'Stock Price (%)'
   else if (metric === 'growth') baseTitle = returnMode === 'total' ? 'Growth of $10K' : `Growth of $10K — ${returnModeLabel}`
-  else if (metric === 'total_value') baseTitle = 'Total Return Price ($)'
+  else if (metric === 'total_value') baseTitle = info.label
   else if (metric === 'price') baseTitle = 'Stock Price ($)'
   else baseTitle = info.label
   if (variant === 'stock' && (metric === 'total_pct' || metric === 'price_pct')) baseTitle = `Cumulative ${baseTitle}`
@@ -462,6 +475,7 @@ export function buildComparerChart({
   const yaxis = {
     type: logScaleActive ? 'log' : 'linear',
     side: scaleRight ? 'right' : 'left',
+    ticklabelstandoff: tickStandoff,
     automargin: true,
     gridcolor: '#333',
     zerolinecolor: '#555',
@@ -484,12 +498,12 @@ export function buildComparerChart({
       Object.assign(yaxis, signedTicks)
     }
   }
-  // The right-hand scale reads like a quote screen: tick labels only, with the
-  // end-value badges sitting on it. On the left the axis keeps its title.
+  // The right-hand scale uses a separate column beside the end-value badges.
+  // On the left the axis keeps its title.
   if (!scaleRight) {
     let axisTitle
     if (isGrowth) axisTitle = logScaleActive ? 'Growth of $10K (log scale)' : 'Value ($)'
-    else if (metric === 'total_value') axisTitle = logScaleActive ? 'Total Return Price ($) (log scale)' : 'Total Return Price ($)'
+    else if (metric === 'total_value') axisTitle = logScaleActive ? `${info.label} (log scale)` : info.label
     else if (metric === 'price') axisTitle = logScaleActive ? 'Share Price ($) (log scale)' : 'Share Price ($)'
     else if (metric === 'div_ttm') axisTitle = 'Dividends per Share, TTM ($)'
     else if (isDividend) axisTitle = `${info.label} (%)`
@@ -498,9 +512,12 @@ export function buildComparerChart({
     yaxis.title = { text: axisTitle }
   }
 
+  // Anchor the legend below the title in container coordinates, so wrapping
+  // onto additional rows expands the top margin instead of covering the title.
+  const legendTop = 52
   const margin = scaleRight
-    ? { l: 16, r: Math.max(64, badges.width + 8), t: 70, b: 55 }
-    : { l: largeReturnDisplay ? 115 : 60, r: Math.max(20, badges.width + 10), t: 70, b: 55 }
+    ? { l: 16, r: rightMargin, t: 90, b: 55 }
+    : { l: largeReturnDisplay ? 115 : 60, r: rightMargin, t: 90, b: 55 }
 
   return {
     data: traces,
@@ -512,11 +529,14 @@ export function buildComparerChart({
       paper_bgcolor: '#1e1e2f',
       plot_bgcolor: '#1e1e2f',
       font: { color: '#e0e0e0', size: 12 },
-      title: { text: titleText, x: 0.5, font: { size: 20, color: '#e0e0e0' } },
+      title: {
+        text: titleText, x: 0.5, y: 1, yref: 'container', yanchor: 'top',
+        pad: { t: 8 }, font: { size: 20, color: '#e0e0e0' },
+      },
       height,
       margin,
       hovermode: returnHoverMode,
-      legend: { orientation: 'h', x: 0, y: 1.08 },
+      legend: { orientation: 'h', x: 0, y: 1 - legendTop / height, yref: 'container', yanchor: 'top' },
       yaxis,
       xaxis: {
         type: 'date',

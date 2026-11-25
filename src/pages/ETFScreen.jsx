@@ -30,7 +30,7 @@ import {
   returnModeForMetric,
   totalReturnDollarSeries,
 } from '../utils/chartMetrics'
-import { INTRADAY_RANGEBREAKS, placeEndLabelBadges, signedPct, signedPercentTicks } from '../utils/comparerChart'
+import { INTRADAY_RANGEBREAKS, endBadgeAxisSpacing, placeEndLabelBadges, signedPct, signedPercentTicks } from '../utils/comparerChart'
 import { readStoredFlag, storeFlag } from '../utils/chartActions'
 import {
   ChartDownloadMenu,
@@ -3875,7 +3875,7 @@ export default function ETFScreen() {
           line: { color, dash: style.dash, width: style.width },
           hovertemplate: metric === 'price'
             ? `<b>${hoverDate}</b><br>Share Price: $%{y:,.2f}<extra></extra>`
-            : `<b>${hoverDate}</b><br>Total Return Price: $%{y:,.2f}<extra></extra>`,
+          : `<b>${hoverDate}</b><br>Dividend-Adjusted Price: $%{y:,.2f}<extra></extra>`,
         })
         const last = labelIdx >= 0 ? Number(values[labelIdx]) : NaN
         if (showReturnLabels && Number.isFinite(last)) {
@@ -3992,13 +3992,14 @@ export default function ETFScreen() {
         titleText += ` — ${modeInfo.label || returnMode}`
       }
     } else {
-      titleText += ` — ${metric === 'total_value' ? 'Total Return Price ($)' : info.label}`
+      titleText += ` - ${info.label}`
     }
     if (logScaleActive) titleText += ' — Log Scale'
 
     const badges = showReturnLabels
       ? placeEndLabelBadges(labelCandidates, { visibleYValues, axisBase, logScaleActive, xshift: scaleRight ? 3 : 6 })
       : { annotations: [], width: 0 }
+    const { tickStandoff, rightMargin } = endBadgeAxisSpacing(badges, scaleRight)
 
     // Constrain the y-axis to the visible date window. Plotly autoranges y over
     // all trace data (not just the x-visible portion), so without this the curve
@@ -4028,6 +4029,7 @@ export default function ETFScreen() {
     const yaxis = {
       type: logScaleActive ? 'log' : 'linear',
       side: scaleRight ? 'right' : 'left',
+      ticklabelstandoff: tickStandoff,
       automargin: true,
       ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
       gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
@@ -4044,7 +4046,7 @@ export default function ETFScreen() {
     if (!scaleRight) {
       let axisTitle
       if (isGrowth) axisTitle = logScaleActive ? 'Growth of $10K (log scale)' : 'Value ($)'
-      else if (metric === 'total_value') axisTitle = logScaleActive ? 'Total Return Price ($) (log scale)' : 'Total Return Price ($)'
+      else if (metric === 'total_value') axisTitle = logScaleActive ? `${info.label} (log scale)` : info.label
       else if (metric === 'price') axisTitle = logScaleActive ? 'Share Price ($) (log scale)' : 'Share Price ($)'
       else if (metric === 'div_ttm') axisTitle = 'Dividends per Share, TTM ($)'
       else if (isDividend) axisTitle = `${info.label} (%)`
@@ -4061,8 +4063,8 @@ export default function ETFScreen() {
       uirevision: `returns-${period}-${metric}-${showRangeSlider ? 'slider' : 'plain'}-${logScaleActive ? 'log' : 'linear'}`,
       font: { color: '#e0e0e0', size: 12 },
       margin: scaleRight
-        ? { l: 20, r: Math.max(64, badges.width + 8), t: 70, b: 40 }
-        : { l: 60, r: Math.max(20, badges.width + 10), t: 70, b: 40 },
+        ? { l: 20, r: rightMargin, t: 70, b: 40 }
+        : { l: 60, r: rightMargin, t: 70, b: 40 },
       height: returnChartHeight,
       title: { text: titleText, font: { size: 14, color: '#e0e0e0' }, y: 0.98, x: 0.5, xanchor: 'center' },
       xaxis: {

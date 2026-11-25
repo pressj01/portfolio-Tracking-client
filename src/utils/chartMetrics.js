@@ -11,7 +11,7 @@ import { computeBlendTrace, comparerActualCloses, selectComparerTraces } from '.
 
 export const CHART_METRICS = [
   { value: 'total_pct', label: 'Total Return (%)', kind: 'return', unit: '%', desc: 'Dividend-reinvested total return, as a percentage change' },
-  { value: 'total_value', label: 'Total Return', kind: 'dollar', unit: '$', desc: 'Dividend-adjusted share price: equals today\'s price, lower in the past by the dividends since reinvested' },
+  { value: 'total_value', label: 'Dividend-Adjusted Price ($)', kind: 'dollar', unit: '$', desc: 'Dividend-adjusted share price: equals today\'s price, lower in the past by the dividends since reinvested' },
   { value: 'growth', label: 'Growth of $10K', kind: 'return', unit: '$', desc: 'What $10,000 invested at the start would be worth' },
   { value: 'price_pct', label: 'Stock Price (%)', kind: 'return', unit: '%', desc: 'Share price change only, dividends ignored' },
   { value: 'price', label: 'Stock Price', kind: 'dollar', unit: '$', desc: 'Each ticker\'s actual share price in dollars' },
