@@ -170,15 +170,28 @@ from refresh_sessions import (
     on_nyse_calendar,
 )
 from dividend_ledger import build_ledger as build_dividend_ledger, week_start_for
-from distribution_analysis import analyze_distribution_market, build_distribution_history
+from distribution_analysis import (
+    ESTIMATE_SOURCES as DISTRIBUTION_ESTIMATE_SOURCES,
+    analyze_distribution_market,
+    build_distribution_history,
+)
 from drip_ledger import (
     apply_reinvest_evidence,
     build_drip_ledger,
+    build_model_drip_ledger,
     detect_reinvest_evidence,
     evaluate_drip_fit,
     fit_window_start as drip_fit_window_start,
     ledger_candidates as drip_ledger_candidates,
+    model_ledger_candidates as drip_model_ledger_candidates,
     parse_range as parse_drip_ledger_range,
+)
+from model_distributions import (
+    build_model_distribution_history,
+    model_holding_rows,
+    model_payment_records,
+    model_positions,
+    observed_pay_lags,
 )
 from dividend_safety import (
     apply_nav_coverage_overlay,
@@ -62079,14 +62092,168 @@ def dividend_ledger():
     return jsonify(payload)
 
 
+def _distribution_market_end(market_symbol, today=None):
+    """The last completed session: a partial intraday bar is not a close.
+
+    The Distribution Analyzer and the model loader share this end date, so
+    they also share ``_nav_screen_market_history``'s cache.
+    """
+    today = today or datetime.date.today()
+    if not on_nyse_calendar(market_symbol):
+        return today
+    now_et = eastern_now()
+    prior_session, latest_session = current_sessions(now_et)
+    return prior_session if latest_session == now_et.date() and not market_has_closed(now_et) else latest_session
+
+
+def _distribution_full_market_history(symbol):
+    """Full price and distribution history for one ticker, or None."""
+    market_symbol = _yahoo_symbol_for_ticker(symbol)
+    return _nav_screen_market_history(market_symbol, datetime.date(1900, 1, 1),
+                                      _distribution_market_end(market_symbol))
+
+
+def _distribution_builder_id():
+    """The Portfolio Builder model the Distributions page is testing, if any."""
+    raw = request.args.get("builder_id")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("builder_id must be a Portfolio Builder portfolio id.")
+
+
+def _distribution_model_categories(conn, tickers):
+    """The selected portfolio's own category for each model ticker it has filed."""
+    _, pids = get_profile_filter()
+    if not tickers or not pids:
+        return {}
+    out = {}
+    for row in conn.execute(
+        f"""SELECT UPPER(TRIM(tc.ticker)) AS ticker, c.name AS category, s.name AS subcategory
+            FROM ticker_categories tc
+            JOIN categories c ON c.id = tc.category_id
+            LEFT JOIN subcategories s ON s.id = tc.subcategory_id
+            WHERE tc.profile_id IN ({','.join('?' * len(pids))})
+              AND UPPER(TRIM(tc.ticker)) IN ({','.join('?' * len(tickers))})
+            ORDER BY tc.profile_id""",
+        [*pids, *tickers],
+    ):
+        out.setdefault(row["ticker"], {"category": row["category"], "subcategory": row["subcategory"]})
+    return out
+
+
+def _load_distribution_model(builder_id):
+    """A Builder model's positions, market histories and pay timing.
+
+    Raises LookupError when the model does not belong to the requesting
+    profile. Pay timing comes from every account's recorded payment dates
+    for these tickers: when a fund pays after its ex-date is a property of
+    the fund, not of whose account received it.
+    """
+    from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor
+
+    conn = get_connection()
+    try:
+        row = _builder_portfolio_row(conn, builder_id)
+        if row is None:
+            raise LookupError("That Portfolio Builder portfolio was not found for the selected portfolio.")
+        model_id, model_name = int(row["id"]), row["name"]
+        holdings = _builder_load_holdings(conn, builder_id)
+        tickers = [h["ticker"] for h in holdings]
+        descriptions = _resolve_security_descriptions(conn, tickers)
+        categories = _distribution_model_categories(conn, tickers)
+        pay_dates = defaultdict(list)
+        if tickers:
+            estimates = ",".join("?" * len(DISTRIBUTION_ESTIMATE_SOURCES))
+            for pay in conn.execute(
+                f"""SELECT UPPER(TRIM(ticker)) AS ticker, payment_date FROM dividend_payments
+                    WHERE UPPER(TRIM(ticker)) IN ({','.join('?' * len(tickers))}) AND amount > 0
+                      AND LOWER(TRIM(COALESCE(source, ''))) NOT IN ({estimates})""",
+                [*tickers, *DISTRIBUTION_ESTIMATE_SOURCES],
+            ):
+                pay_dates[pay["ticker"]].append(pay["payment_date"])
+    finally:
+        conn.close()
+
+    def load(symbol):
+        try:
+            return _distribution_full_market_history(symbol)
+        except Exception:
+            app.logger.warning("Model distribution market history unavailable for %s", symbol, exc_info=True)
+            return None
+
+    markets = {}
+    if tickers:
+        with ThreadPoolExecutor(max_workers=min(6, len(tickers))) as pool:
+            markets = dict(zip(tickers, pool.map(load, tickers)))
+    today = datetime.date.today()
+    positions = model_positions(holdings, markets, today, descriptions)
+    return {
+        "id": model_id, "name": model_name, "positions": positions, "markets": markets,
+        "lags": observed_pay_lags(pay_dates, positions), "categories": categories, "today": today,
+    }
+
+
+def _distribution_model_or_error():
+    """(model, None) when a model was asked for, (None, None) when not, else (None, response)."""
+    try:
+        builder_id = _distribution_builder_id()
+        if builder_id is None:
+            return None, None
+        return _load_distribution_model(builder_id), None
+    except ValueError as exc:
+        return None, (jsonify(error=str(exc)), 400)
+    except LookupError as exc:
+        return None, (jsonify(error=str(exc)), 404)
+
+
+@app.route("/api/portfolio-distributions/model-holdings", methods=["GET"])
+def portfolio_distributions_model_holdings():
+    """A Portfolio Builder model as holdings rows, for the Distributions page."""
+    model, failed = _distribution_model_or_error()
+    if failed:
+        return failed
+    if model is None:
+        return jsonify(error="builder_id is required."), 400
+    rows = model_holding_rows(model["positions"], model["categories"], model["today"])
+    priced = [p for p in model["positions"] if p["available"]]
+    return jsonify(
+        rows=rows,
+        model={"id": model["id"], "name": model["name"], "holdings": len(rows),
+               "invested": round(sum(p["amount"] for p in priced), 2),
+               "price_date": max((p["price_date"] for p in priced), default=None).isoformat() if priced else None,
+               "unavailable": sorted(p["ticker"] for p in model["positions"] if not p["available"])},
+    )
+
+
 @app.route("/api/portfolio-distributions", methods=["GET"])
 def portfolio_distributions():
-    """Monthly and lifetime recorded distributions for the selected portfolio."""
-    _, pids = get_profile_filter()
-    conn = get_connection()
+    """Monthly and lifetime recorded distributions for the selected portfolio.
+
+    With ``builder_id`` the payload is modeled for that Portfolio Builder
+    portfolio instead (see ``model_distributions``).
+    """
     try:
         year = request.args.get("year")
         year = int(year) if year is not None else None
+    except ValueError:
+        return jsonify(error="Select a year between 1900 and the current year."), 400
+    model, failed = _distribution_model_or_error()
+    if failed:
+        return failed
+    if model is not None:
+        try:
+            payload = build_model_distribution_history(model["positions"], model["lags"], year, model["today"])
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        payload["model"].update(id=model["id"], name=model["name"])
+        return jsonify(payload)
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    try:
         read_ids = _dividend_payment_profile_ids_for_read(conn, pids)
         return jsonify(build_distribution_history(conn, read_ids, year))
     except ValueError as exc:
@@ -62114,16 +62281,13 @@ def portfolio_distributions_analyzer():
     finally:
         conn.close()
     today = datetime.date.today()
-    now_et = eastern_now()
-    prior_session, latest_session = current_sessions(now_et)
-    completed_session = prior_session if latest_session == now_et.date() and not market_has_closed(now_et) else latest_session
 
     def analyze(symbol):
         try:
             market_symbol = _yahoo_symbol_for_ticker(symbol)
             # Do not use a partial intraday daily bar as the closing price for
             # TTM yield. Other exchanges have different calendars.
-            end = completed_session if on_nyse_calendar(market_symbol) else today
+            end = _distribution_market_end(market_symbol, today)
             market = _nav_screen_market_history(market_symbol, datetime.date(1900, 1, 1), end)
             hint = hints.get(symbol)
             result = analyze_distribution_market(market, end, _distribution_frequency_code(hint) or hint)
@@ -62147,6 +62311,19 @@ def portfolio_drip_ledger_tickers():
     _, pids = get_profile_filter()
     today = datetime.date.today()
     model_all = _drip_ledger_flag(request.args.get("model_all"))
+    model, failed = _distribution_model_or_error()
+    if failed:
+        return failed
+    if model is not None:
+        # A model has no reinvestment records: it is always "as if reinvested".
+        try:
+            start, end = parse_drip_ledger_range(request.args.get("start"), request.args.get("end"), today)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        payments = model_payment_records(model["positions"], model["lags"], model["today"])
+        result = drip_model_ledger_candidates(model["positions"], payments, start, end, today,
+                                              evaluate=_drip_ledger_flag(request.args.get("evaluate")))
+        return jsonify(start=start, end=end, as_of=today.isoformat(), model_all=True, **result)
     conn = get_connection()
     try:
         start, end = parse_drip_ledger_range(request.args.get("start"), request.args.get("end"), today)
@@ -62187,6 +62364,18 @@ def portfolio_drip_ledger():
     if evaluate:
         # One fetch serves both: the DRIP fit needs the longer window.
         market_start = drip_fit_window_start(start, today)
+    model, failed = _distribution_model_or_error()
+    if failed:
+        return failed
+    if model is not None:
+        # The model's full histories already cover the range and the DRIP fit window.
+        markets = {symbol: model["markets"].get(symbol) for symbol in symbols}
+        payments = model_payment_records(model["positions"], model["lags"], model["today"])
+        payload = build_model_drip_ledger(model["positions"], payments, symbols, start, end,
+                                          markets=markets, name=model["name"], today=today)
+        model_all = True
+    else:
+        payload = None
 
     def load_market(symbol):
         try:
@@ -62195,16 +62384,17 @@ def portfolio_drip_ledger():
             app.logger.warning("DRIP ledger market history unavailable for %s", symbol, exc_info=True)
             return None
 
-    with ThreadPoolExecutor(max_workers=min(6, len(symbols))) as pool:
-        markets = dict(zip(symbols, pool.map(load_market, symbols)))
-    conn = get_connection()
-    try:
-        ids = _dividend_payment_profile_ids_for_read(conn, pids)
-        names = {int(row["id"]): row["name"] for row in conn.execute("SELECT id, name FROM profiles")}
-        payload = build_drip_ledger(conn, ids, symbols, start, end, model_all=model_all,
-                                    markets=markets, account_names=names, today=today)
-    finally:
-        conn.close()
+    if payload is None:
+        with ThreadPoolExecutor(max_workers=min(6, len(symbols))) as pool:
+            markets = dict(zip(symbols, pool.map(load_market, symbols)))
+        conn = get_connection()
+        try:
+            ids = _dividend_payment_profile_ids_for_read(conn, pids)
+            names = {int(row["id"]): row["name"] for row in conn.execute("SELECT id, name FROM profiles")}
+            payload = build_drip_ledger(conn, ids, symbols, start, end, model_all=model_all,
+                                        markets=markets, account_names=names, today=today)
+        finally:
+            conn.close()
     if evaluate:
         for status in payload["tickers"]:
             market = markets.get(status["ticker"])

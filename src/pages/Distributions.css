@@ -122,3 +122,9 @@
 .dist-eval-help-body strong.dist-fit-toss { color: var(--warning); }
 .dist-eval-help-body strong.dist-fit-na { color: var(--text-dim); }
 .dist-drip-source { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+/* Source picker: the selected portfolio or one of its Portfolio Builder models. */
+.dist-source { align-items: center; margin: -.25rem 0 .85rem; }
+.dist-source-hint { color: var(--text-dim); font-size: .82rem; }
+.dist-source-hint a, .dist-model-banner a { color: var(--accent-bright); }
+.dist-model-banner { border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-left: 4px solid var(--accent); border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--text); font-size: .85rem; line-height: 1.5; padding: .6rem .85rem; margin: 0 0 1rem; }

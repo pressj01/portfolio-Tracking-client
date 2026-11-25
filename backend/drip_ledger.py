@@ -544,10 +544,71 @@ def build_drip_ledger(conn, profile_ids, tickers, start_key, end_key, *, model_a
     """
     today = today or date.today()
     months = month_keys(start_key, end_key)
+    since = month_start(months[0]) - timedelta(days=PAIR_DAYS_AFTER + PAIR_DAYS_BEFORE)
+    holdings, trades, payments = _load_positions(conn, profile_ids, tickers, since, today)
+    return drip_ledger_from_records(holdings, trades, payments, tickers, start_key, end_key,
+                                    model_all=model_all, markets=markets, account_names=account_names,
+                                    today=today)
+
+
+def build_model_drip_ledger(positions, payments, tickers, start_key, end_key, *, markets=None,
+                            name="Model", today=None):
+    """The ledger for a Portfolio Builder model, as if every payment were reinvested.
+
+    ``positions`` come from ``model_distributions.model_positions`` and
+    ``payments`` from ``model_distributions.model_payment_records``: the
+    model holds its shares through the whole range (no trades), each modeled
+    payment buys shares at that day's close, and those shares earn the
+    payments after them.
+    """
+    holdings = {}
+    for position in positions:
+        if position["shares"] <= 0:
+            continue
+        key = (0, position["ticker"])
+        holdings[key] = {"quantity": position["shares"], "description": position.get("description") or "",
+                         "div": 1.0 if payments.get(key) else 0.0, "estim": 0.0}
+    return drip_ledger_from_records(holdings, {}, payments, tickers, start_key, end_key, model_all=True,
+                                    markets=markets, account_names={0: name}, today=today)
+
+
+def model_ledger_candidates(positions, payments, start_key, end_key, today, evaluate=False):
+    """``ledger_candidates`` for a model: every holding paid in the range.
+
+    With ``evaluate``, every holding the model owns. The earliest month is
+    the earliest modeled payment, kept within the ledger's longest range.
+    """
+    start = month_start(start_key)
+    end_bound = min(next_month(month_start(end_key)), today + timedelta(days=1))
+    held = {p["ticker"]: p for p in positions if p["shares"] > 0}
+    tickers = set(held) if evaluate else {
+        ticker for (_, ticker), records in payments.items()
+        if ticker in held and any(start <= r["day"] < end_bound for r in records)}
+    days = [r["day"] for (_, ticker), records in payments.items() if ticker in held for r in records]
+    first = month_key(min(days)) if days else None
+    # "All history" must fit parse_range's MAX_MONTHS, current month included.
+    index = today.year * 12 + today.month - 1 - (MAX_MONTHS - 1)
+    floor = f"{index // 12:04d}-{index % 12 + 1:02d}"
+    if first and first < floor:
+        first = floor
+    return {
+        "tickers": [{"ticker": t, "description": held[t].get("description") or ""} for t in sorted(tickers)],
+        "first_month": first,
+        "flagged_without_records": [],
+    }
+
+
+def drip_ledger_from_records(holdings, trades, payments, tickers, start_key, end_key, *, model_all=False,
+                             markets=None, account_names=None, today=None):
+    """Monthly DRIP rows from positions keyed (profile_id, TICKER).
+
+    ``holdings`` values carry quantity, description, div and estim; ``trades``
+    and ``payments`` are lists in ``_load_positions``'s shape.
+    """
+    today = today or date.today()
+    months = month_keys(start_key, end_key)
     start_day = month_start(months[0])
     end_bound = min(next_month(month_start(months[-1])), today + timedelta(days=1))
-    since = start_day - timedelta(days=PAIR_DAYS_AFTER + PAIR_DAYS_BEFORE)
-    holdings, trades, payments = _load_positions(conn, profile_ids, tickers, since, today)
     markets = markets or {}
     names = account_names or {}
     keys = sorted(set(holdings) | set(trades) | set(payments))

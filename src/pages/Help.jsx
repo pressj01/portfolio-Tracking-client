@@ -3398,6 +3398,28 @@ function DistributionsHelp() {
         <strong> DRIP Ledger</strong>.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Testing a Portfolio Builder model</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        By default every tab reads the portfolio selected in the navbar. Tick <strong>Test a Portfolio Builder model</strong> under
+        the page title and choose one of that portfolio&apos;s Portfolio Builder models to run all five tabs on the model instead.
+        A banner names the model while it is being tested; untick the box to go back. The box resets when the app restarts;
+        the model you chose is remembered.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>The income is modeled, not received.</strong> A model has no payment records, so each fund&apos;s actual past
+          distributions are applied to the shares the model buys at the latest close (its dollars ÷ price, the Builder&apos;s own share
+          counts), held unchanged back through history. A fund pays nothing in the years before it started trading; the page lists those funds.</li>
+        <li><strong>Payment dates</strong> — market history dates each distribution by its ex-date. When your own payment records show how many
+          days after the ex-date a fund pays, the modeled payment moves by that many days, so months line up with your real Monthly Income.
+          Otherwise it is dated on the ex-date. A distribution past its ex-date but not yet paid counts as <em>declared, not yet paid</em>.</li>
+        <li><strong>Portfolio Income</strong> uses the dollars the model puts in each holding as its cost, and your portfolio&apos;s own
+          categories where it has filed the ticker. A model has no realized gains.</li>
+        <li><strong>Income Floor</strong> compares the model&apos;s modeled income with your Cash Flow plan&apos;s floor. Core and satellite
+          assignments are kept separately for each model.</li>
+        <li><strong>DRIP Ledger</strong> always runs as if reinvested: the model starts the range with today&apos;s shares, every modeled
+          payment buys shares at that day&apos;s close, and those shares earn the payments after them.</li>
+      </ul>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP Ledger</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A spreadsheet of what each holding&apos;s distributions bought, month by month. By default it lists every holding

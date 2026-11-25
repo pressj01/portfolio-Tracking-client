@@ -139,8 +139,9 @@ function evaluationRows(holdings, fits, mine, dripStatus, heldTickers) {
     const fit = fits.get(ticker)
     const sold = heldTickers && !heldTickers.has(key)
     const current = sold ? null : dripStatus?.get(key)
-    const reinvesting = current ? current.on > 0 : null
-    const status = !current ? 'No longer owned' : current.on === 0 ? 'Taking cash'
+    // A model has no DRIP setting to agree or disagree with.
+    const reinvesting = current && !current.model ? current.on > 0 : null
+    const status = !current ? 'No longer owned' : current.model ? 'Model holding' : current.on === 0 ? 'Taking cash'
       : current.on === current.total ? 'Reinvesting' : `Reinvesting in ${current.on} of ${current.total} accounts`
     const call = fit?.call
     let meaning, tone, priority
@@ -351,10 +352,13 @@ function PaymentDetail({ row, modelAll, span }) {
   </td></tr>
 }
 
-export default function DistributionDripLedger({ refreshKey, showSold = true, setShowSold, heldTickers, dripStatus }) {
+export default function DistributionDripLedger({ refreshKey, showSold = true, setShowSold, heldTickers, dripStatus, model }) {
   const pf = useProfileFetch()
   const [range, setRange] = useState('last12')
-  const [modelAll, setModelAll] = useState(false)
+  const [modelAllChoice, setModelAll] = useState(false)
+  // A Portfolio Builder model has no reinvestment records, so it is always shown as if reinvested.
+  const modelId = model?.id ?? null
+  const modelAll = Boolean(modelId) || modelAllChoice
   const [evaluate, setEvaluate] = useState(false)
   const [groupBy, setGroupBy] = useState('ticker')
   const [filter, setFilter] = useState('')
@@ -365,12 +369,12 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const today = new Date()
   const asOf = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
   const params = rangeParams(range, firstMonth, asOf)
-  const loadKey = `${refreshKey}:${range}:${params.start || ''}:${modelAll ? 1 : 0}:${evaluate ? 1 : 0}`
+  const loadKey = `${refreshKey}:${modelId || ''}:${range}:${params.start || ''}:${modelAll ? 1 : 0}:${evaluate ? 1 : 0}`
   const columns = COLUMNS
 
   useEffect(() => {
     let stale = false
-    const base = { ...params, model_all: modelAll ? 1 : 0, evaluate: evaluate ? 1 : '' }
+    const base = { ...params, model_all: modelAll ? 1 : 0, evaluate: evaluate ? 1 : '', builder_id: modelId }
     const load = async () => {
       setState({ key: loadKey, rows: [], statuses: [], loaded: 0, total: null })
       const list = await readJSON(await pf(`/api/portfolio-distributions/drip-ledger/tickers?${query(base)}`))
@@ -485,10 +489,10 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
         <option value="ticker">Holding</option><option value="month">Month</option><option value="none">No grouping</option>
       </select></label>
       <label>Filter holdings <input value={filter} placeholder="Ticker or fund name" onChange={e => setFilter(e.target.value)} /></label>
-      <label className="dist-checkbox" title="Reinvest every payment that was taken as cash at that day's close, and model holdings with no payment records from the fund's distribution history">
+      {!modelId && <label className="dist-checkbox" title="Reinvest every payment that was taken as cash at that day's close, and model holdings with no payment records from the fund's distribution history">
         <input type="checkbox" checked={modelAll} onChange={e => setModelAll(e.target.checked)} /> Show all holdings as if reinvested
-      </label>
-      <label className="dist-checkbox" title="For each holding: has reinvesting paid more than taking the cash? Flags the ones you reinvest that would have done better as cash.">
+      </label>}
+      <label className="dist-checkbox" title={modelId ? 'For each holding in the model: has reinvesting paid more than taking the cash?' : 'For each holding: has reinvesting paid more than taking the cash? Flags the ones you reinvest that would have done better as cash.'}>
         <input type="checkbox" checked={evaluate} onChange={e => setEvaluate(e.target.checked)} /> Is DRIP worth it?
       </label>
       {setShowSold && <label className="dist-checkbox" title="Holdings no account in this portfolio holds any more">
@@ -501,7 +505,7 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
     {loading && !current?.error && <div className="dist-loading" role="status"><span className="spinner" /> {current?.total ? `Loading ${current.loaded} of ${current.total} holdings…` : 'Finding reinvested holdings…'}</div>}
     <div className="summary-strip">
       <Metric label="Distributions" value={money(totals.distribution)} sub={rangeLabel} />
-      <Metric label={modelAll ? 'Reinvested (actual + modeled)' : 'Reinvested'} value={money(totals.drip)} sub={totals.distribution > 0 ? `${(totals.drip / totals.distribution * 100).toFixed(1)}% of distributions` : DASH} color="dist-positive" />
+      <Metric label={modelId ? 'Reinvested (modeled)' : modelAll ? 'Reinvested (actual + modeled)' : 'Reinvested'} value={money(totals.drip)} sub={totals.distribution > 0 ? `${(totals.drip / totals.distribution * 100).toFixed(1)}% of distributions` : DASH} color="dist-positive" />
       <Metric label="Holdings buying shares" value={String(totals.buying)} sub={`${latest.length} holdings listed`} />
       <Metric label="Income from DRIP shares" value={money(totals.income)} sub="Paid on shares reinvesting added in this range" color="dist-positive" />
       <Metric label="Value of DRIP shares" value={money(totals.value)} sub={valued.length < latest.length ? `${valued.length} of ${latest.length} holdings priced` : 'At each holding\'s latest month-end close'} />
@@ -538,11 +542,12 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
           {i === 0 ? 'Total' : { distribution: money(totals.distribution), drip_amount: money(totals.drip), income_from_drip: money(totals.income), value_of_drip: money(totals.value), total_value: money(totals.position) }[column.key] ?? ''}
         </td>)}</tr></tfoot>}
       </table>
-      {!loading && !rows.length && !current?.error && <div className="dist-empty">{filter ? 'No holdings match this filter.' : modelAll ? 'No holdings paid distributions in this range.' : 'No reinvestment records in this range. Tick “Show all holdings as if reinvested” to model every holding.'}</div>}
+      {!loading && !rows.length && !current?.error && <div className="dist-empty">{filter ? 'No holdings match this filter.' : modelId ? 'No holding in this model paid distributions in this range.' : modelAll ? 'No holdings paid distributions in this range.' : 'No reinvestment records in this range. Tick “Show all holdings as if reinvested” to model every holding.'}</div>}
     </div>
     {problems.length > 0 && <p className="dist-note">{problems.map(s => `${s.ticker}: ${s.message}`).join(' ')}</p>}
-    <p className="dist-note">* Current month in progress. Click a row to see each payment and which account it came from. Base shares are counted back from each account's current share count through its buys and sells, so a position opened before your transaction history still starts from the right number. {modelAll
+    {modelId ? <p className="dist-note">* Current month in progress. Click a row to see each payment. The {model.name} model starts the range with the shares it buys today and never trades; every payment it is modeled to receive is reinvested at that day&apos;s closing price, and those shares earn the payments after them. Share counts are in today&apos;s units after any stock split. Value of DRIP shares and Total value use the month-end closing price; their totals add each holding&apos;s latest month.</p>
+    : <p className="dist-note">* Current month in progress. Click a row to see each payment and which account it came from. Base shares are counted back from each account's current share count through its buys and sells, so a position opened before your transaction history still starts from the right number. {modelAll
       ? 'Modeled rows reinvest the cash payments at that day\'s closing price; those shares then earn the payments after them. Holdings with no payment records are modeled from the fund\'s distribution history and your share count.'
-      : 'Only holdings that actually reinvested in this range are listed; months they took cash show as Taken as cash. Hover the Reinvested? column for what happened in each month.'} Share counts are in today's units after any stock split. Value of DRIP shares and Total value use the month-end closing price; their totals add each holding's latest month.</p>
+      : 'Only holdings that actually reinvested in this range are listed; months they took cash show as Taken as cash. Hover the Reinvested? column for what happened in each month.'} Share counts are in today's units after any stock split. Value of DRIP shares and Total value use the month-end closing price; their totals add each holding's latest month.</p>}
   </>
 }
