@@ -3440,18 +3440,21 @@ function DistributionsHelp() {
       </ul>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Show all holdings as if reinvested</strong> — reinvests every payment that was taken as cash at that day&apos;s closing price. Those shares then earn the payments after them, so the effect compounds from the start of the range. Holdings with no payment records are modeled from the fund&apos;s distribution history and your share count. The <em>Modeled extra income</em> card totals what the modeled shares would have paid.</li>
-        <li><strong>Is DRIP worth it?</strong> — answers, for every holding currently in the account, whether reinvesting its distributions has paid more than taking the cash. Holdings you take as cash and ones that pay nothing are listed too, even though the ledger below shows only what you reinvested. A table lists each holding with:
+        <li><strong>Is DRIP worth it?</strong> compares reinvesting distributions with taking cash for every holding currently in the account.
+          <p>Current Market uses observed closes. Bull, Bear, and Flat preserve daily swings and historical payouts and adjust each holding against its documented exposure proxy, with SPY as the broad-market default. Bull adds the editable annual boost to the benchmark&apos;s observed growth or flat, whichever is higher. Bear keeps a selloff of at least 15% annualized or sets the benchmark trend to −15%. Flat sets the benchmark trend to zero.</p>
+          <p>Choose one, three, five, or ten years of history, the ledger range, or custom dates for a specific market period. The annual cash return starts at 4% and can be changed. Use 0% to count the payouts at face value when you would spend them on bills.</p>
           <ul style={{ paddingLeft: '1.25rem' }}>
             <li><em>You now</em> — whether you reinvest it today, from the DRIP boxes on Holdings (on Owner, in how many accounts).</li>
             <li><em>Verdict</em> — <strong>Good DRIP candidate</strong>, <strong>Not a good DRIP candidate</strong>, <strong>Borderline</strong> (within 2% either way), <strong>Not enough history</strong> (under 120 days of prices) or <strong>No distributions</strong> (pays nothing, so nothing to reinvest).</li>
             <li><em>Shares Held</em> — the number of shares you currently own in the selected account or combined accounts.</li>
             <li><em>% of Account</em> — the current holding value as a percentage of the entire selected account or combined accounts, regardless of the selected range or holding filter.</li>
-            <li><em>DRIP vs cash</em> — how much more or less reinvesting every distribution left you than taking the cash and earning 4% a year on it, over the selected range or the last 3 years, whichever is longer.</li>
+            <li><em>DRIP vs cash</em> shows how much reinvesting gained or lost against the selected cash return over the evaluation window.</li>
+            <li><em>Share price change</em> shows the first and last share price used for the evaluation. Modeled results identify the reference benchmark.</li>
             <li><em>Extra payouts from DRIP</em> — how much more the holding was paid in distributions when reinvested than when taken as cash, because the shares DRIP buys earn payouts too. <em>DRIP vs cash</em> already counts these payouts; the hover weighs them against what the reinvested shares are worth now.</li>
-            <li><em>What it means</em> — for example <strong>Doesn&apos;t make much sense to DRIP: taking the cash has paid more</strong> for a holding you reinvest, or <strong>Worth reinvesting</strong> for one you take as cash. Those two come first, and boxes above the table list them.</li>
+            <li><em>What it means</em> compares the verdict with your current setting when one scenario is selected. Check several scenarios to see a separate column for each market.</li>
             <li><em>Your reinvesting in this range</em> — what you reinvested and what those shares are worth now.</li>
           </ul>
-          Hover a row for the reason in plain words, such as the price falling every year so the shares bought with distributions kept losing value. It uses the same test as the DRIP vs. Cash Analyzer and describes the past, not what a fund will do next.</li>
+          Hover a row or scenario result to see the calculation, including the payout totals, end values, and annualized share-price change.</li>
         <li><strong>Range</strong> — the last 12 months, a calendar year, or all history since your first reinvestment or payment record. Running totals start at the beginning of the range.</li>
         <li><strong>Group by</strong> — holding (each fund&apos;s months in order, with a subtotal), month (every holding paid that month), or no grouping. Click a column heading to sort.</li>
         <li><strong>Click a row</strong> to see each payment in it: the account, the amount, the per-share rate, what it bought and at what price. Weekly payers show four or five payments in a month.</li>

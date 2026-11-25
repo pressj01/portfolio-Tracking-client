@@ -26,6 +26,7 @@ from flask import g as _flask_g
 from flask.json.provider import DefaultJSONProvider
 from flask_cors import CORS
 from nav_assessment_service import (
+    REGISTRY as NAV_REFERENCE_REGISTRY,
     VERSION as NAV_ASSESSMENT_VERSION,
     WINDOWS as NAV_ASSESSMENT_WINDOWS,
     build_payload as build_nav_assessment,
@@ -176,6 +177,8 @@ from distribution_analysis import (
     build_distribution_history,
 )
 from drip_ledger import (
+    FIT_MARKET_BENCHMARK,
+    FIT_MARKET_RATES,
     apply_reinvest_evidence,
     build_drip_ledger,
     build_model_drip_ledger,
@@ -62095,8 +62098,8 @@ def dividend_ledger():
 def _distribution_market_end(market_symbol, today=None):
     """The last completed session: a partial intraday bar is not a close.
 
-    The Distribution Analyzer and the model loader share this end date, so
-    they also share ``_nav_screen_market_history``'s cache.
+    The Distribution Analyzer, model loader, and DRIP ledger use this cutoff
+    when fetching market history.
     """
     today = today or datetime.date.today()
     if not on_nyse_calendar(market_symbol):
@@ -62305,6 +62308,16 @@ def _drip_ledger_flag(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _drip_fit_benchmark(symbol):
+    reference = NAV_REFERENCE_REGISTRY.get(symbol, {})
+    if reference.get("drip_market_proxy"):
+        return reference["drip_market_proxy"]
+    legs = reference.get("automatic_legs") or []
+    if len(legs) == 1 and legs[0]["weight"] == 1:
+        return legs[0]["symbol"]
+    return FIT_MARKET_BENCHMARK
+
+
 @app.route("/api/portfolio-distributions/drip-ledger/tickers", methods=["GET"])
 def portfolio_drip_ledger_tickers():
     """The tickers the DRIP ledger lists for this portfolio and month range."""
@@ -62361,32 +62374,86 @@ def portfolio_drip_ledger():
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     market_start = datetime.date(int(start[:4]), int(start[5:7]), 1)
+    benchmarks = {}
     if evaluate:
-        # One fetch serves both: the DRIP fit needs the longer window.
-        market_start = drip_fit_window_start(start, today)
+        scenarios = list(dict.fromkeys(request.args.get("market_scenarios", "current").split(",")))
+        if any(scenario not in FIT_MARKET_RATES for scenario in scenarios):
+            return jsonify(error="Choose current, bull, bear, or flat market scenarios."), 400
+        if any(scenario != "current" for scenario in scenarios):
+            benchmarks = {symbol: _drip_fit_benchmark(symbol) for symbol in symbols}
+        bull_boost = FIT_MARKET_RATES["bull"]
+        if "bull" in scenarios:
+            try:
+                bull_boost = float(request.args.get("bull_boost", bull_boost))
+            except ValueError:
+                bull_boost = -1
+            if not math.isfinite(bull_boost) or bull_boost < 0:
+                return jsonify(error="Enter a finite bull benchmark boost of at least 0%."), 400
+        cash_rate = request.args.get("cash_rate")
+        if cash_rate is not None:
+            cash_error = "Enter a finite annual cash return greater than -100%."
+            try:
+                cash_rate = float(cash_rate)
+            except ValueError:
+                return jsonify(error=cash_error), 400
+            if not math.isfinite(cash_rate) or cash_rate <= -1:
+                return jsonify(error=cash_error), 400
+        fit_window = request.args.get("fit_window")
+        fit_end = today
+        if fit_window == "ledger":
+            fit_start = market_start
+            year, month = map(int, end.split("-"))
+            fit_end = min(today, datetime.date(year, month, calendar.monthrange(year, month)[1]))
+        elif fit_window == "custom":
+            try:
+                fit_start = datetime.date.fromisoformat(request.args.get("fit_start", ""))
+                fit_end = datetime.date.fromisoformat(request.args.get("fit_end", ""))
+            except ValueError:
+                return jsonify(error="Enter valid evaluation start and end dates."), 400
+            if fit_start.year < 1900 or not fit_start <= fit_end <= today:
+                return jsonify(error="Choose evaluation dates in order, ending today or earlier."), 400
+        elif fit_window is None:
+            fit_start = drip_fit_window_start(start, today)
+        else:
+            try:
+                years = int(fit_window)
+            except ValueError:
+                years = 0
+            if not 1 <= years <= 20:
+                return jsonify(error="Choose a lookback from 1 to 20 years or use the ledger range."), 400
+            year = today.year - years
+            fit_start = today.replace(year=year, day=min(today.day, calendar.monthrange(year, today.month)[1]))
+        # One history fetch serves the ledger rows and the evaluation.
+        market_start = min(market_start, fit_start)
     model, failed = _distribution_model_or_error()
     if failed:
         return failed
     if model is not None:
         # The model's full histories already cover the range and the DRIP fit window.
         markets = {symbol: model["markets"].get(symbol) for symbol in symbols}
+        markets.update({ref: model["markets"][ref] for ref in benchmarks.values() if model["markets"].get(ref)})
         payments = model_payment_records(model["positions"], model["lags"], model["today"])
         payload = build_model_drip_ledger(model["positions"], payments, symbols, start, end,
                                           markets=markets, name=model["name"], today=today)
         model_all = True
     else:
         payload = None
+        markets = {}
 
     def load_market(symbol):
         try:
-            return _nav_screen_market_history(_yahoo_symbol_for_ticker(symbol), market_start, today)
+            market_symbol = _yahoo_symbol_for_ticker(symbol)
+            market_end = _distribution_market_end(market_symbol, today)
+            return _nav_screen_market_history(market_symbol, market_start, market_end)
         except Exception:
             app.logger.warning("DRIP ledger market history unavailable for %s", symbol, exc_info=True)
             return None
 
+    missing_markets = [symbol for symbol in dict.fromkeys([*symbols, *benchmarks.values()]) if symbol not in markets]
+    if missing_markets:
+        with ThreadPoolExecutor(max_workers=min(6, len(missing_markets))) as pool:
+            markets.update(zip(missing_markets, pool.map(load_market, missing_markets)))
     if payload is None:
-        with ThreadPoolExecutor(max_workers=min(6, len(symbols))) as pool:
-            markets = dict(zip(symbols, pool.map(load_market, symbols)))
         conn = get_connection()
         try:
             ids = _dividend_payment_profile_ids_for_read(conn, pids)
@@ -62397,11 +62464,17 @@ def portfolio_drip_ledger():
             conn.close()
     if evaluate:
         for status in payload["tickers"]:
-            market = markets.get(status["ticker"])
-            status["evaluation"] = (
-                evaluate_drip_fit(market, status["ticker"], market_start, today) if market
-                else {"label": "Not enough history", "call": None, "reason": "Price history could not be loaded."}
-            )
+            symbol = status["ticker"]
+            market = markets.get(symbol)
+            benchmark_symbol = benchmarks.get(symbol)
+            status["evaluations"] = {
+                scenario: evaluate_drip_fit(market, symbol, fit_start, fit_end, scenario=scenario, cash_rate=cash_rate,
+                                            benchmark=markets.get(benchmark_symbol), benchmark_symbol=benchmark_symbol,
+                                            bull_boost=bull_boost)
+                if market else {"label": "Not enough history", "call": None, "reason": "Price history could not be loaded."}
+                for scenario in scenarios
+            }
+            status["evaluation"] = status["evaluations"].get("current", status["evaluations"][scenarios[0]])
     return jsonify(start=start, end=end, as_of=today.isoformat(), model_all=model_all, **payload)
 
 

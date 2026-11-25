@@ -221,6 +221,7 @@
     "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
   },
   "DRMY": {
+    "drip_market_proxy": "DRAM",
     "family": "Active or concentrated equity/options",
     "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
     "suggestion": "SOXX",
