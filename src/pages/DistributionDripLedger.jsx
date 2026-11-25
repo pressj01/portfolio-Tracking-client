@@ -81,6 +81,7 @@ const COLUMNS = [
 ]
 const FIT_TONE = { 'Good DRIP candidate': 'dist-fit-good', 'Not a good DRIP candidate': 'dist-fit-cash', Borderline: 'dist-fit-toss', 'Not enough history': 'dist-fit-na', 'No distributions': 'dist-fit-na' }
 const MARKET_LABELS = { current: 'Current Market', bull: 'Bull Market', bear: 'Bear Market', flat: 'Flat Market' }
+const COMPARISON_VERDICTS = { DRIP: 'DRIP leads', 'Take cash': 'Cash leads', 'Toss-up': 'Borderline' }
 const BUCKET_HINT = {
   Compounder: 'high income, fully paid for by total return',
   Grower: 'modest income, fully paid for by total return',
@@ -92,6 +93,9 @@ const BUCKET_HINT = {
 const SUMMARY_WORDS = { 'Good DRIP candidate': 'good DRIP candidates', 'Not a good DRIP candidate': 'not good for DRIP', Borderline: 'borderline', 'Not enough history': 'without enough history', 'No distributions': 'paying no distributions', 'Benchmark unavailable': 'without a usable benchmark', 'Cash return out of range': 'with cash return out of range' }
 const pct = (v, digits = 1) => v == null ? DASH : `${(Math.abs(v) * 100).toFixed(digits)}%`
 const annualRate = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 10 })
+const comparisonEdge = new Intl.NumberFormat(undefined, {
+  style: 'percent', signDisplay: 'exceptZero', minimumFractionDigits: 1, maximumFractionDigits: 1,
+})
 const edgeText = edge => edge == null ? DASH : Math.abs(edge) < 0.02 ? 'About the same' : `${pct(edge, 0)} ${edge > 0 ? 'better' : 'worse'}`
 
 // Plain-language reason behind a holding's verdict.
@@ -261,8 +265,9 @@ function DripEvaluationControls({ markets, onToggleMarket, assumptions, onApply,
     <div className="dist-eval-options">
       <fieldset className="dist-controls dist-eval-markets">
         <legend>Market scenarios</legend>
-        {Object.entries(MARKET_LABELS).map(([market, label]) => <label key={market} className="dist-checkbox">
-          <input type="checkbox" checked={markets.includes(market)} onChange={() => onToggleMarket(market)} /> {label}
+        {Object.entries(MARKET_LABELS).map(([market, label]) => <label key={market} className={`dist-checkbox dist-market-${market}`}>
+          <input type="checkbox" checked={markets.includes(market)} onChange={() => onToggleMarket(market)} />
+          <span className="dist-market-name">{label}</span>
         </label>)}
       </fieldset>
       <div className="dist-controls">
@@ -309,11 +314,12 @@ const COMPARISON_COLUMNS = EVAL_COLUMNS.filter(column => ['ticker', 'status', 's
 function DripEvaluation({ rows, mine, loading, markets }) {
   const comparing = markets.length > 1
   const columns = useMemo(() => comparing ? [
-    ...COMPARISON_COLUMNS,
+    COMPARISON_COLUMNS[0],
     ...markets.map(market => ({
       key: market, label: MARKET_LABELS[market], text: true, type: 'number',
       value: row => row.marketFits?.[market]?.re,
     })),
+    ...COMPARISON_COLUMNS.slice(1),
     EVAL_COLUMNS.at(-1),
   ] : EVAL_COLUMNS, [comparing, markets])
   const { sorted, sort, onSort } = useTableSort(rows, columns, { key: comparing ? 'ticker' : 'meaning', direction: 'asc' })
@@ -332,23 +338,27 @@ function DripEvaluation({ rows, mine, loading, markets }) {
       <strong>DRIP beat cash in {MARKET_LABELS[markets[0]]} for these holdings you take as cash.</strong> {missed.map(r => r.ticker).join(', ')}
     </div>}
     <div className="holdings-table-wrap dist-table-wrap dist-eval-table-wrap">
-      <table className="holdings-table dist-table dist-eval-table">
-        <thead><tr>{columns.map(column => <DistributionSortHeader key={column.key} column={column} sort={sort} onSort={onSort} />)}</tr></thead>
+      <table className={`holdings-table dist-table dist-eval-table${comparing ? ' dist-eval-table-compare' : ''}`}>
+        <thead><tr>{columns.map(column => <DistributionSortHeader key={column.key} column={column} sort={sort} onSort={onSort}
+          className={comparing && markets.includes(column.key) ? `dist-eval-market-column dist-market-${column.key}` : ''} />)}</tr></thead>
         <tbody>{sorted.map(row => <tr key={row.ticker} title={comparing ? undefined : fitTitle(row.ticker, row.fit, mine.get(row.ticker), markets[0])}>
           <td className="dist-left"><strong>{row.ticker}</strong>{row.description ? <span className="dist-eval-desc"> {row.description}</span> : null}</td>
+          {comparing && markets.map(market => {
+            const fit = row.marketFits?.[market]
+            const label = fit?.label
+            return <td key={market} className={`dist-left dist-eval-market-column dist-market-${market}`}
+              title={fitTitle(row.ticker, fit, mine.get(row.ticker), market)}>
+              <span className="dist-market-name">{MARKET_LABELS[market]}</span>
+              <div className={`dist-fit ${FIT_TONE[label] || 'dist-fit-na'}`}>{COMPARISON_VERDICTS[fit?.call] || label || DASH}</div>
+              {fit?.re != null && <div className="dist-eval-market-edge">DRIP {comparisonEdge.format(fit.re - 1)} vs cash</div>}
+              {fit?.start_price > 0 && <div className="dist-eval-desc">{money(fit.start_price)} → {money(fit.end_price)}{fit.benchmark && ` · ${fit.benchmark}`}</div>}
+            </td>
+          })}
           <td className="dist-left">{row.status}</td>
           {!comparing && <td className="dist-left"><span className={`dist-fit ${FIT_TONE[row.verdict] || 'dist-fit-na'}`}>{row.verdict || DASH}</span></td>}
           <td>{shares(row.shares_held)}</td>
           <td>{row.percent_of_account == null ? DASH : `${(row.percent_of_account * 100).toFixed(2)}%`}</td>
-          {comparing ? markets.map(market => {
-            const fit = row.marketFits?.[market]
-            const label = fit?.label
-            return <td key={market} className="dist-left" title={fitTitle(row.ticker, fit, mine.get(row.ticker), market)}>
-              <span className={`dist-fit ${FIT_TONE[label] || 'dist-fit-na'}`}>{label || DASH}</span>
-              {fit?.re != null && <div className="dist-eval-market-edge">{edgeText(fit.re - 1)}</div>}
-              {fit?.start_price > 0 && <div className="dist-eval-desc">{money(fit.start_price)} → {money(fit.end_price)}{fit.benchmark && ` · ${fit.benchmark}`}</div>}
-            </td>
-          }) : <>
+          {!comparing && <>
             <td className={row.edge == null || Math.abs(row.edge) < 0.02 ? '' : row.edge > 0 ? 'dist-positive' : 'dist-negative'}>{edgeText(row.edge)}</td>
             <td>{row.price_change == null ? DASH : <>{money(row.fit.start_price)} → {money(row.fit.end_price)}
               {row.fit.benchmark && <div className="dist-eval-desc">{row.fit.benchmark} benchmark</div>}</>}</td>

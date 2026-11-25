@@ -101,7 +101,18 @@
 .dist-eval-markets legend { color: var(--text-dim); font-size: .8rem; margin-bottom: .35rem; padding: 0; }
 .dist-eval-rate input { width: 9rem; }
 .dist-eval-rate input[type=date] { width: auto; }
-.dist-eval-market-edge { margin-top: .3rem; }
+.dist-market-current { --dist-market-accent: var(--accent-bright); }
+.dist-market-bull { --dist-market-accent: var(--teal); }
+.dist-market-bear { --dist-market-accent: var(--purple); }
+.dist-market-flat { --dist-market-accent: var(--text-dim-2); }
+.dist-market-name { display: inline-block; border-inline-start: 3px solid var(--dist-market-accent); padding-inline-start: .4rem; color: var(--text-strong); font-weight: 600; }
+.dist-eval-table-compare :is(th, td):first-child { width: 11rem; max-width: 11rem; }
+.dist-eval-table-compare td:first-child .dist-eval-desc { display: block; overflow-wrap: anywhere; }
+.dist-eval-table .dist-eval-market-column { min-width: 8rem; border-inline-start: 1px solid var(--border); }
+.dist-eval-table th.dist-eval-market-column { border-bottom: 2px solid var(--dist-market-accent); }
+.dist-eval-table td.dist-eval-market-column { vertical-align: top; background: color-mix(in srgb, var(--dist-market-accent) 5%, var(--surface)); }
+.dist-eval-market-column .dist-market-name { margin-bottom: .3rem; font-size: .75rem; }
+.dist-eval-market-edge { margin: .3rem 0 .2rem; }
 .dist-eval-callout { border: 1px solid var(--border); border-left-width: 4px; border-radius: 6px; padding: .6rem .85rem; margin: .5rem 0; background: var(--surface); line-height: 1.45; }
 .dist-eval-callout-bad { border-left-color: var(--neg); }
 .dist-eval-callout-good { border-left-color: var(--pos); }
