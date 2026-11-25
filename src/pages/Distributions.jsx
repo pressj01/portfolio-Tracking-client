@@ -14,6 +14,10 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const TABS = [['monthly', 'Monthly Income'], ['analyzer', 'Distribution Analyzer'], ['portfolio', 'Portfolio Income'], ['floor', 'Income Floor'], ['drip', 'DRIP Ledger']]
 const DASH = '—'
 const SHOW_SOLD_KEY = 'distributions.showSoldHoldings'
+// Testing a Builder model lasts for this app session; the chosen model is remembered.
+const USE_MODEL_KEY = 'distributions.useBuilderModel'
+const MODEL_ID_KEY = 'distributions.builderModelId'
+const STALE_BACKEND_MESSAGE = 'The backend that is running started before Portfolio Builder model testing was added, so it cannot model this portfolio yet. Restart the backend (close the app and any “npm run dev:all” windows, then reopen the app) and try again.'
 // `compare` matches --dist-compare in Distributions.css; Plotly cannot read CSS variables.
 const COLORS = { actual: '#32b979', estimate: '#e4aa45', reference: '#55b9ea', latest: '#e8a543', compare: '#a275ee' }
 const money = v => v == null ? DASH : formatMoney(v)
@@ -38,6 +42,7 @@ const YEARLY_COLUMNS = [
   { key: 'actual', label: 'Confirmed income', type: 'number' },
   { key: 'realized_gain', label: 'Realized gain/loss', type: 'number' },
 ]
+const MODEL_YEARLY_COLUMNS = [YEARLY_COLUMNS[0], { ...YEARLY_COLUMNS[1], label: 'Modeled income' }]
 
 async function readJSON(response) {
   const data = await response.json()
@@ -64,7 +69,52 @@ function Chart({ title, subtitle, data, layout }) {
 
 function Empty({ children }) { return <div className="dist-empty">{children}</div> }
 
-function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, setIncludeEstimates, query, setQuery, showSold, setShowSold, heldTickers }) {
+const listNames = names => names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+const shortDate = iso => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+
+// Which portfolio the tabs read: the selected portfolio, or one of its Portfolio Builder models.
+function SourcePicker({ portfolioName, models, useModel, setUseModel, activeModel, setModelId }) {
+  const empty = models != null && !models.length
+  return <div className="dist-controls dist-source" role="group" aria-label="Portfolio to analyze">
+    <label className="dist-checkbox" title="Run every tab on a model portfolio from Portfolio Builder instead of the selected portfolio">
+      <input type="checkbox" checked={Boolean(activeModel)} disabled={models == null || empty} onChange={e => setUseModel(e.target.checked)} />
+      <span>Test a Portfolio Builder model{activeModel ? '' : <> instead of <strong>{portfolioName}</strong></>}</span>
+    </label>
+    {useModel && models?.length > 0 && <label>Model <select aria-label="Portfolio Builder model" value={activeModel?.id || ''} onChange={e => setModelId(Number(e.target.value))}>
+      {models.map(m => <option key={m.id} value={m.id}>{m.name} · {m.holding_count} {m.holding_count === 1 ? 'holding' : 'holdings'} · {formatMoney(m.total_value, { digits: 0 })}</option>)}
+    </select></label>}
+    {empty && <span className="dist-source-hint">No Portfolio Builder models for {portfolioName} yet. <Link to="/portfolio-builder">Build one</Link> to test it here.</span>}
+  </div>
+}
+
+// What "modeled" means, shown above every tab while a model is being tested.
+function ModelBanner({ model }) {
+  const fromRecords = model.pay_dates_from_records || []
+  const onExDate = model.pay_dates_on_ex_date || []
+  const unavailable = model.unavailable || []
+  const priced = model.invested != null ? ` (${money(model.invested)} at the ${model.price_date ? shortDate(model.price_date) : 'latest'} closes)` : ''
+  let timing = ''
+  if (fromRecords.length) {
+    timing = ` Payment dates for ${listNames(fromRecords)} follow how many days after the ex-date your own payment records show ${fromRecords.length === 1 ? 'it pays' : 'they pay'}${onExDate.length ? '; the other holdings are dated on their ex-dates' : ''}.`
+  } else if (onExDate.length) {
+    timing = ' Payments are dated on their ex-dates; the cash usually arrives a few days later.'
+  }
+  const missing = unavailable.length ? ` No market history could be loaded for ${listNames(unavailable)}, so ${unavailable.length === 1 ? 'it is' : 'they are'} left out.` : ''
+  return <div className="dist-model-banner" role="note">
+    <strong>Testing the {model.name} model.</strong> Its income is modeled, not received: each fund&apos;s actual past distributions × the shares this model buys today{priced}, held unchanged back through history.{timing}{missing}
+    {' '}Edit the model in <Link to="/portfolio-builder">Portfolio Builder</Link>.
+  </div>
+}
+
+// Holdings that had not started trading when the selected year began.
+function LateStarterNote({ model, year }) {
+  const late = model?.late_starters || []
+  if (!late.length) return null
+  return <p className="dist-note">Started trading during or after {year}: {late.map(l => `${l.ticker} (${shortDate(l.first_date)})`).join(', ')}. {late.length === 1 ? 'It pays' : 'They pay'} nothing before then, so {year} is {late.length === 1 ? 'partial or empty for it' : 'partial or empty for them'}.</p>
+}
+
+function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, setIncludeEstimates, query, setQuery, showSold, setShowSold, heldTickers, model }) {
+  const confirmed = model ? 'Modeled' : 'Confirmed'
   const { rows, totals, actual, estimated, prev, completed, elapsed, partial, hidden } = useMemo(() => {
     const currentYear = Number(history.as_of.slice(0, 4))
     const isCurrent = history.year === currentYear
@@ -106,21 +156,24 @@ function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, set
         {history.years.map(y => <option key={y} value={y}>{y}</option>)}
       </select></label>
       <label>Filter holdings <input value={query} placeholder="Ticker or fund name" onChange={e => setQuery(e.target.value)} /></label>
-      <label className="dist-checkbox"><input type="checkbox" checked={includeEstimates} onChange={e => setIncludeEstimates(e.target.checked)} /> Include recorded projections</label>
-      <label className="dist-checkbox"><input type="checkbox" checked={showSold} onChange={e => setShowSold(e.target.checked)} /> Show holdings I no longer own</label>
+      <label className="dist-checkbox"><input type="checkbox" checked={includeEstimates} onChange={e => setIncludeEstimates(e.target.checked)} /> {model ? 'Include declared, not yet paid' : 'Include recorded projections'}</label>
+      {!model && <label className="dist-checkbox"><input type="checkbox" checked={showSold} onChange={e => setShowSold(e.target.checked)} /> Show holdings I no longer own</label>}
     </div>
+    {model && <LateStarterNote model={model} year={history.year} />}
     {hidden.count > 0 && <p className="dist-note">Hiding {hidden.count} {hidden.count === 1 ? 'holding' : 'holdings'} you no longer own ({hidden.tickers.join(', ')}), which paid {money(hidden.amount)} in {history.year}. Totals below leave {hidden.count === 1 ? 'it' : 'them'} out; tick “Show holdings I no longer own” to include {hidden.count === 1 ? 'it' : 'them'}.</p>}
-    {sum(estimated) !== 0 && <p className="dist-note">{includeEstimates ? <>Cells marked <span className="dist-estimate-mark">est</span> include recorded projections awaiting broker confirmation.</> : `${money(sum(estimated))} in recorded projections is excluded. Enable them to see estimated payments, including holdings without confirmed records.`}</p>}
+    {sum(estimated) !== 0 && <p className="dist-note">{model
+      ? includeEstimates ? <>Cells marked <span className="dist-estimate-mark">est</span> include distributions already past their ex-date that have not been paid yet.</> : `${money(sum(estimated))} in distributions past their ex-date but not yet paid is excluded.`
+      : includeEstimates ? <>Cells marked <span className="dist-estimate-mark">est</span> include recorded projections awaiting broker confirmation.</> : `${money(sum(estimated))} in recorded projections is excluded. Enable them to see estimated payments, including holdings without confirmed records.`}</p>}
     {history.excluded_duplicate_estimates?.count > 0 && <p className="dist-note">Excluded {history.excluded_duplicate_estimates.count} unsupported duplicate {history.excluded_duplicate_estimates.count === 1 ? 'projection' : 'projections'} ({money(history.excluded_duplicate_estimates.amount)}) for {history.excluded_duplicate_estimates.tickers.join(', ')}. These estimates matched confirmed payments in another account but had no holding or transaction evidence in their own account.</p>}
     <div className="summary-strip">
-      <Metric label={`${history.year} ${partial ? 'YTD' : 'total'}`} value={money(total)} sub={includeEstimates ? `${money(sum(estimated))} projected` : 'Confirmed payment records'} color="dist-positive" />
+      <Metric label={`${history.year} ${partial ? 'YTD' : 'total'}`} value={money(total)} sub={includeEstimates ? `${money(sum(estimated))} ${model ? 'declared, not yet paid' : 'projected'}` : model ? 'Modeled payments' : 'Confirmed payment records'} color="dist-positive" />
       <Metric label="Average completed month" value={money(completed ? sum(totals.slice(0, completed)) / completed : null)} sub={`${completed} completed months`} />
-      <Metric label="Best completed month" value={money(best)} sub={best > 0 ? MONTHS[totals.indexOf(best)] : 'No recorded income'} />
+      <Metric label="Best completed month" value={money(best)} sub={best > 0 ? MONTHS[totals.indexOf(best)] : model ? 'No modeled income' : 'No recorded income'} />
       <Metric label={partial ? 'Current month' : 'December income'} value={money(totals[elapsed - 1])} sub={`${MONTHS[elapsed - 1]}${partial ? ' · partial' : ''}`} />
     </div>
-    <Chart title="Monthly distributions" subtitle={`Cash payments by payment date, ${history.year}.${partial ? ' The current month is partial.' : ''}`}
-      data={[{ type: 'bar', name: 'Confirmed', x: labels, y: actual, marker: { color: COLORS.actual }, hovertemplate: '%{x}<br>Confirmed: $%{y:,.2f}<extra></extra>' },
-        ...(includeEstimates ? [{ type: 'bar', name: 'Projected', x: labels, y: estimated, marker: { color: COLORS.estimate }, hovertemplate: '%{x}<br>Projected: $%{y:,.2f}<extra></extra>' }] : []),
+    <Chart title="Monthly distributions" subtitle={`${model ? `Modeled payments on the ${model.name} model's shares` : 'Cash payments'} by payment date, ${history.year}.${partial ? ' The current month is partial.' : ''}`}
+      data={[{ type: 'bar', name: confirmed, x: labels, y: actual, marker: { color: COLORS.actual }, hovertemplate: `%{x}<br>${confirmed}: $%{y:,.2f}<extra></extra>` },
+        ...(includeEstimates ? [{ type: 'bar', name: model ? 'Declared, unpaid' : 'Projected', x: labels, y: estimated, marker: { color: COLORS.estimate }, hovertemplate: `%{x}<br>${model ? 'Declared, unpaid' : 'Projected'}: $%{y:,.2f}<extra></extra>` }] : []),
         { type: 'scatter', mode: 'lines+markers', name: 'Monthly total', x: labels, y: totals, line: { color: COLORS.reference, width: 2 }, hovertemplate: '%{x}<br>Total: $%{y:,.2f}<extra></extra>' }]}
       layout={{ barmode: 'stack', xaxis: { type: 'category' }, yaxis: { tickprefix: '$', rangemode: 'tozero' }, hovermode: 'x unified' }} />
     <h2>Income by holding</h2>
@@ -130,20 +183,22 @@ function MonthlyIncome({ history, holdings, year, setYear, includeEstimates, set
           const current = partial && index === elapsed
           return <DistributionSortHeader key={column.key} column={current ? { ...column, display: `${column.label}*` } : column} sort={sort} onSort={onSort} className={current ? 'dist-current' : ''} />
         })}</tr></thead>
-        <tbody>{sorted.map(r => <tr key={r.ticker}><td title={r.description || r.ticker}><strong>{r.ticker}</strong></td>{r.values.map((v, i) => <td key={i} className={partial && i === elapsed - 1 ? 'dist-current' : ''} title={r.estimated[i] ? `${money(r.actual[i])} confirmed + ${money(r.estimated[i])} projected${includeEstimates ? '' : ' (excluded)'}` : undefined}>{payoutCell(v)}{includeEstimates && i < elapsed && Boolean(r.estimated[i]) && <span className="dist-estimate-mark">est</span>}</td>)}<td className="dist-positive"><strong>{money(r.total)}</strong>{includeEstimates && r.estimated.some(v => v) && <span className="dist-estimate-mark" title="Total includes projected payments">est</span>}</td></tr>)}</tbody>
+        <tbody>{sorted.map(r => <tr key={r.ticker}><td title={r.description || r.ticker}><strong>{r.ticker}</strong></td>{r.values.map((v, i) => <td key={i} className={partial && i === elapsed - 1 ? 'dist-current' : ''} title={r.estimated[i] ? `${money(r.actual[i])} ${confirmed.toLowerCase()} + ${money(r.estimated[i])} ${model ? 'declared, not yet paid' : 'projected'}${includeEstimates ? '' : ' (excluded)'}` : undefined}>{payoutCell(v)}{includeEstimates && i < elapsed && Boolean(r.estimated[i]) && <span className="dist-estimate-mark">est</span>}</td>)}<td className="dist-positive"><strong>{money(r.total)}</strong>{includeEstimates && r.estimated.some(v => v) && <span className="dist-estimate-mark" title={model ? 'Total includes declared payments not yet paid' : 'Total includes projected payments'}>est</span>}</td></tr>)}</tbody>
         <tfoot>
           <tr><td>Total</td>{totals.map((v, i) => <td key={i} className={partial && i === elapsed - 1 ? 'dist-current' : ''}>{money(v)}</td>)}<td>{money(total)}</td></tr>
           <tr><td>MoM change</td>{changes.map((v, i) => <td key={i} className={tone(v)}>{deltaMoney(v)}</td>)}<td>{DASH}</td></tr>
           <tr><td>MoM %</td>{growth.map((v, i) => <td key={i} className={tone(v)}>{signedPercent(v)}</td>)}<td>{DASH}</td></tr>
         </tfoot>
       </table>
-      {!rows.length && <Empty>No holding-level payment records match this selection.</Empty>}
+      {!rows.length && <Empty>{model ? 'No modeled payments match this selection.' : 'No holding-level payment records match this selection.'}</Empty>}
     </div>
-    <p className="dist-note">{partial ? '* Current month is in progress; month-over-month change compares completed months only. ' : ''}Dashes indicate no recorded distribution or a future month. January compares with the preceding December when available. Imported aggregate-only monthly totals cannot be attributed to individual tickers.</p>
+    <p className="dist-note">{partial ? '* Current month is in progress; month-over-month change compares completed months only. ' : ''}{model
+      ? "Dashes indicate no distribution or a future month. January compares with the preceding December. Every month uses the model's current share counts, so a change from month to month comes from the funds' payouts, not from buying or selling."
+      : 'Dashes indicate no recorded distribution or a future month. January compares with the preceding December when available. Imported aggregate-only monthly totals cannot be attributed to individual tickers.'}</p>
   </>
 }
 
-function SortableTable({ columns, rows, initialSort = 'ticker', onTicker, selected, footer, groupBy, groupTotals }) {
+function SortableTable({ columns, rows, initialSort = 'ticker', onTicker, selected, footer, groupBy, groupTotals, scope = 'this portfolio' }) {
   const sortColumns = useMemo(() => columns.map(col => ({ ...col, type: col.type || (col.text ? 'string' : 'number') })), [columns])
   const { sorted, sort, onSort } = useTableSort(rows, sortColumns, { key: initialSort, direction: 'asc' })
   const groupNames = groupBy ? [...new Set(sorted.map(groupBy))] : []
@@ -153,7 +208,7 @@ function SortableTable({ columns, rows, initialSort = 'ticker', onTicker, select
   const renderRow = r => <tr key={r.ticker} className={[selected === r.ticker && 'dist-selected-row', r.compare && 'dist-compare-row'].filter(Boolean).join(' ')}>{columns.map(col => <td key={col.key} className={`${col.text ? 'dist-left' : ''} ${col.highlight ? 'dist-highlight' : ''} ${col.signed ? tone(r[col.key]) : ''}`}
       title={col.key === 'ticker' ? r.message || r.description : col.key === 'description' ? r.description : undefined}>
       {col.key === 'ticker' && onTicker ? <button className="dist-ticker" type="button" onClick={() => onTicker(r.ticker)}>{r.ticker}</button> : col.format ? col.format(r[col.key], r) : r[col.key] ?? DASH}
-      {col.key === 'ticker' && r.compare && <span className="dist-compare-tag" title="Added to compare; not held in this portfolio">compare</span>}
+      {col.key === 'ticker' && r.compare && <span className="dist-compare-tag" title={`Added to compare; not held in ${scope}`}>compare</span>}
     </td>)}</tr>
   return <div className="holdings-table-wrap dist-table-wrap"><table className="holdings-table dist-table">
     <thead><tr>{columns.map(col => <DistributionSortHeader key={col.key} column={col} sort={sort} onSort={onSort} />)}</tr></thead>
@@ -185,7 +240,7 @@ const ANALYZER_COLUMNS = [
 // Wrapper avoids Array/column callbacks passing a row as the optional precision.
 for (const col of ANALYZER_COLUMNS) if (col.format === percent) col.format = v => percent(v)
 
-function Analyzer({ rows, loading, holdings, heldTickers, custom, setCustom, allHoldings, setAllHoldings, refresh }) {
+function Analyzer({ rows, loading, holdings, heldTickers, custom, setCustom, allHoldings, setAllHoldings, refresh, scope = 'this portfolio' }) {
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(null)
@@ -219,7 +274,7 @@ function Analyzer({ rows, loading, holdings, heldTickers, custom, setCustom, all
       <button type="button" className="btn" onClick={refresh} disabled={loading}>Reload market data</button>
     </div>
     {custom.length > 0 && <div className="dist-chips">{custom.map(t => <button key={t} className="dist-chip" type="button" title={`Remove ${t} from comparison`} onClick={() => setCustom(custom.filter(v => v !== t))}>{t} ×</button>)}</div>}
-    {alreadyHeld.length > 0 && <p className="dist-note">You already hold {alreadyHeld.join(', ')} in this portfolio, so {alreadyHeld.length === 1 ? 'it was' : 'they were'} already in the table below. {alreadyHeld.length === 1 ? 'It now stays' : 'They now stay'} on the chart even when ranked below the top 30.</p>}
+    {alreadyHeld.length > 0 && <p className="dist-note">{scope === 'this portfolio' ? 'You already hold' : 'The model already holds'} {alreadyHeld.join(', ')}{scope === 'this portfolio' ? ' in this portfolio' : ''}, so {alreadyHeld.length === 1 ? 'it was' : 'they were'} already in the table below. {alreadyHeld.length === 1 ? 'It now stays' : 'They now stay'} on the chart even when ranked below the top 30.</p>}
     {loading && <div className="dist-loading" role="status"><span className="spinner" /> Loading historical prices and cash distributions…</div>}
     {chartRows.length > 0 && <Chart title="Annualized payout yield range" subtitle={`Historical low to high range, with average and latest payout yield${ranged.length > chartRows.length ? ` (top 30 by average yield${custom.length ? ', plus the funds you added to compare' : ''})` : ''}.${compareRows.length ? ' Funds you added to compare are in purple.' : ''}`}
       data={[...(ownedRows.length ? [rangeTrace(ownedRows, 'Historical average', COLORS.reference)] : []),
@@ -230,7 +285,7 @@ function Analyzer({ rows, loading, holdings, heldTickers, custom, setCustom, all
         yaxis: { ticksuffix: '%', rangemode: 'tozero' }, margin: { t: 20, l: 65, r: 20, b: 70 } }} />}
     <h2>All fund distributions</h2>
     {!loading && visible.some(r => r.status === 'unavailable') && <p className="dist-note">Market history unavailable for {visible.filter(r => r.status === 'unavailable').length} of {visible.length} displayed funds; see the data status column or retry.</p>}
-    <SortableTable rows={visible} columns={ANALYZER_COLUMNS} onTicker={setSelected} selected={detail?.ticker} />
+    <SortableTable rows={visible} columns={ANALYZER_COLUMNS} onTicker={setSelected} selected={detail?.ticker} scope={scope} />
     {!loading && !holdings.length && !custom.length && <p className="dist-note">Add a fund ticker above to compare its distribution history.</p>}
     <p className="dist-note">Scroll the table horizontally for all statistics. Annualized payout yield = cash per share ÷ closing price before the ex-date × payments per year. Historical cadence is inferred from payout intervals; trailing 12M uses the latest available close. Down − Up is a percentage-point difference. These are historical distributions, not total returns or guaranteed future yields. Missing or insufficient observations display a dash.</p>
     {detail && <Chart title={`${detail.ticker} payout yield over time`} subtitle="Select a fund in the table to inspect individual payment yields."
@@ -254,9 +309,11 @@ const PORTFOLIO_COLUMNS = [
   { key: 'status', label: 'Data status', text: true },
 ]
 
-function PortfolioIncome({ holdings, history, market, loading }) {
+function PortfolioIncome({ holdings, history, market, loading, model }) {
   const [groupByCategory, setGroupByCategory] = useState(true)
-  const yearlySort = useTableSort(history?.yearly || [], YEARLY_COLUMNS, { key: 'year', direction: 'asc' })
+  // A model has never sold anything, so it has no realized gains to show.
+  const yearlyColumns = model ? MODEL_YEARLY_COLUMNS : YEARLY_COLUMNS
+  const yearlySort = useTableSort(history?.yearly || [], yearlyColumns, { key: 'year', direction: 'asc' })
   const rows = useMemo(() => {
     const cost = h => h.original_purchase_value ?? h.purchase_value ?? null
     const totalCost = sum(holdings.map(cost))
@@ -296,29 +353,38 @@ function PortfolioIncome({ holdings, history, market, loading }) {
       <Metric label="Current value" value={money(total.value)} sub={`${signedPercent(total.cost_change)} vs cost`} />
       <Metric label="Trailing 12M annual income" value={money(total.ttm_income)} sub={`${money(total.ttm_income == null ? null : total.ttm_income / 12)} / month · ${percent(total.ttm_yoc, 2)} yield on cost · ${total.ttm_count}/${rows.length} holdings`} color="dist-positive" />
       <Metric label="Latest payout run rate" value={money(total.run_income)} sub={`${money(total.run_income == null ? null : total.run_income / 12)} / month · ${percent(total.run_yoc, 2)} yield on cost · ${total.run_count}/${rows.length} holdings`} color="dist-positive" />
-      <Metric label="Portfolio income past 30 days" value={money(history?.past_30_days.actual)} sub="Confirmed payments across all holdings" />
+      <Metric label={model ? 'Model income past 30 days' : 'Portfolio income past 30 days'} value={money(history?.past_30_days.actual)} sub={model ? "Modeled payments on the model's shares" : 'Confirmed payments across all holdings'} />
     </div>
     {top.length > 0 && <Chart title="Income contribution by holding" subtitle="Trailing 12-month distributions and latest payout annualized, both applied to today's shares. Up to 12 largest available contributors."
       data={[{ type: 'bar', name: 'Trailing 12M', x: top.map(r => r.ticker), y: top.map(r => r.ttm_income), marker: { color: COLORS.reference }, hovertemplate: '%{x}<br>12M: $%{y:,.2f}<extra></extra>' },
         { type: 'bar', name: 'Latest run rate', x: top.map(r => r.ticker), y: top.map(r => r.run_income), marker: { color: COLORS.actual }, hovertemplate: '%{x}<br>Run rate: $%{y:,.2f}<extra></extra>' }]}
       layout={{ barmode: 'group', xaxis: { type: 'category' }, yaxis: { tickprefix: '$', rangemode: 'tozero' } }} />}
     <div className="dist-controls"><h2>Income positions</h2><label className="dist-checkbox"><input type="checkbox" checked={groupByCategory} onChange={e => setGroupByCategory(e.target.checked)} /> Group by portfolio category</label></div>
-    {rows.length ? <SortableTable rows={rows} columns={PORTFOLIO_COLUMNS} footer={{ ...total, ticker: 'Total' }} groupBy={groupByCategory ? r => r.category : null} groupTotals={totalsFor} /> : <Empty>No current income-paying holdings in this portfolio.</Empty>}
-    <p className="dist-note">Scroll the table horizontally for all statistics. When grouped, sorting stays within each category; uncheck grouping to sort all holdings together. Cost weight is based on the original cost of the displayed income holdings. Yield on cost divides modeled annual or monthly income by original cost. Both income estimates use current shares; past 12-month cash actually received may differ. Totals include available market data only; yield-on-cost totals use holdings with both a positive cost and the corresponding estimate.</p>
-    <h2>Recorded portfolio income &amp; realized gains</h2>
-    <div className="summary-strip">
-      <Metric label="Lifetime recorded income" value={money(lifetimeIncome)} color="dist-positive" />
-      <Metric label="Lifetime recorded realized gains/losses" value={deltaMoney(lifetimeGain)} color={tone(lifetimeGain)} />
-      <Metric label="Recorded income + realized gains" value={lifetimeGain == null ? DASH : money(lifetimeIncome + lifetimeGain)} color={tone(lifetimeIncome + (lifetimeGain || 0))} />
-    </div>
+    {rows.length ? <SortableTable rows={rows} columns={PORTFOLIO_COLUMNS} footer={{ ...total, ticker: 'Total' }} groupBy={groupByCategory ? r => r.category : null} groupTotals={totalsFor} /> : <Empty>{model ? 'No holding in this model pays distributions.' : 'No current income-paying holdings in this portfolio.'}</Empty>}
+    <p className="dist-note">Scroll the table horizontally for all statistics. When grouped, sorting stays within each category; uncheck grouping to sort all holdings together. Cost weight is based on the original cost of the displayed income holdings{model ? ' (for a model, the dollars it puts in each holding)' : ''}. Yield on cost divides modeled annual or monthly income by original cost. Both income estimates use current shares; past 12-month cash actually received may differ. Totals include available market data only; yield-on-cost totals use holdings with both a positive cost and the corresponding estimate.</p>
+    {model ? <>
+      <h2>Modeled income by year</h2>
+      <div className="summary-strip">
+        <Metric label="Modeled income, all years" value={money(lifetimeIncome)} sub={history?.yearly?.length ? `${history.yearly[0].year} – ${history.yearly.at(-1).year} on today's model shares` : undefined} color="dist-positive" />
+      </div>
+    </> : <>
+      <h2>Recorded portfolio income &amp; realized gains</h2>
+      <div className="summary-strip">
+        <Metric label="Lifetime recorded income" value={money(lifetimeIncome)} color="dist-positive" />
+        <Metric label="Lifetime recorded realized gains/losses" value={deltaMoney(lifetimeGain)} color={tone(lifetimeGain)} />
+        <Metric label="Recorded income + realized gains" value={lifetimeGain == null ? DASH : money(lifetimeIncome + lifetimeGain)} color={tone(lifetimeIncome + (lifetimeGain || 0))} />
+      </div>
+    </>}
     {(history?.yearly || []).length > 0 && <div className="dist-yearly">
-      <div className="holdings-table-wrap dist-table-wrap"><table className="holdings-table dist-table"><thead><tr>{YEARLY_COLUMNS.map(column => <DistributionSortHeader key={column.key} column={column} sort={yearlySort.sort} onSort={yearlySort.onSort} />)}</tr></thead><tbody>
-        {yearlySort.sorted.map(r => <tr key={r.year}><td>{r.year}{Number(history.as_of.slice(0, 4)) === r.year ? ' YTD' : ''}</td><td>{money(r.actual)}</td><td className={tone(r.realized_gain)}>{deltaMoney(r.realized_gain)}</td></tr>)}
+      <div className="holdings-table-wrap dist-table-wrap"><table className="holdings-table dist-table"><thead><tr>{yearlyColumns.map(column => <DistributionSortHeader key={column.key} column={column} sort={yearlySort.sort} onSort={yearlySort.onSort} />)}</tr></thead><tbody>
+        {yearlySort.sorted.map(r => <tr key={r.year}><td>{r.year}{Number(history.as_of.slice(0, 4)) === r.year ? ' YTD' : ''}</td><td>{money(r.actual)}</td>{!model && <td className={tone(r.realized_gain)}>{deltaMoney(r.realized_gain)}</td>}</tr>)}
       </tbody></table></div>
-      <Chart title="Recorded income over time" data={[{ type: 'bar', x: history.yearly.map(r => `${r.year}${Number(history.as_of.slice(0, 4)) === r.year ? ' YTD' : ''}`), y: history.yearly.map(r => r.actual), marker: { color: COLORS.actual }, hovertemplate: '%{x}<br>Income: $%{y:,.2f}<extra></extra>' }]}
+      <Chart title={model ? 'Modeled income over time' : 'Recorded income over time'} data={[{ type: 'bar', x: history.yearly.map(r => `${r.year}${Number(history.as_of.slice(0, 4)) === r.year ? ' YTD' : ''}`), y: history.yearly.map(r => r.actual), marker: { color: COLORS.actual }, hovertemplate: '%{x}<br>Income: $%{y:,.2f}<extra></extra>' }]}
         layout={{ height: 240, xaxis: { type: 'category' }, yaxis: { tickprefix: '$', rangemode: 'tozero' }, showlegend: false }} />
     </div>}
-    <p className="dist-note">Lifetime figures cover available payment and realized sale records for the entire selected portfolio, including sold holdings; they are not total return on current positions. See <Link to="/growth">Growth</Link> for transaction-aware portfolio returns.</p>
+    <p className="dist-note">{model
+      ? <>Each year is the model&apos;s current share counts times what each fund paid that year; a fund pays nothing in the years before it started trading. These are distributions only, not total return. See <Link to="/portfolio-builder">Portfolio Builder</Link> for the model&apos;s returns and grade.</>
+      : <>Lifetime figures cover available payment and realized sale records for the entire selected portfolio, including sold holdings; they are not total return on current positions. See <Link to="/growth">Growth</Link> for transaction-aware portfolio returns.</>}</p>
   </>
 }
 
@@ -345,23 +411,62 @@ export default function Distributions() {
   const [refresh, setRefresh] = useState(0)
   const [marketRefresh, setMarketRefresh] = useState(0)
   const [marketState, setMarketState] = useState(null)
-  const snapshotKey = `${profileQueryString}:${refresh}`
+  // Source: the selected portfolio (default) or one of its Portfolio Builder models.
+  const [useModel, setUseModelState] = useState(() => {
+    try { return sessionStorage.getItem(USE_MODEL_KEY) === '1' } catch { return false }
+  })
+  const [modelId, setModelIdState] = useState(() => {
+    try { return Number(localStorage.getItem(MODEL_ID_KEY)) || null } catch { return null }
+  })
+  const setUseModel = value => {
+    setUseModelState(value)
+    try { sessionStorage.setItem(USE_MODEL_KEY, value ? '1' : '0') } catch { /* private mode */ }
+  }
+  const setModelId = value => {
+    setModelIdState(value)
+    try { localStorage.setItem(MODEL_ID_KEY, String(value)) } catch { /* private mode */ }
+  }
+  const [modelsState, setModelsState] = useState(null)
+
+  useEffect(() => {
+    let stale = false
+    pf('/api/builder/portfolios').then(readJSON).then(data => { if (!stale) setModelsState({ key: profileQueryString, list: data.portfolios || [] }) })
+      .catch(() => { if (!stale) setModelsState({ key: profileQueryString, list: [] }) })
+    return () => { stale = true }
+  }, [pf, profileQueryString, refresh])
+
+  const models = modelsState?.key === profileQueryString ? modelsState.list : null
+  const activeModel = useModel && models?.length ? models.find(m => m.id === modelId) || models[0] : null
+  const builderId = activeModel?.id ?? null
+  // Wait for the model list before loading, so a remembered model does not first load the portfolio.
+  const sourceReady = !useModel || models != null
+  const snapshotKey = `${profileQueryString}:${refresh}:${builderId ? `model:${builderId}` : 'own'}`
   const historyKey = `${snapshotKey}:${year || 'current'}`
 
   useEffect(() => {
+    if (!sourceReady) return undefined
     let stale = false
-    pf('/api/holdings').then(readJSON).then(rows => { if (!stale) setSnapshot({ key: snapshotKey, rows }) })
-      .catch(e => { if (!stale) setSnapshot({ key: snapshotKey, error: e.message }) })
+    const path = builderId ? `/api/portfolio-distributions/model-holdings?builder_id=${builderId}` : '/api/holdings'
+    pf(path).then(readJSON).then(body => {
+      if (!stale) setSnapshot(builderId ? { key: snapshotKey, rows: body.rows, model: body.model } : { key: snapshotKey, rows: body })
+    }).catch(e => { if (!stale) setSnapshot({ key: snapshotKey, error: builderId && e.message === 'Not found' ? STALE_BACKEND_MESSAGE : e.message }) })
     return () => { stale = true }
-  }, [pf, snapshotKey])
+  }, [pf, snapshotKey, builderId, sourceReady])
 
   useEffect(() => {
+    if (!sourceReady) return undefined
     let stale = false
-    const path = `/api/portfolio-distributions${year ? `?year=${year}` : ''}`
-    pf(path).then(readJSON).then(data => { if (!stale) setHistoryState({ key: historyKey, data }) })
-      .catch(e => { if (!stale) setHistoryState({ key: historyKey, error: e.message }) })
+    const params = new URLSearchParams()
+    if (year) params.set('year', year)
+    if (builderId) params.set('builder_id', builderId)
+    const query = params.toString()
+    const path = `/api/portfolio-distributions${query ? `?${query}` : ''}`
+    pf(path).then(readJSON).then(data => {
+      // A backend from before the model tester ignores builder_id and returns the portfolio's own records.
+      if (!stale) setHistoryState(builderId && !data.model ? { key: historyKey, error: STALE_BACKEND_MESSAGE } : { key: historyKey, data })
+    }).catch(e => { if (!stale) setHistoryState({ key: historyKey, error: e.message }) })
     return () => { stale = true }
-  }, [pf, historyKey, year])
+  }, [pf, historyKey, year, builderId, sourceReady])
 
   const currentSnapshot = snapshot?.key === snapshotKey ? snapshot : null
   const currentHistory = historyState?.key === historyKey ? historyState : null
@@ -369,10 +474,15 @@ export default function Distributions() {
   const incomeHoldings = useMemo(() => holdings.filter(isIncomeHolding), [holdings])
   const heldTickers = useMemo(() => new Set(holdings.filter(h => Number(h.quantity) > 0).map(h => String(h.ticker).toUpperCase())), [holdings])
   // Whether each held ticker reinvests today (the Holdings DRIP boxes); on Owner, in how many of its accounts.
+  // A model has no DRIP setting: the ledger shows it as if every payment were reinvested.
   const dripStatus = useMemo(() => {
     const out = new Map()
     for (const h of holdings) {
       if (!(Number(h.quantity) > 0)) continue
+      if (h.model) {
+        out.set(String(h.ticker).toUpperCase(), { model: true, on: 0, total: 0, shares_held: Number(h.quantity), percent_of_account: h.percent_of_account })
+        continue
+      }
       const accounts = Array.isArray(h.reinvest_accounts) ? h.reinvest_accounts : null
       const status = accounts
         ? { on: accounts.filter(a => a.reinvest).length, total: accounts.length }
@@ -417,22 +527,28 @@ export default function Distributions() {
   const marketRows = marketReady ? marketState.rows : []
   const market = new Map(marketRows.map(row => [row.ticker, row]))
   const loadingMarket = marketEnabled && Boolean(symbolKey) && !marketReady
-  const loading = !currentSnapshot || !currentHistory
+  const loading = !sourceReady || !currentSnapshot || !currentHistory
   const error = currentSnapshot?.error || currentHistory?.error
   const data = currentHistory?.data
+  // The model's name and pricing (holdings call) and its coverage notes (history call).
+  const model = activeModel && !loading && !error ? { ...currentSnapshot?.model, ...data?.model, id: activeModel.id, name: activeModel.name } : null
+  const sourceName = activeModel ? activeModel.name : currentProfileName
+  const viewKey = `${profileQueryString}:${builderId ? `model:${builderId}` : 'own'}`
 
   return <div className="page dashboard distributions-page">
-    <header className="dist-page-header"><div><h1>Distributions</h1><p className="dist-note">Track payment history, compare payout yields and understand where portfolio income comes from. <strong>{currentProfileName}</strong>{data ? ` · through ${data.as_of}` : ''}</p></div>
+    <header className="dist-page-header"><div><h1>Distributions</h1><p className="dist-note">Track payment history, compare payout yields and understand where portfolio income comes from. <strong>{sourceName}</strong>{activeModel ? ` (Portfolio Builder model of ${currentProfileName})` : ''}{data ? ` · through ${data.as_of}` : ''}</p></div>
       <button type="button" className="btn" onClick={() => setRefresh(v => v + 1)} disabled={loading}>Refresh data</button></header>
+    <SourcePicker portfolioName={currentProfileName} models={models} useModel={useModel} setUseModel={setUseModel} activeModel={activeModel} setModelId={setModelId} />
+    {model && <ModelBanner model={model} />}
     <div className="tabs dist-tabs" aria-label="Distribution views">{TABS.map(([id, label]) => <button key={id} type="button" aria-pressed={tab === id} className={`tab${tab === id ? ' active' : ''}`} onClick={() => setTab(id)}>{label}</button>)}</div>
     {error && <div className="alert alert-error" role="alert">{error}</div>}
-    {loading && <div className="dist-loading" role="status"><span className="spinner" /> Loading portfolio distributions…</div>}
+    {loading && <div className="dist-loading" role="status"><span className="spinner" /> {activeModel ? `Modeling ${activeModel.name}'s distributions from each fund's history…` : 'Loading portfolio distributions…'}</div>}
     {!loading && !error && data && <>
-      {tab === 'monthly' && <MonthlyIncome history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={includeEstimates} setIncludeEstimates={setIncludeEstimates} query={monthlyQuery} setQuery={setMonthlyQuery} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} />}
-      {tab === 'analyzer' && <Analyzer rows={symbols.map(ticker => market.get(ticker) || { ticker, status: marketReady ? 'unavailable' : 'loading', message: marketReady ? 'No market history returned for this symbol.' : 'Loading…' })} loading={loadingMarket} holdings={incomeHoldings} heldTickers={heldTickers} custom={custom} setCustom={setCustom} allHoldings={allHoldings} setAllHoldings={setAllHoldings} refresh={() => setMarketRefresh(v => v + 1)} />}
-      {tab === 'portfolio' && <PortfolioIncome holdings={incomeHoldings} history={data} market={market} loading={loadingMarket} />}
-      {tab === 'drip' && <DistributionDripLedger key={profileQueryString} refreshKey={refresh} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} dripStatus={dripStatus} />}
-      {tab === 'floor' && <DistributionIncomeFloor key={profileQueryString} history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={floorIncludeEstimates} setIncludeEstimates={setFloorIncludeEstimates} />}
+      {tab === 'monthly' && <MonthlyIncome history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={includeEstimates} setIncludeEstimates={setIncludeEstimates} query={monthlyQuery} setQuery={setMonthlyQuery} showSold={model ? true : showSold} setShowSold={setShowSold} heldTickers={heldTickers} model={model} />}
+      {tab === 'analyzer' && <Analyzer rows={symbols.map(ticker => market.get(ticker) || { ticker, status: marketReady ? 'unavailable' : 'loading', message: marketReady ? 'No market history returned for this symbol.' : 'Loading…' })} loading={loadingMarket} holdings={incomeHoldings} heldTickers={heldTickers} custom={custom} setCustom={setCustom} allHoldings={allHoldings} setAllHoldings={setAllHoldings} refresh={() => setMarketRefresh(v => v + 1)} scope={model ? 'this model' : 'this portfolio'} />}
+      {tab === 'portfolio' && <PortfolioIncome holdings={incomeHoldings} history={data} market={market} loading={loadingMarket} model={model} />}
+      {tab === 'drip' && <DistributionDripLedger key={viewKey} refreshKey={refresh} showSold={model ? true : showSold} setShowSold={model ? null : setShowSold} heldTickers={heldTickers} dripStatus={dripStatus} model={model} />}
+      {tab === 'floor' && <DistributionIncomeFloor key={viewKey} history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={floorIncludeEstimates} setIncludeEstimates={setFloorIncludeEstimates} model={model} />}
     </>}
   </div>
 }

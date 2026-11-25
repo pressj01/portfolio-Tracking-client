@@ -56,10 +56,10 @@ function FloorCard({ label, value, detail, color = '' }) {
     <div className={`summary-value ${color}`}>{value}</div>{detail && <div className="summary-sub">{detail}</div>}</div>
 }
 
-function FloorChart({ rows, includeEstimates, floorMode, hasCore }) {
+function FloorChart({ rows, includeEstimates, floorMode, hasCore, modeled }) {
   const x = rows.map(monthLabel)
   const groups = ['core', 'satellite', 'unassigned'].filter(group => rows.some(r => r[group] !== 0) || group === 'core' && hasCore)
-  const traces = groups.map(group => ({ type: 'bar', name: `${GROUP_LABELS[group]} (confirmed)`, x, y: rows.map(r => r[group]),
+  const traces = groups.map(group => ({ type: 'bar', name: `${GROUP_LABELS[group]} (${modeled ? 'modeled' : 'confirmed'})`, x, y: rows.map(r => r[group]),
     marker: { color: GROUP_COLORS[group] },
     ...(group === 'core' ? { text: rows.map(r => r.core > 0 && r.coreCoverage != null ? multiple(r.coreCoverage) : ''), textposition: 'inside', insidetextanchor: 'middle', textfont: { color: '#fff', size: 12 } } : {}),
     hovertemplate: `%{x}<br>${GROUP_LABELS[group]}: $%{y:,.2f}${group === 'core' ? '<br>Core coverage: %{customdata}' : ''}<extra></extra>`,
@@ -114,10 +114,12 @@ function FloorStressTest({ rows, history, tickers, hasCore }) {
   </section>
 }
 
-export default function DistributionIncomeFloor({ history, holdings, year, setYear, includeEstimates, setIncludeEstimates }) {
+export default function DistributionIncomeFloor({ history, holdings, year, setYear, includeEstimates, setIncludeEstimates, model }) {
   const pf = useProfileFetch()
   const { isAggregate, aggregateId, profileId } = useProfile()
-  const preferenceKey = `distribution-income-floor:${isAggregate ? `aggregate:${aggregateId}` : `profile:${profileId}`}`
+  // A Portfolio Builder model keeps its own core/satellite assignments.
+  const preferenceKey = model ? `distribution-income-floor:builder:${model.id}`
+    : `distribution-income-floor:${isAggregate ? `aggregate:${aggregateId}` : `profile:${profileId}`}`
   const [preferences, setPreferences] = useState(() => readPreferences(preferenceKey))
   const [plansState, setPlansState] = useState(null)
   const [planData, setPlanData] = useState(null)
@@ -209,8 +211,9 @@ export default function DistributionIncomeFloor({ history, holdings, year, setYe
       <label>Portfolio must fund <select value={fundingMode} onChange={e => changePreferences({ fundingMode: e.target.value })}>
         <option value="net">Expenses after other income</option><option value="all">All expenses</option>
       </select></label>
-      <label className="dist-checkbox"><input type="checkbox" checked={includeEstimates} onChange={e => setIncludeEstimates(e.target.checked)} /> Include recorded projections</label>
+      <label className="dist-checkbox"><input type="checkbox" checked={includeEstimates} onChange={e => setIncludeEstimates(e.target.checked)} /> {model ? 'Include declared, not yet paid' : 'Include recorded projections'}</label>
     </div>
+    {model && <p className="dist-note">Testing the {model.name} model: “confirmed” payments on this tab are the model&apos;s modeled payments (each fund&apos;s past distributions on the shares the model buys today), and projections are distributions past their ex-date that have not been paid yet. The floor comes from your own Cash Flow plan, so this shows whether the model&apos;s income would have covered it.{model.late_starters?.length > 0 ? ` ${model.late_starters.map(l => l.ticker).join(', ')} started trading during or after ${history.year}, so ${model.late_starters.length === 1 ? 'it pays' : 'they pay'} nothing before then.` : ''}</p>}
     <p className="dist-note">The floor is based on the saved <Link to="/cash-flow">Cash Flow &amp; Sustainability</Link> plan{selectedPlan?.source_plan_name ? ` (budget linked from ${selectedPlan.source_plan_name})` : ''}. Changes to the budget or tax assumptions can be made there; this tab does not change them.</p>
     {includeEstimates && history.excluded_duplicate_estimates?.count > 0 && <p className="dist-note">Excluded {money(history.excluded_duplicate_estimates.amount)} in unsupported duplicate projections for {history.excluded_duplicate_estimates.tickers.join(', ')} from the comparison.</p>}
     {error && <div className="alert alert-error" role="alert">{error} <button type="button" className="btn btn-sm" onClick={() => setRetry(v => v + 1)}>Retry</button></div>}
@@ -241,7 +244,7 @@ export default function DistributionIncomeFloor({ history, holdings, year, setYe
               {Object.entries(GROUP_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
             </select></td></tr>)}</tbody></table>{!displayedTickers.length && <div className="dist-empty">No matching income tickers.</div>}</div>
       </section>}
-      {rows.length > 0 && <FloorChart rows={rows} includeEstimates={includeEstimates} floorMode={floorMode} hasCore={Boolean(groups.core.length)} />}
+      {rows.length > 0 && <FloorChart rows={rows} includeEstimates={includeEstimates} floorMode={floorMode} hasCore={Boolean(groups.core.length)} modeled={Boolean(model)} />}
       {rows.length > 0 && <FloorStressTest rows={rows} history={history} tickers={tickers} hasCore={Boolean(groups.core.length)} />}
       <h2>Monthly floor coverage</h2>
       <div className="holdings-table-wrap dist-table-wrap"><table className="holdings-table dist-table dist-floor-coverage"><thead><tr>{coverageColumns.map(column => <DistributionSortHeader key={column.key} column={column} sort={coverageSort.sort} onSort={coverageSort.onSort} />)}
