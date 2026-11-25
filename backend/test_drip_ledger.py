@@ -193,12 +193,25 @@ def test_modeled_extra_income_uses_shares_owned_on_ex_date(connection):
     assert feb["payments"][0]["shares_held"] == 120
 
 
-def test_ticker_latest_close_is_independent_of_last_payment_month(connection):
-    seed_compounding(connection)
-    market = flat_market(D("2025-12-01"), TODAY, lambda day: 10 if day.month < 4 else 13)
-    result = build_drip_ledger(connection, [2], ["MNY"], "2026-01", "2026-03", markets={"MNY": market}, today=TODAY)
-    assert result["rows"][-1]["month_end_price"] == 10
-    assert result["tickers"][0]["latest_close"] == 13
+def test_actual_and_modeled_drip_income_follow_ex_dates_across_months(connection):
+    hold(connection, "EX", 2, 110, "Y")
+    trade(connection, "EX", 2, "2025-12-01", 100, 10)
+    pay(connection, "EX", 2, "2026-01-29", 100, ex="2026-01-27")
+    trade(connection, "EX", 2, "2026-01-30", 10, 10, notes="[DRIP] Reinvest Shares")
+    pay(connection, "EX", 2, "2026-02-05", 110, ex="2026-02-02")
+    pay(connection, "EX", 2, "2026-02-20", 100, ex="2026-01-28")
+    pay(connection, "EX", 2, "2026-03-10", 110, ex="2026-02-06")
+    connection.commit()
+
+    market = flat_market(D("2025-12-01"), TODAY, 10)
+    result = build_drip_ledger(connection, [2], ["EX"], "2026-01", "2026-03", model_all=True,
+                               markets={"EX": market}, today=TODAY)
+    rows = by_month(result["rows"], "EX")
+    feb, mar = rows["2026-02"], rows["2026-03"]
+    assert [p["shares_held"] for p in feb["payments"]] == [110, 100]
+    assert (feb["income_from_drip"], feb["extra_income"]) == (10, 0)
+    assert mar["payments"][0]["shares_held"] == 121
+    assert (mar["income_from_drip"], mar["extra_income"]) == (21, 11)
 
 
 def test_cash_payments_show_only_when_the_account_reinvests_and_are_modeled_on_request(connection):
@@ -319,6 +332,8 @@ def test_owner_checkbox_sets_the_only_account_that_holds_a_ticker(connection):
     for flag in ("Y", "N"):
         response = client.put("/api/holdings/SOLE?profile_id=1", json={"reinvest": flag, "reinvest_all_accounts": True})
         assert response.status_code == 200, response.get_json()
+        app_module._sync_owner_drip_flags(connection, ["SOLE"])
+        connection.commit()
         rows = {r["profile_id"]: r["reinvest"] for r in connection.execute(
             "SELECT profile_id, reinvest FROM all_account_info WHERE ticker = 'SOLE'")}
         assert rows == {1: flag, 2: flag, 4: "N"}
@@ -326,16 +341,19 @@ def test_owner_checkbox_sets_the_only_account_that_holds_a_ticker(connection):
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
-def test_ledger_endpoints_read_owner_member_accounts(connection, monkeypatch):
+@pytest.mark.parametrize("scope", ["owner", "aggregate"])
+def test_ledger_endpoints_include_cash_taking_member_accounts(connection, monkeypatch, scope):
     today = date.today()
     first = date(today.year, today.month, 1) - timedelta(days=40)
     day = date(first.year, first.month, 15)
     hold(connection, "MNY", 1, 1070)  # Owner's rollup row has no payments of its own
     hold(connection, "MNY", 2, 1020, "Y")
     hold(connection, "MNY", 3, 50, "N")
+    hold(connection, "MNY", 4, 200, "N")
     trade(connection, "MNY", 2, day - timedelta(days=30), 1000, 10)
     drip(connection, "MNY", 2, day, 20, 10)
     pay(connection, "MNY", 3, day, 10)
+    pay(connection, "MNY", 4, day, 40)
     connection.commit()
     calls = []
 
@@ -345,16 +363,47 @@ def test_ledger_endpoints_read_owner_member_accounts(connection, monkeypatch):
 
     monkeypatch.setattr(app_module, "_nav_screen_market_history", loader)
     client = app_module.app.test_client()
-    tickers = client.get("/api/portfolio-distributions/drip-ledger/tickers?profile_id=1").get_json()
+    params = {"profile_id": 1}
+    if scope == "aggregate":
+        aggregate = client.post("/api/aggregates", json={"name": "Combined", "member_ids": [2, 3]})
+        assert aggregate.status_code == 200, aggregate.get_json()
+        params = {"aggregate_id": aggregate.get_json()["id"]}
+    tickers = client.get("/api/portfolio-distributions/drip-ledger/tickers", query_string=params).get_json()
     assert [t["ticker"] for t in tickers["tickers"]] == ["MNY"]
-    response = client.get("/api/portfolio-distributions/drip-ledger?profile_id=1&tickers=MNY")
+    response = client.get("/api/portfolio-distributions/drip-ledger", query_string={**params, "tickers": "MNY"})
     assert response.status_code == 200
     row = response.get_json()["rows"][0]
     assert (row["ticker"], row["shares_bought"], row["value_of_drip"]) == ("MNY", 20, 200) and calls == ["MNY"]
     assert (row["end_shares"], row["distribution"], row["cash"]) == (1070, 210, 10)
+    assert (row["base_shares"], row["total_value"], row["source"]) == (1050, 10700, "Partly cash")
     assert {(p["account"], p["kind"]) for p in row["payments"]} == {("Taxable", "drip"), ("Roth", "cash")}
     assert client.get("/api/portfolio-distributions/drip-ledger").status_code == 400
     assert client.get("/api/portfolio-distributions/drip-ledger/tickers?start=2026-13").status_code == 400
+
+
+def test_ledger_endpoint_uses_latest_completed_close_after_selected_range(connection, monkeypatch):
+    today = date.today()
+    payment_day = today.replace(day=1) - timedelta(days=40)
+    month = payment_day.strftime("%Y-%m")
+    last_session = today - timedelta(days=1)
+    hold(connection, "MNY", 2, 110, "Y")
+    drip(connection, "MNY", 2, payment_day, 10, 10)
+    connection.commit()
+
+    def loader(symbol, start, end):
+        closes = [(payment_day, 10), (last_session, 13), (today, 15)]  # today's session is still open
+        return {"prices": [{"date": str(day), "close": close} for day, close in closes if start <= day <= end]}
+
+    monkeypatch.setattr(app_module, "_distribution_market_end", lambda symbol, today: last_session)
+    monkeypatch.setattr(app_module, "_nav_screen_market_history", loader)
+    client = app_module.app.test_client()
+    response = client.get("/api/portfolio-distributions/drip-ledger", query_string={
+        "profile_id": 2, "tickers": "MNY", "start": month, "end": month, "evaluate": 1,
+    })
+    assert response.status_code == 200, response.get_json()
+    payload = response.get_json()
+    assert payload["rows"][0]["month_end_price"] == 10
+    assert payload["tickers"][0]["latest_close"] == 13
 
 
 OWNER_ACCOUNT_CASES = (
@@ -455,7 +504,92 @@ def test_ledger_endpoint_adds_drip_fit_when_asked(connection, monkeypatch):
     assert "evaluation" not in plain["tickers"][0]
     judged = client.get("/api/portfolio-distributions/drip-ledger?profile_id=2&tickers=MNY&evaluate=1").get_json()
     assert judged["tickers"][0]["evaluation"]["label"] == "Good DRIP candidate" and judged["rows"]
+    assert judged["tickers"][0]["evaluations"] == {"current": judged["tickers"][0]["evaluation"]}
+    assert judged["tickers"][0]["evaluation"]["cash_rate"] == 0.04
     assert (today - starts[-1]).days >= 365 * 3 - 1  # fetched the longer window
+
+
+def test_market_scenarios_keep_daily_swings_and_holding_specific_trends():
+    import pandas as pd
+    from drip_ledger import FIT_MARKET_RATES, _fit_scenario_closes
+
+    dates = pd.bdate_range("2025-01-02", "2026-01-02")
+    moves = (-0.025, 0.02, 0.012, -0.007, 0.003)
+    benchmark = 100 * pd.Series([1] + [1 + moves[i % len(moves)] for i in range(len(dates) - 1)],
+                                index=dates).cumprod()
+    elapsed_years = (dates - dates[0]).days / 365.25
+    for scenario in ("bull", "bear", "flat"):
+        rate = FIT_MARKET_RATES[scenario]
+        path = _fit_scenario_closes(benchmark, benchmark, rate)
+        assert path.iloc[0] == 100
+        assert path.iloc[-1] == pytest.approx(100 * (1 + rate) ** elapsed_years[-1])
+        assert (path.diff() < 0).any() and (path.diff() > 0).any()
+
+    eroding = benchmark * 0.65 ** elapsed_years
+    bull = _fit_scenario_closes(eroding, benchmark, FIT_MARKET_RATES["bull"])
+    assert bull.iloc[-1] < bull.iloc[0]
+
+
+def test_ledger_evaluates_selected_markets_and_cash_return(connection, monkeypatch):
+    calls = []
+
+    def loader(symbol, start, end):
+        calls.append(symbol)
+        market = trending_market(start, end, 100, 0.07, 0.003)
+        for point in market["prices"]:
+            point["close"] *= (0.97, 1.01, 0.99, 1.02, 1)[D(point["date"]).weekday()]
+        return market
+
+    monkeypatch.setattr(app_module, "_nav_screen_market_history", loader)
+    client = app_module.app.test_client()
+    params = {"profile_id": 2, "tickers": "MNY", "evaluate": 1, "market_scenarios": "current,bull,bear,flat"}
+    response = client.get("/api/portfolio-distributions/drip-ledger", query_string={**params, "cash_rate": 0})
+    assert response.status_code == 200, response.get_json()
+    fits = response.get_json()["tickers"][0]["evaluations"]
+    assert set(fits) == {"current", "bull", "bear", "flat"}
+    assert sorted(calls) == ["MNY", "SPY"]
+    assert fits["bull"]["re"] > fits["flat"]["re"] > fits["bear"]["re"]
+    assert all(fit["cash_rate"] == 0 and fit["cash_value"] == fit["paid_cash"] for fit in fits.values())
+
+    for rate in (0.0475, -0.02):
+        query = {**params, "cash_rate": rate, "market_scenarios": "bull"}
+        response = client.get("/api/portfolio-distributions/drip-ledger", query_string=query)
+        fit = response.get_json()["tickers"][0]["evaluations"]["bull"]
+        assert fit["cash_rate"] == rate
+        assert fit["drip_shares_value"] == fits["bull"]["drip_shares_value"]
+        assert (fit["re"] < fits["bull"]["re"]) == (rate > 0)
+
+
+def test_ledger_evaluation_lookback_can_use_trailing_year_or_ledger_range(connection, monkeypatch):
+    today = date.today()
+    ledger_year = today.year - 2
+    monkeypatch.setattr(app_module, "_nav_screen_market_history",
+                        lambda symbol, start, end: trending_market(start, end, 100, 0.08, 0.005))
+    client = app_module.app.test_client()
+    params = {"profile_id": 2, "tickers": "MNY", "evaluate": 1,
+              "start": f"{ledger_year}-01", "end": f"{ledger_year}-12"}
+
+    response = client.get("/api/portfolio-distributions/drip-ledger", query_string={**params, "fit_window": 1})
+    fit = response.get_json()["tickers"][0]["evaluation"]
+    assert fit["years"] == pytest.approx(1, abs=0.02)
+    assert D(fit["end"]).year == today.year or (today - D(fit["end"])).days < 7
+
+    response = client.get("/api/portfolio-distributions/drip-ledger", query_string={**params, "fit_window": "ledger"})
+    fit = response.get_json()["tickers"][0]["evaluation"]
+    assert D(fit["start"]).year == D(fit["end"]).year == ledger_year
+    assert fit["years"] == pytest.approx(1, abs=0.02)
+
+
+@pytest.mark.parametrize("invalid", [
+    {"cash_rate": "-1"}, {"cash_rate": "NaN"}, {"cash_rate": "Infinity"}, {"cash_rate": "not a number"},
+    {"market_scenarios": "bull,unknown"}, {"fit_window": "0"}, {"fit_window": "arbitrary"},
+])
+def test_ledger_evaluation_validates_inputs(connection, invalid):
+    client = app_module.app.test_client()
+    response = client.get("/api/portfolio-distributions/drip-ledger",
+                          query_string={"profile_id": 2, "tickers": "MNY", "evaluate": 1, **invalid})
+    assert response.status_code == 400
+    assert response.get_json()["error"]
 
 
 def test_evaluating_judges_every_holding_in_the_account(connection, monkeypatch):

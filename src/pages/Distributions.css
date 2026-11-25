@@ -4,8 +4,8 @@
 .dist-page-header h1 { margin-bottom: .3rem; }
 .dist-note { color: var(--text-dim); font-size: .85rem; line-height: 1.5; margin: .55rem 0 1rem; }
 .dist-note a { color: var(--accent-bright); }
-.dist-tabs { overflow-x: auto; margin-bottom: 1rem; }
-.dist-tabs .tab { white-space: nowrap; }
+.dist-tabs { overflow-x: auto; overflow-y: hidden; margin-bottom: 1rem; }
+.dist-tabs .tab { margin-bottom: 0; white-space: nowrap; }
 .dist-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .75rem 1.15rem; margin-bottom: 1rem; }
 .dist-controls h2 { margin: 0 auto 0 0; }
 .dist-controls label { display: flex; flex-direction: column; gap: .35rem; font-size: .8rem; color: var(--text-dim); }
@@ -95,6 +95,12 @@
 .dist-fit-na { color: var(--text-dim); font-weight: 500; }
 .dist-eval { margin: 0 0 1.4rem; }
 .dist-eval h2 { margin: 0 0 .2rem; }
+.dist-eval-options { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .75rem 1.15rem; margin: .75rem 0; }
+.dist-eval-options .dist-controls { margin: 0; }
+.dist-eval-markets { border: 0; min-width: 0; padding: 0 0 .5rem; }
+.dist-eval-markets legend { color: var(--text-dim); font-size: .8rem; margin-bottom: .35rem; padding: 0; }
+.dist-eval-rate input { width: 9rem; }
+.dist-eval-market-edge { margin-top: .3rem; }
 .dist-eval-callout { border: 1px solid var(--border); border-left-width: 4px; border-radius: 6px; padding: .6rem .85rem; margin: .5rem 0; background: var(--surface); line-height: 1.45; }
 .dist-eval-callout-bad { border-left-color: var(--neg); }
 .dist-eval-callout-good { border-left-color: var(--pos); }

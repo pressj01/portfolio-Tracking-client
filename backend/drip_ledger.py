@@ -19,6 +19,7 @@ was or was not reinvested, or the box ticked by hand.
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from datetime import date, timedelta
+from math import isfinite
 import re
 
 from distribution_analysis import ESTIMATE_SOURCES
@@ -831,6 +832,8 @@ FIT_YEARS = 3
 MIN_FIT_DAYS = 120  # portfolio_tester.MIN_DAYS, the DRIP vs. Cash Analyzer's floor
 FIT_DISPLAY_BASE = 1000.0  # payouts and end values are shown per $1,000 invested at the start
 FIT_LABELS = {"DRIP": "Good DRIP candidate", "Take cash": "Not a good DRIP candidate", "Toss-up": "Borderline"}
+FIT_MARKET_BENCHMARK = "SPY"
+FIT_MARKET_RATES = {"current": None, "bull": 0.15, "bear": -0.15, "flat": 0.0}
 NO_FIT = "Not enough history"
 NO_DISTRIBUTIONS = "No distributions"
 
@@ -841,47 +844,79 @@ def fit_window_start(start_key, today):
     return min(month_start(start_key), floor)
 
 
-def evaluate_drip_fit(payload, ticker, start_day, today):
-    """Would reinvesting this ticker have beaten taking the cash?
+def _fit_closes(payload, start_day, today):
+    import pandas as pd
 
-    The DRIP vs. Cash Analyzer's own test (``drip_score``), run on the
-    ticker's split-adjusted closes and distributions from ``start_day`` to
-    ``today``: what $1 of distributions became when reinvested versus kept as
-    cash earning the analyzer's cash rate (RE), how often DRIP was ahead across
-    every possible sell date, and what kind of fund the history describes.
-    History only; it says nothing certain about what comes next.
-    """
+    prices = {}
+    for point in (payload or {}).get("prices") or ():
+        day, close = _day(point.get("date")), _num(point.get("close"))
+        if day is not None and start_day <= day <= today and isfinite(close) and close > 0:
+            prices[pd.Timestamp(day)] = close
+    return pd.Series(prices, index=pd.DatetimeIndex(sorted(prices)), dtype=float)
+
+
+def _fit_scenario_closes(close, benchmark, market_rate):
+    """Change the benchmark's trend while retaining observed daily price moves."""
+    import numpy as np
+    import pandas as pd
+
+    aligned = pd.concat([close, benchmark], axis=1, join="inner")
+    if len(aligned) < 30 or (aligned.index[-1] - aligned.index[0]).days < MIN_FIT_DAYS:
+        raise ValueError("Needs at least 30 shared SPY closes spanning 120 days.")
+    log_prices = np.log(aligned.to_numpy())
+    holding_returns, market_returns = np.diff(log_prices, axis=0).T
+    variance = market_returns.var()
+    if variance <= 1e-12:
+        raise ValueError("SPY prices have too little variation to estimate market sensitivity.")
+    beta = np.mean((holding_returns - holding_returns.mean()) * (market_returns - market_returns.mean())) / variance
+    benchmark_years = (aligned.index[-1] - aligned.index[0]).days / 365.25
+    observed_trend = (log_prices[-1, 1] - log_prices[0, 1]) / benchmark_years
+    trend_change = beta * (np.log1p(market_rate) - observed_trend)
+    elapsed_years = (close.index - close.index[0]).days / 365.25
+    with np.errstate(over="ignore", under="ignore"):
+        adjusted = close * np.exp(trend_change * elapsed_years)
+    if not np.isfinite(adjusted).all() or (adjusted <= 0).any():
+        raise ValueError("The market adjustment produced prices outside the supported range.")
+    return adjusted
+
+
+def evaluate_drip_fit(payload, ticker, start_day, today, *, scenario="current", cash_rate=None, benchmark=None):
+    """Replay observed payouts on actual or benchmark-adjusted closing prices."""
     import pandas as pd
     import drip_score
 
-    prices = []
-    for point in (payload or {}).get("prices") or ():
-        day, close = _day(point.get("date")), _num(point.get("close"))
-        if day is not None and start_day <= day <= today and close > 0:
-            prices.append((day, close))
-    prices.sort()
-    if len(prices) < 2 or (prices[-1][0] - prices[0][0]).days < MIN_FIT_DAYS:
+    cash_rate = drip_score.DEFAULT_CASH_RATE if cash_rate is None else cash_rate
+    close = _fit_closes(payload, start_day, today)
+    if len(close) < 2 or (close.index[-1] - close.index[0]).days < MIN_FIT_DAYS:
         return {"label": NO_FIT, "call": None,
                 "reason": f"Needs at least {MIN_FIT_DAYS} days of prices in the window."}
-    index = pd.DatetimeIndex([pd.Timestamp(day) for day, _ in prices])
-    close = pd.Series([value for _, value in prices], index=index, dtype=float)
-    divs = pd.Series(0.0, index=index)
+    divs = pd.Series(0.0, index=close.index)
     for point in (payload or {}).get("distributions") or ():
         day, amount = _day(point.get("date")), _num(point.get("amount"))
-        if day is not None and amount > 0 and pd.Timestamp(day) in divs.index:
+        if day is not None and isfinite(amount) and amount > 0 and pd.Timestamp(day) in divs.index:
             divs.loc[pd.Timestamp(day)] += amount
     if not (divs > 0).any():
         return {"label": NO_DISTRIBUTIONS, "call": None,
                 "reason": "It paid no distributions in the window, so there is nothing to reinvest."}
+    market_rate = FIT_MARKET_RATES[scenario]
+    if market_rate is not None:
+        try:
+            close = _fit_scenario_closes(close, _fit_closes(benchmark, start_day, today), market_rate)
+        except ValueError as problem:
+            return {"label": "Benchmark unavailable", "call": None, "reason": str(problem)}
     try:
-        metrics = drip_score.compute_ticker_metrics(close, divs, ticker)
-        # The same two paths the verdict compares, kept for display: what each
-        # was paid and what it ended with, per $1,000 invested at the start.
-        # The verdict already counts the reinvested path's extra payouts (they
-        # bought the shares valued below); this only makes them visible.
+        # The verdict counts the extra payouts through the shares they bought.
         reinvest = drip_score.simulate_drip(close, divs, initial=FIT_DISPLAY_BASE, reinvest=1.0)
         cash = drip_score.simulate_drip(close, divs, initial=FIT_DISPLAY_BASE, reinvest=0.0,
-                                        cash_rate=drip_score.DEFAULT_CASH_RATE)
+                                        cash_rate=cash_rate)
+        cash_value = cash["cash_end"]
+        drip_value = (reinvest["shares_end"] - reinvest["shares_start"]) * reinvest["end_price"]
+        if not 0 < cash_value < float("inf") or not isfinite(drip_value / cash_value):
+            raise OverflowError
+        metrics = drip_score.compute_ticker_metrics(close, divs, ticker, initial=FIT_DISPLAY_BASE, cash_rate=cash_rate)
+    except OverflowError:
+        return {"label": "Cash return out of range", "call": None,
+                "reason": "The cash return is too large for this date range."}
     except (ValueError, ZeroDivisionError) as problem:
         return {"label": NO_FIT, "call": None, "reason": str(problem)}
     call = metrics.get("drip_call")
@@ -892,8 +927,8 @@ def evaluate_drip_fit(payload, ticker, start_day, today):
         "paid_cash": round(paid_cash, 2),
         "paid_drip": round(paid_drip, 2),
         "extra_payout_pct": (paid_drip / paid_cash - 1) if paid_cash > 0 else None,
-        "cash_value": round(cash["cash_end"], 2),
-        "drip_shares_value": round((reinvest["shares_end"] - reinvest["shares_start"]) * reinvest["end_price"], 2),
+        "cash_value": round(cash_value, 2),
+        "drip_shares_value": round(drip_value, 2),
     }
     return {
         **payouts,
@@ -906,7 +941,7 @@ def evaluate_drip_fit(payload, ticker, start_day, today):
         "price_cagr": metrics.get("nav_annual"),
         "coverage": metrics.get("coverage"),
         "annual_yield": metrics.get("annual_yield"),
-        "cash_rate": drip_score.DEFAULT_CASH_RATE,
+        "cash_rate": cash_rate,
         "start": metrics.get("effective_start"),
         "end": metrics.get("effective_end"),
         "years": metrics.get("years"),
