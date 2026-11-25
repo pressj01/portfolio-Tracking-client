@@ -5977,7 +5977,7 @@ function PortfolioBuilderHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Managing Portfolios</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Saved portfolios appear in the <strong>left sidebar</strong> with their holding count and total. Click one to open it; the Builder reopens the last one you used.</li>
-        <li><strong>+ New Portfolio</strong> starts an empty model and asks for its starting balance. <strong>From my holdings…</strong> starts one from your real positions (see below).</li>
+        <li><strong>+ New Portfolio</strong> starts an empty model and asks for its starting balance. <strong>From my holdings…</strong> starts one from your real positions (see below). <strong>Import file…</strong> adds one from an Export Excel or Export CSV file, yours or one someone shared with you (see Exporting and Importing).</li>
         <li>Click the portfolio title to <strong>rename</strong> it (Enter saves, Esc cancels).</li>
         <li>Use <strong>Save As</strong> to duplicate the current portfolio under a new name, and <strong>Clear</strong> to remove every holding.</li>
         <li>Delete a portfolio with the <strong>×</strong> next to it in the sidebar.</li>
@@ -6112,14 +6112,28 @@ function PortfolioBuilderHelp() {
         <li>A high target can concentrate the model in one or two funds. Check the grade, the largest-holding figure, and the Price Δ column after balancing: a higher yield is not a higher return.</li>
       </ul>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Exporting</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Exporting and Importing</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         <strong>Export Excel</strong> downloads a workbook with the holdings table (every column, including the fund
         name, yield and where the yield came from, plus the Portfolio row) and a Summary sheet: period, window,
         benchmark, total value, income, yield, the target as both a yield and monthly income and the gap to it, the max
         per holding, grade, and return. <strong>Export CSV</strong> downloads the holdings table alone. Both use the
-        period and benchmark selected on the page, and amounts are in your display currency.
+        period and benchmark selected on the page, and amounts are in your display currency; a CSV exported in CAD
+        marks its money columns, such as <em>Amount (CAD)</em>.
       </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Import file…</strong> (in the sidebar, and on the empty page) reads either file back as a new model
+        portfolio in the account selected in the navbar, so you can move a model between accounts or try one someone
+        shared with you. It first shows what the file holds and asks for a name; nothing is saved until you confirm, and
+        no existing model is changed.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Each holding comes in at its <strong>Amount</strong>; the Portfolio row is left out, and a ticker listed twice becomes one holding.</li>
+        <li>An Excel file also brings the model&apos;s name, starting balance, target (as the yield or monthly income it was set as), and max per holding from its Summary sheet. A CSV carries the holdings only, and its name comes from the file name.</li>
+        <li>Amounts exported in CAD are read back to US dollars: an Excel file at the rate it was exported with, a CSV at today&apos;s USD/CAD rate.</li>
+        <li>The grade, yield, and income are worked out again here, for the period and benchmark you have selected, so they can differ from the numbers in the file.</li>
+        <li>A file made by hand also works if it has a <strong>Ticker</strong> (or Symbol) column and an <strong>Amount</strong> column, or Shares and Price. Rows without a usable ticker or an amount above zero are left out and listed.</li>
+      </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Report Card and Charts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
