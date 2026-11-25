@@ -121,13 +121,13 @@ def test_model_drip_ledger_reinvests_every_modeled_payment():
     candidates = model_ledger_candidates(positions, payments, "2026-01", "2026-06", TODAY)
     assert [t["ticker"] for t in candidates["tickers"]] == ["AAA"] and candidates["first_month"] == "2026-01"
     payload = build_model_drip_ledger(positions, payments, ["AAA"], "2026-01", "2026-06",
-                                      markets=markets, name="Alex Portfolio", today=TODAY)
+                                      markets=markets, name="Income Model", today=TODAY)
     rows = {r["month"]: r for r in payload["rows"]}
     # 100 shares × $1 buys 10 shares at $10; February's payment is on 110 shares.
     assert (rows["2026-01"]["distribution"], rows["2026-01"]["shares_bought"]) == (100.0, 10.0)
     assert (rows["2026-02"]["distribution"], rows["2026-02"]["extra_income"]) == (110.0, 10.0)
     assert rows["2026-05"]["end_shares"] == pytest.approx(100 * 1.1 ** 5)
-    assert {p["account"] for r in payload["rows"] for p in r["payments"]} == {"Alex Portfolio"}
+    assert {p["account"] for r in payload["rows"] for p in r["payments"]} == {"Income Model"}
     assert all(r["source"] == "Modeled" for r in payload["rows"])
 
 
@@ -154,7 +154,7 @@ def client(tmp_path, monkeypatch):
     conn = connect()
     database.ensure_tables_exist(conn)
     conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (2, 'Taxable')")
-    conn.execute("INSERT INTO builder_portfolios (id, profile_id, name) VALUES (7, 1, 'Alex Portfolio')")
+    conn.execute("INSERT INTO builder_portfolios (id, profile_id, name) VALUES (7, 1, 'Income Model')")
     conn.execute("INSERT INTO builder_portfolios (id, profile_id, name) VALUES (8, 2, 'Not yours')")
     conn.executemany("INSERT INTO builder_holdings (portfolio_id, ticker, dollar_amount) VALUES (?, ?, ?)",
                      [(7, "AAA", 1000), (7, "ZZZ", 500), (8, "AAA", 50)])
@@ -185,14 +185,14 @@ def test_model_endpoints_serve_holdings_history_and_drip_ledger(client):
     holdings = client.get("/api/portfolio-distributions/model-holdings?builder_id=7&profile_id=1")
     assert holdings.status_code == 200
     body = holdings.get_json()
-    assert body["model"]["name"] == "Alex Portfolio" and body["model"]["unavailable"] == ["ZZZ"]
+    assert body["model"]["name"] == "Income Model" and body["model"]["unavailable"] == ["ZZZ"]
     aaa = next(r for r in body["rows"] if r["ticker"] == "AAA")
     assert (aaa["quantity"], aaa["div"], aaa["model"]) == (100.0, 0.1, True)
     # Every load reads full history, the Distribution Analyzer's cache key.
     assert {start for _, start in client.calls} == {date(1900, 1, 1)}
 
     history = client.get("/api/portfolio-distributions?builder_id=7&profile_id=1").get_json()
-    assert history["model"]["name"] == "Alex Portfolio"
+    assert history["model"]["name"] == "Income Model"
     assert history["model"]["pay_dates_from_records"] == ["AAA"]
     assert sum(history["yearly"][i]["actual"] for i in range(len(history["yearly"]))) == pytest.approx(50.0)
 
@@ -200,7 +200,7 @@ def test_model_endpoints_serve_holdings_history_and_drip_ledger(client):
     assert tickers["model_all"] is True and [t["ticker"] for t in tickers["tickers"]] == ["AAA"]
     ledger = client.get("/api/portfolio-distributions/drip-ledger?builder_id=7&profile_id=1&tickers=AAA&evaluate=1").get_json()
     assert ledger["model_all"] is True and ledger["rows"]
-    assert all(p["account"] == "Alex Portfolio" for r in ledger["rows"] for p in r["payments"])
+    assert all(p["account"] == "Income Model" for r in ledger["rows"] for p in r["payments"])
     assert ledger["tickers"][0]["evaluation"]["label"]
 
 
