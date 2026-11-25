@@ -112,6 +112,7 @@ function fitTitle(ticker, fit, mine, market) {
       lines.push(`The shares bought with payouts finish at ${money(fit.drip_shares_value)}. The cash benchmark finishes at ${money(fit.cash_value)}.`)
     }
     if (fit.price_cagr != null) lines.push(`Annualized share-price change ${annualRate.format(fit.price_cagr)}.`)
+    if (fit.benchmark) lines.push(`${fit.benchmark} benchmark trend ${annualRate.format(fit.benchmark_observed_cagr)} observed, ${annualRate.format(fit.benchmark_scenario_cagr)} assumed per year.`)
     if (fit.win_rate != null) lines.push(`Reinvesting came out ahead at ${pct(fit.win_rate, 0)} of the dates you could have sold.`)
     if (fit.bucket) lines.push(`Fund type: ${fit.bucket} (${BUCKET_HINT[fit.bucket] || fit.bucket}).`)
   }
@@ -129,6 +130,7 @@ const EVAL_COLUMNS = [
   { key: 'shares_held', label: 'Shares Held', type: 'number', tip: 'Current shares held in the selected account or combined accounts, regardless of the selected date range' },
   { key: 'percent_of_account', label: '% of Account', type: 'number', tip: 'Current holding value as a percentage of the entire selected account or combined accounts' },
   { key: 'edge', label: 'DRIP vs cash', type: 'number', tip: 'How much reinvesting gained or lost against taking distributions at the selected cash return' },
+  { key: 'price_change', label: 'Share price change', type: 'number', tip: 'First to last share price over the evaluation window, using the selected market path' },
   { key: 'extra', label: 'Extra payouts from DRIP', type: 'number', tip: 'How much more the holding was paid in distributions when they were reinvested than when they were taken as cash, over the same dates: the shares DRIP buys earn payouts too. DRIP vs cash already counts these payouts; hover a row to see them weighed against the price change.' },
   { key: 'meaning', label: 'What it means', type: 'number', text: true, value: r => r.priority, tip: 'Sorted so the holdings you reinvest but probably should not come first' },
   { key: 'change', label: 'Your reinvesting in this range', type: 'number', tip: 'What you reinvested in the selected range, and every share it bought valued at the latest close' },
@@ -162,6 +164,7 @@ function evaluationRows(holdings, fits, mine, dripStatus, heldTickers, market) {
       shares_held: sold ? 0 : current?.shares_held ?? null,
       percent_of_account: sold ? 0 : current?.percent_of_account ?? null,
       verdict: fit?.label ?? null, edge: fit?.re != null ? fit.re - 1 : null, extra: fit?.extra_payout_pct ?? null,
+      price_change: fit?.start_price > 0 ? fit.end_price / fit.start_price - 1 : null,
       reinvested: own?.reinvested || 0, worth: own?.value ?? null,
       change: own && own.reinvested > 0 && own.value != null ? own.value / own.reinvested - 1 : null,
     }
@@ -182,14 +185,19 @@ function DripDecisionHelp() {
       <p><em>DRIP vs cash</em> compares the end value of the new shares with the cash. A result of &quot;24% better&quot; means the new shares finished worth 24% more.</p>
 
       <h4>Market scenarios</h4>
-      <p>Current Market uses the holding&apos;s observed closes. Bull, Bear, and Flat set SPY&apos;s annual price trend to +15%, −15%, or 0%. The replay keeps the holding&apos;s observed day-to-day swings and adjusts its path by how closely its returns moved with SPY. Each scenario uses the same historical payout dates and amounts per share.</p>
+      <p>Current Market uses observed closes. The modeled scenarios use a holding&apos;s documented exposure proxy when available, with SPY as the broad-market default. They preserve historical day-to-day swings and distribution amounts per share.</p>
+      <ul>
+        <li><strong>Bull</strong> adds the selected annual boost to the benchmark&apos;s observed growth, starting from flat if it fell.</li>
+        <li><strong>Bear</strong> uses a −15% annual benchmark trend or keeps the observed path when the benchmark already fell faster.</li>
+        <li><strong>Flat</strong> removes the benchmark&apos;s net trend. Each holding can still gain or lose based on its own price history.</li>
+      </ul>
 
       <h4>What about the extra payouts DRIP brings in?</h4>
       <p>They are counted. On the reinvest path every new share is paid on every distribution after it, and those payouts buy more shares too; on the cash path only the original shares are paid. So reinvesting is always paid more, and the <em>Extra payouts from DRIP</em> column shows how much more over the same dates (for example &quot;+38% more&quot;). Those payouts end up as shares, so <em>DRIP vs cash</em> already includes them; adding them again would count them twice.</p>
       <p>Hover a row to see them weighed against the price: for every $1,000 invested at the start, how much each path was paid, what the reinvested shares are worth now, and what the cash would be. A fund can pay a lot more when reinvested and still be <em>Not a good DRIP candidate</em> when its price falls faster than the extra payouts add up.</p>
 
       <h4>Which dates</h4>
-      <p>Choose a trailing lookback or use the ledger&apos;s selected range. All scenarios for a holding use the same dates. A younger holding starts at its first available close.</p>
+      <p>Choose a trailing lookback, the ledger&apos;s selected range, or custom dates to replay a specific rally or selloff. All scenarios for a holding use the same dates. A younger holding starts at its first available close.</p>
 
       <h4>The verdict</h4>
       <ul>
@@ -233,10 +241,22 @@ function DripDecisionHelp() {
   </details>
 }
 
-function DripEvaluationControls({ markets, onToggleMarket, cashRate, onCashRate, lookback, onLookback }) {
-  const [draft, setDraft] = useState(String(cashRate))
-  const nextRate = Number(draft)
-  const valid = draft !== '' && Number.isFinite(nextRate) && nextRate / 100 > -1
+function DripEvaluationControls({ markets, onToggleMarket, assumptions, onApply, lookback, onLookback, today }) {
+  const [draft, setDraft] = useState(assumptions)
+  const showBull = markets.includes('bull')
+  const custom = lookback === 'custom'
+  const next = {
+    cashRate: Number(draft.cashRate),
+    bullBoost: showBull ? Number(draft.bullBoost) : assumptions.bullBoost,
+    start: custom ? draft.start : assumptions.start,
+    end: custom ? draft.end : assumptions.end,
+  }
+  const validCash = draft.cashRate !== '' && Number.isFinite(next.cashRate) && next.cashRate / 100 > -1
+  const validBull = !showBull || (draft.bullBoost !== '' && Number.isFinite(next.bullBoost) && next.bullBoost >= 0)
+  const validDates = !custom || Boolean(next.start && next.end && next.start <= next.end && next.end <= today)
+  const valid = validCash && validBull && validDates
+  const changed = Object.keys(next).some(key => next[key] !== assumptions[key])
+  const edit = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
   return <>
     <div className="dist-eval-options">
       <fieldset className="dist-controls dist-eval-markets">
@@ -252,19 +272,32 @@ function DripEvaluationControls({ markets, onToggleMarket, cashRate, onCashRate,
           <option value="5">Last 5 years</option>
           <option value="10">Last 10 years</option>
           <option value="ledger">Use ledger range</option>
+          <option value="custom">Custom dates</option>
         </select></label>
       </div>
       <form className="dist-controls dist-eval-rate" onSubmit={e => {
         e.preventDefault()
-        if (valid) onCashRate(nextRate)
+        if (valid && changed) onApply(next)
       }}>
-        <label>Annual cash return (%) <input type="number" step="any" required value={draft}
-          onChange={e => setDraft(e.target.value)} aria-invalid={draft !== '' && !valid} /></label>
-        <button type="submit" className="btn" disabled={!valid || nextRate === cashRate}>Apply rate</button>
+        <label>Annual cash return (%) <input type="number" step="any" required value={draft.cashRate}
+          onChange={e => edit('cashRate', e.target.value)} aria-invalid={draft.cashRate !== '' && !validCash} /></label>
+        {showBull && <label title="Extra annual growth for the benchmark, above its observed growth or flat">
+          Annual bull boost (%) <input type="number" min="0" step="any" required value={draft.bullBoost}
+            onChange={e => edit('bullBoost', e.target.value)} aria-invalid={!validBull} />
+        </label>}
+        {custom && <>
+          <label>Evaluation start <input type="date" required min="1900-01-01" max={draft.end || today}
+            value={draft.start} onChange={e => edit('start', e.target.value)} /></label>
+          <label>Evaluation end <input type="date" required min={draft.start || '1900-01-01'} max={today}
+            value={draft.end} onChange={e => edit('end', e.target.value)} /></label>
+        </>}
+        <button type="submit" className="btn" disabled={!valid || !changed}>{showBull || custom ? 'Apply assumptions' : 'Apply rate'}</button>
       </form>
     </div>
-    {draft !== '' && !valid && <p className="dist-note" role="alert">Enter a finite cash return greater than −100%.</p>}
-    <p className="dist-note">Cash benchmark {annualRate.format(cashRate / 100)} per year. {cashRate === 0
+    {draft.cashRate !== '' && !validCash && <p className="dist-note" role="alert">Enter a finite cash return greater than −100%.</p>}
+    {!validBull && <p className="dist-note" role="alert">Enter a finite annual bull boost of at least 0%.</p>}
+    {!validDates && <p className="dist-note" role="alert">Choose evaluation dates in order, ending today or earlier.</p>}
+    <p className="dist-note">Cash benchmark {annualRate.format(assumptions.cashRate / 100)} per year. {assumptions.cashRate === 0
       ? 'Cash payouts count at face value.'
       : 'Use 0% to count payouts at face value.'}</p>
     <DripDecisionHelp />
@@ -313,9 +346,12 @@ function DripEvaluation({ rows, mine, loading, markets }) {
             return <td key={market} className="dist-left" title={fitTitle(row.ticker, fit, mine.get(row.ticker), market)}>
               <span className={`dist-fit ${FIT_TONE[label] || 'dist-fit-na'}`}>{label || DASH}</span>
               {fit?.re != null && <div className="dist-eval-market-edge">{edgeText(fit.re - 1)}</div>}
+              {fit?.start_price > 0 && <div className="dist-eval-desc">{money(fit.start_price)} → {money(fit.end_price)}{fit.benchmark && ` · ${fit.benchmark}`}</div>}
             </td>
           }) : <>
             <td className={row.edge == null || Math.abs(row.edge) < 0.02 ? '' : row.edge > 0 ? 'dist-positive' : 'dist-negative'}>{edgeText(row.edge)}</td>
+            <td>{row.price_change == null ? DASH : <>{money(row.fit.start_price)} → {money(row.fit.end_price)}
+              {row.fit.benchmark && <div className="dist-eval-desc">{row.fit.benchmark} benchmark</div>}</>}</td>
             <td>{row.extra == null ? DASH : `+${pct(row.extra, 0)} more`}</td>
             <td className={`dist-left dist-eval-meaning dist-eval-${row.tone}`}>{row.meaning}</td>
           </>}
@@ -420,7 +456,11 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const modelAll = Boolean(modelId) || modelAllChoice
   const [evaluate, setEvaluate] = useState(false)
   const [markets, setMarkets] = useState(['current'])
-  const [cashRate, setCashRate] = useState(4)
+  const today = new Date()
+  const asOf = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const [assumptions, setAssumptions] = useState(() => ({
+    cashRate: 4, bullBoost: 15, start: `${today.getFullYear()}-01-01`, end: asOf,
+  }))
   const [lookback, setLookback] = useState('3')
   const [groupBy, setGroupBy] = useState('ticker')
   const [filter, setFilter] = useState('')
@@ -428,11 +468,9 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
   const [meta, setMeta] = useState(null)
   const [state, setState] = useState(null)
   const [firstMonth, setFirstMonth] = useState(null)
-  const today = new Date()
-  const asOf = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
   const params = rangeParams(range, firstMonth, asOf)
   const evaluateRequested = evaluate && markets.length > 0
-  const marketKey = evaluateRequested ? `${markets.join(',')}:${cashRate}:${lookback}` : ''
+  const marketKey = evaluateRequested ? `${markets.join(',')}:${JSON.stringify(assumptions)}:${lookback}` : ''
   const loadKey = `${refreshKey}:${modelId || ''}:${range}:${params.start || ''}:${modelAll ? 1 : 0}:${marketKey}`
   const columns = COLUMNS
 
@@ -440,7 +478,10 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
     let stale = false
     const base = { ...params, model_all: modelAll ? 1 : 0, evaluate: evaluateRequested ? 1 : '', builder_id: modelId }
     const evaluationParams = evaluateRequested
-      ? { market_scenarios: markets.join(','), cash_rate: cashRate / 100, fit_window: lookback }
+      ? { market_scenarios: markets.join(','), cash_rate: assumptions.cashRate / 100, fit_window: lookback,
+        bull_boost: markets.includes('bull') ? assumptions.bullBoost / 100 : null,
+        fit_start: lookback === 'custom' ? assumptions.start : null,
+        fit_end: lookback === 'custom' ? assumptions.end : null }
       : {}
     const load = async () => {
       setState({ key: loadKey, rows: [], statuses: [], loaded: 0, total: null })
@@ -575,8 +616,8 @@ export default function DistributionDripLedger({ refreshKey, showSold = true, se
     {current?.error && <div className="alert alert-error" role="alert">{current.error}</div>}
     {evaluate && <section className="dist-eval">
       <h2>Is DRIP worth it?</h2>
-      <DripEvaluationControls markets={markets} onToggleMarket={toggleMarket} cashRate={cashRate}
-        onCashRate={setCashRate} lookback={lookback} onLookback={setLookback} />
+      <DripEvaluationControls markets={markets} onToggleMarket={toggleMarket} assumptions={assumptions}
+        onApply={setAssumptions} lookback={lookback} onLookback={setLookback} today={asOf} />
       {evaluateRequested ? <DripEvaluation key={markets.length > 1 ? 'comparison' : 'single'}
         rows={evaluation} mine={mine} loading={loading} markets={markets} />
         : <p className="dist-note">Select a market scenario to evaluate your holdings.</p>}

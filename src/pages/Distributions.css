@@ -100,6 +100,7 @@
 .dist-eval-markets { border: 0; min-width: 0; padding: 0 0 .5rem; }
 .dist-eval-markets legend { color: var(--text-dim); font-size: .8rem; margin-bottom: .35rem; padding: 0; }
 .dist-eval-rate input { width: 9rem; }
+.dist-eval-rate input[type=date] { width: auto; }
 .dist-eval-market-edge { margin-top: .3rem; }
 .dist-eval-callout { border: 1px solid var(--border); border-left-width: 4px; border-radius: 6px; padding: .6rem .85rem; margin: .5rem 0; background: var(--surface); line-height: 1.45; }
 .dist-eval-callout-bad { border-left-color: var(--neg); }

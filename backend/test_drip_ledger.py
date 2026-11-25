@@ -519,15 +519,47 @@ def test_market_scenarios_keep_daily_swings_and_holding_specific_trends():
                                 index=dates).cumprod()
     elapsed_years = (dates - dates[0]).days / 365.25
     for scenario in ("bull", "bear", "flat"):
-        rate = FIT_MARKET_RATES[scenario]
-        path = _fit_scenario_closes(benchmark, benchmark, rate)
+        path, observed, assumed = _fit_scenario_closes(benchmark, benchmark, scenario)
+        if scenario == "bull":
+            assert assumed == pytest.approx((1 + max(0, observed)) * (1 + FIT_MARKET_RATES["bull"]) - 1)
+        elif scenario == "bear":
+            assert assumed == pytest.approx(min(observed, FIT_MARKET_RATES["bear"]))
+        else:
+            assert assumed == 0
         assert path.iloc[0] == 100
-        assert path.iloc[-1] == pytest.approx(100 * (1 + rate) ** elapsed_years[-1])
+        assert path.iloc[-1] == pytest.approx(100 * (1 + assumed) ** elapsed_years[-1])
         assert (path.diff() < 0).any() and (path.diff() > 0).any()
 
     eroding = benchmark * 0.65 ** elapsed_years
-    bull = _fit_scenario_closes(eroding, benchmark, FIT_MARKET_RATES["bull"])
+    bull, _, _ = _fit_scenario_closes(eroding, benchmark, "bull")
     assert bull.iloc[-1] < bull.iloc[0]
+
+
+def test_bull_builds_on_existing_rally_and_bear_keeps_existing_selloff():
+    import pandas as pd
+    from drip_ledger import _fit_scenario_closes
+
+    dates = pd.bdate_range("2025-01-02", "2026-01-02")
+    years = (dates - dates[0]).days / 365.25
+    swings = pd.Series([1, 0.97, 1.03] * (len(dates) // 3 + 1), dtype=float).iloc[:len(dates)].to_numpy(copy=True)
+    swings[-1] = 1
+    rising = pd.Series(100 * 1.50 ** years * swings, index=dates)
+    falling = pd.Series(100 * 0.70 ** years * swings, index=dates)
+
+    bull, observed, assumed = _fit_scenario_closes(rising, rising, "bull")
+    assert observed == pytest.approx(0.50)
+    assert assumed == pytest.approx(0.725)
+    assert bull.iloc[-1] > rising.iloc[-1]
+    assert (bull.diff() < 0).any()
+
+    bear, observed, assumed = _fit_scenario_closes(falling, falling, "bear")
+    assert observed == pytest.approx(-0.30)
+    assert assumed == observed
+    pd.testing.assert_series_equal(bear, falling)
+    flat, _, assumed = _fit_scenario_closes(falling, falling, "flat")
+    assert assumed == 0
+    assert flat.iloc[-1] == pytest.approx(flat.iloc[0])
+    assert not flat.equals(bear)
 
 
 def test_ledger_evaluates_selected_markets_and_cash_return(connection, monkeypatch):
@@ -560,6 +592,32 @@ def test_ledger_evaluates_selected_markets_and_cash_return(connection, monkeypat
         assert (fit["re"] < fits["bull"]["re"]) == (rate > 0)
 
 
+def test_evaluation_uses_documented_exposure_proxies_and_custom_bull_boost(connection, monkeypatch):
+    calls = []
+
+    def loader(symbol, start, end):
+        calls.append(symbol)
+        market = trending_market(start, end, 100, 0.25, 0.004)
+        for point in market["prices"]:
+            point["close"] *= (0.97, 1.01, 0.99, 1.02, 1)[D(point["date"]).weekday()]
+        return market
+
+    monkeypatch.setattr(app_module, "_nav_screen_market_history", loader)
+    client = app_module.app.test_client()
+    params = {"profile_id": 2, "tickers": "CHPY,DRMY,EGGY", "evaluate": 1,
+              "market_scenarios": "current,bull,bear,flat", "bull_boost": 0.40}
+    response = client.get("/api/portfolio-distributions/drip-ledger", query_string=params)
+    assert response.status_code == 200, response.get_json()
+    assert sorted(calls) == ["CHPY", "DRAM", "DRMY", "EGGY", "QQQ", "SOXX"]
+    for entry in response.get_json()["tickers"]:
+        current, bull, bear, flat = (entry["evaluations"][key] for key in ("current", "bull", "bear", "flat"))
+        expected = {"CHPY": "SOXX", "DRMY": "DRAM", "EGGY": "QQQ"}
+        assert bull["benchmark"] == expected[entry["ticker"]]
+        assert bull["benchmark_scenario_cagr"] == pytest.approx((1 + bull["benchmark_observed_cagr"]) * 1.40 - 1)
+        assert flat["benchmark_scenario_cagr"] == 0
+        assert bull["end_price"] > current["end_price"] > flat["end_price"] > bear["end_price"]
+
+
 def test_ledger_evaluation_lookback_can_use_trailing_year_or_ledger_range(connection, monkeypatch):
     today = date.today()
     ledger_year = today.year - 2
@@ -579,10 +637,22 @@ def test_ledger_evaluation_lookback_can_use_trailing_year_or_ledger_range(connec
     assert D(fit["start"]).year == D(fit["end"]).year == ledger_year
     assert fit["years"] == pytest.approx(1, abs=0.02)
 
+    response = client.get("/api/portfolio-distributions/drip-ledger", query_string={
+        **params, "fit_window": "custom", "fit_start": f"{ledger_year}-01-02", "fit_end": f"{ledger_year}-06-22",
+    })
+    assert response.status_code == 200, response.get_json()
+    fit = response.get_json()["tickers"][0]["evaluation"]
+    assert D(fit["start"]) <= D(f"{ledger_year}-01-04")
+    assert D(fit["start"]) >= D(f"{ledger_year}-01-02")
+    assert D(f"{ledger_year}-06-20") <= D(fit["end"]) <= D(f"{ledger_year}-06-22")
+
 
 @pytest.mark.parametrize("invalid", [
     {"cash_rate": "-1"}, {"cash_rate": "NaN"}, {"cash_rate": "Infinity"}, {"cash_rate": "not a number"},
     {"market_scenarios": "bull,unknown"}, {"fit_window": "0"}, {"fit_window": "arbitrary"},
+    {"market_scenarios": "bull", "bull_boost": "-0.1"}, {"market_scenarios": "bull", "bull_boost": "Infinity"},
+    {"fit_window": "custom", "fit_start": "2026-06-22", "fit_end": "2026-01-02"},
+    {"fit_window": "custom", "fit_start": "2026-01-02", "fit_end": "invalid"},
 ])
 def test_ledger_evaluation_validates_inputs(connection, invalid):
     client = app_module.app.test_client()

@@ -855,32 +855,39 @@ def _fit_closes(payload, start_day, today):
     return pd.Series(prices, index=pd.DatetimeIndex(sorted(prices)), dtype=float)
 
 
-def _fit_scenario_closes(close, benchmark, market_rate):
+def _fit_scenario_closes(close, benchmark, scenario, bull_boost=FIT_MARKET_RATES["bull"]):
     """Change the benchmark's trend while retaining observed daily price moves."""
     import numpy as np
     import pandas as pd
 
     aligned = pd.concat([close, benchmark], axis=1, join="inner")
     if len(aligned) < 30 or (aligned.index[-1] - aligned.index[0]).days < MIN_FIT_DAYS:
-        raise ValueError("Needs at least 30 shared SPY closes spanning 120 days.")
+        raise ValueError("Needs at least 30 shared closes spanning 120 days.")
     log_prices = np.log(aligned.to_numpy())
     holding_returns, market_returns = np.diff(log_prices, axis=0).T
     variance = market_returns.var()
     if variance <= 1e-12:
-        raise ValueError("SPY prices have too little variation to estimate market sensitivity.")
+        raise ValueError("The benchmark has too little variation to estimate market sensitivity.")
     beta = np.mean((holding_returns - holding_returns.mean()) * (market_returns - market_returns.mean())) / variance
     benchmark_years = (aligned.index[-1] - aligned.index[0]).days / 365.25
     observed_trend = (log_prices[-1, 1] - log_prices[0, 1]) / benchmark_years
-    trend_change = beta * (np.log1p(market_rate) - observed_trend)
+    if scenario == "bull":
+        scenario_trend = max(0.0, observed_trend) + np.log1p(bull_boost)
+    elif scenario == "bear":
+        scenario_trend = min(observed_trend, np.log1p(FIT_MARKET_RATES["bear"]))
+    else:
+        scenario_trend = 0.0
+    trend_change = beta * (scenario_trend - observed_trend)
     elapsed_years = (close.index - close.index[0]).days / 365.25
     with np.errstate(over="ignore", under="ignore"):
         adjusted = close * np.exp(trend_change * elapsed_years)
     if not np.isfinite(adjusted).all() or (adjusted <= 0).any():
         raise ValueError("The market adjustment produced prices outside the supported range.")
-    return adjusted
+    return adjusted, float(np.expm1(observed_trend)), float(np.expm1(scenario_trend))
 
 
-def evaluate_drip_fit(payload, ticker, start_day, today, *, scenario="current", cash_rate=None, benchmark=None):
+def evaluate_drip_fit(payload, ticker, start_day, today, *, scenario="current", cash_rate=None, benchmark=None,
+                      benchmark_symbol=FIT_MARKET_BENCHMARK, bull_boost=FIT_MARKET_RATES["bull"]):
     """Replay observed payouts on actual or benchmark-adjusted closing prices."""
     import pandas as pd
     import drip_score
@@ -898,12 +905,15 @@ def evaluate_drip_fit(payload, ticker, start_day, today, *, scenario="current", 
     if not (divs > 0).any():
         return {"label": NO_DISTRIBUTIONS, "call": None,
                 "reason": "It paid no distributions in the window, so there is nothing to reinvest."}
-    market_rate = FIT_MARKET_RATES[scenario]
-    if market_rate is not None:
+    market_context = {}
+    if scenario != "current":
         try:
-            close = _fit_scenario_closes(close, _fit_closes(benchmark, start_day, today), market_rate)
+            close, observed, assumed = _fit_scenario_closes(
+                close, _fit_closes(benchmark, start_day, today), scenario, bull_boost)
         except ValueError as problem:
-            return {"label": "Benchmark unavailable", "call": None, "reason": str(problem)}
+            return {"label": "Benchmark unavailable", "call": None, "reason": f"{benchmark_symbol}. {problem}"}
+        market_context = {"benchmark": benchmark_symbol, "benchmark_observed_cagr": observed,
+                          "benchmark_scenario_cagr": assumed}
     try:
         # The verdict counts the extra payouts through the shares they bought.
         reinvest = drip_score.simulate_drip(close, divs, initial=FIT_DISPLAY_BASE, reinvest=1.0)
@@ -932,6 +942,7 @@ def evaluate_drip_fit(payload, ticker, start_day, today, *, scenario="current", 
     }
     return {
         **payouts,
+        **market_context,
         "label": FIT_LABELS.get(call, NO_FIT),
         "call": call if call in FIT_LABELS else None,
         "bucket": metrics.get("bucket"),
@@ -939,6 +950,8 @@ def evaluate_drip_fit(payload, ticker, start_day, today, *, scenario="current", 
         "win_rate": metrics.get("win_rate"),
         "conflicted": bool(metrics.get("conflicted")),
         "price_cagr": metrics.get("nav_annual"),
+        "start_price": metrics.get("start_price"),
+        "end_price": metrics.get("end_price"),
         "coverage": metrics.get("coverage"),
         "annual_yield": metrics.get("annual_yield"),
         "cash_rate": cash_rate,
