@@ -56281,11 +56281,19 @@ def builder_export(port_id):
         import csv
         from io import StringIO
 
+        # A CSV has no Summary sheet to name its currency, so a converted
+        # money column says so in its header ("Amount (CAD)"); the Import
+        # reads it back to dollars from there.
+        labels = [
+            f"{h} ({fx['currency']})"
+            if fx["currency"] != "USD" and h in _BUILDER_EXPORT_MONEY_HEADERS else h
+            for h in headers
+        ]
         text = StringIO()
-        writer = csv.DictWriter(text, fieldnames=headers)
-        writer.writeheader()
+        writer = csv.writer(text)
+        writer.writerow(labels)
         for row in [*rows, total]:
-            writer.writerow({h: "" if row[h] is None else row[h] for h in headers})
+            writer.writerow(["" if row[h] is None else row[h] for h in headers])
         # The BOM makes Excel read the file as UTF-8 rather than the ANSI codepage.
         out = BytesIO(text.getvalue().encode("utf-8-sig"))
         return send_file(out, as_attachment=True, download_name=filename,
@@ -56345,6 +56353,268 @@ def builder_export(port_id):
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name=filename,
                      mimetype=_BUILDER_EXPORT_FORMATS[fmt])
+
+
+# ── Portfolio Builder Import ─────────────────────────────────────────────────
+# Reads back what Export Excel / Export CSV write, so a model can move between
+# accounts or be shared with someone else. Reading writes nothing: the page
+# shows what the file holds, asks for a name, and creates the model through
+# the ordinary create call.
+
+_BUILDER_IMPORT_MAX_HOLDINGS = 2000
+_BUILDER_IMPORT_MAX_BYTES = 10 * 1024 * 1024
+_BUILDER_IMPORT_TICKER_HEADERS = ("ticker", "symbol")
+_BUILDER_IMPORT_AMOUNT_HEADERS = ("amount", "dollar amount", "dollar_amount", "market value", "value")
+# The export's own last row, and the label a hand-made sheet might total with.
+_BUILDER_IMPORT_TOTAL_LABELS = {"portfolio", "total", "totals"}
+_BUILDER_IMPORT_NOT_AN_EXPORT = (
+    "The file has no Ticker column. Import a file made by Export Excel or Export CSV "
+    "on Portfolio Builder."
+)
+
+
+def _builder_import_header(raw):
+    """(lower-cased name, currency or None) for a header such as 'Amount (CAD)'."""
+    text = str(raw if raw is not None else "").replace("﻿", "").strip()
+    match = re.match(r"^(.*?)\s*\(([A-Za-z]{3})\)$", text)
+    if match:
+        return match.group(1).strip().lower(), match.group(2).upper()
+    return text.lower(), None
+
+
+def _builder_import_number(raw):
+    """A finite float from a cell (number or text like '$1,234.50'), else None."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+    else:
+        text = re.sub(r"[^0-9.\-]", "", str(raw))
+        if not text or text in {"-", ".", "-."}:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+    return value if math.isfinite(value) else None
+
+
+def _builder_import_table(rows):
+    """Holdings from a table: (holdings, skipped, header currency or None).
+
+    The header is the first row (of the first 20) with a Ticker or Symbol
+    column. An Amount column is read as is; without one, Shares × Price. The
+    export's Portfolio row and blank lines are passed over, and a ticker that
+    appears twice is summed, as a model holds each ticker once.
+    """
+    header_at = None
+    for i, row in enumerate(rows[:20]):
+        if any(_builder_import_header(cell)[0] in _BUILDER_IMPORT_TICKER_HEADERS for cell in row):
+            header_at = i
+            break
+    if header_at is None:
+        raise ValueError(_BUILDER_IMPORT_NOT_AN_EXPORT)
+
+    columns, currencies = {}, set()
+    for ci, cell in enumerate(rows[header_at]):
+        name, currency = _builder_import_header(cell)
+        columns.setdefault(name, ci)
+        if currency and name in {"amount", "price", "running total", "annual income", "monthly income"}:
+            currencies.add(currency)
+    if len(currencies) > 1:
+        raise ValueError("The file's money columns are in more than one currency.")
+
+    ticker_col = next(columns[h] for h in _BUILDER_IMPORT_TICKER_HEADERS if h in columns)
+    amount_col = next((columns[h] for h in _BUILDER_IMPORT_AMOUNT_HEADERS if h in columns), None)
+    shares_col, price_col = columns.get("shares"), columns.get("price")
+    if amount_col is None and (shares_col is None or price_col is None):
+        raise ValueError("The file has no Amount column (or Shares and Price) to size the holdings.")
+
+    def cell(row, ci):
+        return row[ci] if ci is not None and ci < len(row) else None
+
+    merged, skipped = {}, []
+    for row in rows[header_at + 1:]:
+        text = str(cell(row, ticker_col) if cell(row, ticker_col) is not None else "").strip()
+        if not text or text.lower() in _BUILDER_IMPORT_TOTAL_LABELS:
+            continue
+        ticker = _builder_clean_ticker(text)
+        if ticker is None:
+            skipped.append({"ticker": text[:40], "reason": "is not a ticker symbol"})
+            continue
+        amount = _builder_import_number(cell(row, amount_col))
+        if amount is None and shares_col is not None and price_col is not None:
+            shares = _builder_import_number(cell(row, shares_col))
+            price = _builder_import_number(cell(row, price_col))
+            if shares is not None and price is not None:
+                amount = shares * price
+        if _builder_clean_amount(amount) is None:
+            skipped.append({"ticker": ticker, "reason": "has no amount above zero"})
+            continue
+        if ticker not in merged and len(merged) >= _BUILDER_IMPORT_MAX_HOLDINGS:
+            raise ValueError(f"The file lists more than {_BUILDER_IMPORT_MAX_HOLDINGS:,} holdings.")
+        merged[ticker] = merged.get(ticker, 0.0) + float(amount)
+    holdings = [{"ticker": t, "dollar_amount": a} for t, a in merged.items()]
+    return holdings, skipped, (currencies.pop() if currencies else None)
+
+
+def _builder_import_pairs(sheet):
+    """{label: value} from a two-column label/value sheet such as Summary."""
+    pairs = {}
+    for row in sheet.iter_rows(max_row=200, max_col=2, values_only=True):
+        if row and row[0] is not None and str(row[0]).strip():
+            pairs.setdefault(str(row[0]).strip(), row[1] if len(row) > 1 else None)
+    return pairs
+
+
+def _builder_import_read(raw, filename):
+    """(rows, summary, export info, format) from the uploaded bytes."""
+    if raw[:4] == b"PK\x03\x04":
+        from io import BytesIO
+        from openpyxl import load_workbook
+
+        try:
+            wb = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+        except Exception:
+            raise ValueError("The file could not be read as an Excel workbook.") from None
+        try:
+            sheet = wb["Holdings"] if "Holdings" in wb.sheetnames else wb.worksheets[0]
+            rows = [list(r) for r in sheet.iter_rows(
+                max_row=_BUILDER_IMPORT_MAX_HOLDINGS + 50, values_only=True)]
+            summary = _builder_import_pairs(wb["Summary"]) if "Summary" in wb.sheetnames else {}
+            info = _builder_import_pairs(wb["Export Info"]) if "Export Info" in wb.sheetnames else {}
+        finally:
+            wb.close()
+        return rows, summary, info, "xlsx"
+    if raw[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        raise ValueError("This is an old-style .xls workbook. Save it as .xlsx or .csv, then import it.")
+
+    import csv
+    from io import StringIO
+
+    text = None
+    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None or "\x00" in text:
+        raise ValueError("The file is not a CSV or Excel (.xlsx) file.")
+    first_line = text.split("\n", 1)[0]
+    delimiter = ";" if first_line.count(";") > first_line.count(",") else ","
+    rows = list(csv.reader(StringIO(text), delimiter=delimiter))
+    return rows[:_BUILDER_IMPORT_MAX_HOLDINGS + 50], {}, {}, "csv"
+
+
+def _builder_import_name_from_filename(filename):
+    """'portfolio_builder_Income_Model_1y.csv' -> 'Income Model'."""
+    stem = os.path.splitext(os.path.basename(str(filename or "")))[0]
+    stem = re.sub(r"\s*\(\d+\)$", "", stem)  # a browser's "(1)" for a repeat download
+    stem = re.sub(r"^portfolio_builder_", "", stem, flags=re.IGNORECASE)
+    stem = re.sub(r"_(?:\d+[dwmy]|ytd|max)$", "", stem, flags=re.IGNORECASE)
+    return re.sub(r"[_\s]+", " ", stem).strip()
+
+
+def _builder_import_usd_rate(currency, file_rate):
+    """(units of ``currency`` per USD, where the rate came from)."""
+    if currency in (None, "USD"):
+        return 1.0, None
+    if currency != "CAD":
+        raise ValueError(f"The amounts in this file are in {currency}; only USD and CAD can be read.")
+    rate = _valid_fx_rate(file_rate)
+    if rate:
+        return rate, "file"
+    try:
+        stored = _fx_settings()
+    except sqlite3.OperationalError:
+        stored = {}
+    rate = _valid_fx_rate(stored.get("usd_cad_manual_rate")) or _valid_fx_rate(stored.get("usd_cad_rate"))
+    if not rate:
+        raise ValueError(
+            "The amounts in this file are in CAD, and no USD/CAD rate is set to read them back to dollars. "
+            "Set one on the Settings page, then import again.")
+    return rate, "current"
+
+
+@app.route("/api/builder/import", methods=["POST"])
+def builder_import_read():
+    """What a Builder export holds, in USD, ready for the create call.
+
+    Reads an Export Excel workbook (holdings, plus the name, starting balance,
+    target, and max per holding from its Summary) or an Export CSV (holdings;
+    the name comes from the file name). Money exported in CAD is turned back
+    into USD at the rate the file was written with, or, for a CSV, today's.
+    """
+    upload = request.files.get("file")
+    if upload is None:
+        return jsonify({"error": "No file uploaded."}), 400
+    raw = upload.read(_BUILDER_IMPORT_MAX_BYTES + 1)
+    if not raw:
+        return jsonify({"error": "The file is empty."}), 400
+    if len(raw) > _BUILDER_IMPORT_MAX_BYTES:
+        return jsonify({"error": "The file is larger than 10 MB."}), 400
+    filename = upload.filename or ""
+
+    warnings = []
+    try:
+        rows, summary, info, fmt = _builder_import_read(raw, filename)
+        holdings, skipped, header_currency = _builder_import_table(rows)
+        currency = str(summary.get("Currency") or info.get("Export Currency") or header_currency or "USD")
+        currency = currency.strip().upper() or "USD"
+        rate, rate_source = _builder_import_usd_rate(currency, info.get("USD/CAD Rate"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    def usd(value):
+        return round(value / rate, 2) if value is not None else None
+
+    for h in holdings:
+        h["dollar_amount"] = usd(h["dollar_amount"])
+    holdings = [h for h in holdings if h["dollar_amount"] and h["dollar_amount"] > 0]
+    if not holdings:
+        detail = f" ({len(skipped)} row{'s' if len(skipped) != 1 else ''} skipped)" if skipped else ""
+        return jsonify({"error": f"The file has no holdings with a ticker and an amount{detail}."}), 400
+
+    # Settings from the Summary sheet, checked the way the create call checks
+    # them; one the file gets wrong is left off and said so, not fatal.
+    settings = {}
+    if summary:
+        target_kind = str(summary.get("Target set as") or "").strip().lower()
+        if "Target set as" not in summary and summary.get("Target yield %") is not None:
+            target_kind = "yield %"
+        raw_settings = {
+            "starting_balance": usd(_builder_import_number(summary.get("Starting balance"))),
+            "max_weight_pct": _builder_import_number(summary.get("Max per holding %")),
+            "target_yield_pct": (_builder_import_number(summary.get("Target yield %"))
+                                 if target_kind.startswith("yield") else None),
+            "target_monthly_income": (usd(_builder_import_number(summary.get("Target monthly income")))
+                                      if target_kind == "monthly income" else None),
+        }
+        for field, value in raw_settings.items():
+            clean, error = _builder_clean_target_field(field, value)
+            if error:
+                warnings.append(f"{error}; the file's value ({value}) was left off.")
+                clean = None
+            settings[field] = clean
+
+    name = str(summary.get("Portfolio") or "").strip() or _builder_import_name_from_filename(filename)
+    return jsonify({
+        "name": name[:120],
+        "holdings": holdings,
+        "total": round(sum(h["dollar_amount"] for h in holdings), 2),
+        "starting_balance": settings.get("starting_balance"),
+        "target_yield_pct": settings.get("target_yield_pct"),
+        "target_monthly_income": settings.get("target_monthly_income"),
+        "max_weight_pct": settings.get("max_weight_pct"),
+        "format": fmt,
+        "currency": currency,
+        "rate": rate if rate_source else None,
+        "rate_source": rate_source,
+        "skipped": skipped,
+        "warnings": warnings,
+        "has_settings": bool(summary),
+    })
 
 
 # ── Portfolio Builder Compare ────────────────────────────────────────────────
@@ -56895,11 +57165,13 @@ def _fx_settings():
         "usd_cad_rate_source", "usd_cad_manual_rate", "usd_cad_manual_updated_at",
     )
     conn = get_connection()
-    rows = conn.execute(
-        f"SELECT key, value FROM settings WHERE key IN ({','.join('?' for _ in keys)})",
-        keys,
-    ).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(
+            f"SELECT key, value FROM settings WHERE key IN ({','.join('?' for _ in keys)})",
+            keys,
+        ).fetchall()
+    finally:
+        conn.close()
     return {row["key"]: row["value"] for row in rows}
 
 

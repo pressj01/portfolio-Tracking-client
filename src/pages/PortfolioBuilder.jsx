@@ -15,6 +15,7 @@ import {
 import { GRADING_PREFERENCES_EVENT, gradingSettingsPayload } from '../utils/gradingPreferences'
 import { PERFORMANCE_PERIODS } from '../utils/performancePeriods'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { describeImport, suggestImportName } from '../utils/builderImport'
 
 // The Builder grades over Dashboard's calendar windows (same keys, same
 // backend resolver), plus Max, which a model with no first trade defines as
@@ -945,6 +946,8 @@ export default function PortfolioBuilder() {
   const [wholeShares, setWholeSharesState] = useState(() => readPref(PREF_WHOLE_SHARES, '0') === '1')
   const [balanceUndo, setBalanceUndo] = useState(null) // { pid, changes, moved, cash, kind, wholeShares }
   const [exporting, setExporting] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const importInputRef = useRef(null)
 
   // Analysis
   const [period, setPeriodState] = useState(() => {
@@ -2004,6 +2007,63 @@ export default function PortfolioBuilder() {
     } finally { setExporting(null) }
   }
 
+  // ── Import ─────────────────────────────────────────────────────────────────
+  // Reads an Export Excel / Export CSV file (this account's or someone
+  // else's), shows what it holds, and saves it as a new model under a name
+  // the user confirms. Reading the file writes nothing.
+  const chooseImportFile = () => {
+    if (!importing) importInputRef.current?.click()
+  }
+
+  const importPortfolioFile = async (file) => {
+    if (!file || importing) return
+    setImporting(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await pf('/api/builder/import', { method: 'POST', body: form })
+      const parsed = await res.json().catch(() => ({}))
+      if (!res.ok || parsed.error) throw new Error(parsed.error || `HTTP ${res.status}`)
+
+      let message = describeImport(parsed, file.name, fmt$)
+      let suggestion = suggestImportName(parsed.name, portfolios.map(p => p.name))
+      for (;;) {
+        const name = (await dialog.prompt(message, suggestion))?.trim()
+        if (!name) return
+        const created = await pf('/api/builder/portfolios', {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            name,
+            holdings: parsed.holdings,
+            starting_balance: parsed.starting_balance,
+            target_yield_pct: parsed.target_yield_pct,
+            target_monthly_income: parsed.target_monthly_income,
+            max_weight_pct: parsed.max_weight_pct,
+          }),
+        })
+        const body = await created.json().catch(() => ({}))
+        if (created.status === 409) {
+          // Taken since the list loaded, or typed over the suggestion: ask again.
+          const list = await loadPortfolios()
+          suggestion = suggestImportName(name, (list || portfolios).map(p => p.name))
+          message = `${body.error || `A portfolio named "${name}" already exists.`} Choose another name:`
+          continue
+        }
+        if (!created.ok || body.error) throw new Error(body.error || `HTTP ${created.status}`)
+        await loadPortfolios()
+        selectPortfolio(body.id)
+        return
+      }
+    } catch (e) {
+      await dialog.alert(`Import failed: ${e.message}`)
+    } finally {
+      setImporting(false)
+      // The same file can be chosen again after a cancel or a failure.
+      if (importInputRef.current) importInputRef.current.value = ''
+    }
+  }
+
   const visibleGroups = (COLUMN_VIEWS.find(v => v.key === columnView) || COLUMN_VIEWS[0]).groups
   const visibleColumns = COLUMNS.filter(c => visibleGroups.includes(c.group))
   const groupSpans = visibleColumns.reduce((spans, c) => {
@@ -2315,6 +2375,22 @@ export default function PortfolioBuilder() {
         >
           From my holdings…
         </button>
+        <button
+          type="button"
+          className="pb-new-btn pb-copy-btn"
+          onClick={chooseImportFile}
+          disabled={importing}
+          title="Add a model from an Export Excel or Export CSV file made on this page, yours or one someone shared with you."
+        >
+          {importing ? 'Importing…' : 'Import file…'}
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".xlsx,.csv"
+          hidden
+          onChange={e => importPortfolioFile(e.target.files?.[0])}
+        />
         <div className="pb-port-list">
           {portfolios.map(p => (
             <div
@@ -2372,6 +2448,9 @@ export default function PortfolioBuilder() {
             <div className="pb-empty-actions">
               <button type="button" className="btn btn-primary" onClick={createPortfolio}>New portfolio</button>
               <button type="button" className="btn btn-secondary" onClick={openLivePicker}>From my holdings…</button>
+              <button type="button" className="btn btn-secondary" onClick={chooseImportFile} disabled={importing}>
+                {importing ? 'Importing…' : 'Import file…'}
+              </button>
             </div>
           </div>
         ) : (
