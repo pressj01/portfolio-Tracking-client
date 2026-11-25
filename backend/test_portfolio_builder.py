@@ -716,6 +716,164 @@ class PortfolioBuilderTest(unittest.TestCase):
         other = self._portfolio(self.HELD, name="Theirs", profile_id=2)
         self.assertEqual(self._export(other, "csv", profile_id=1)[0].status_code, 404)
 
+    # ── Import ───────────────────────────────────────────────────────────────
+
+    CREATE_FIELDS = ("name", "holdings", "starting_balance", "target_yield_pct",
+                     "target_monthly_income", "max_weight_pct")
+
+    def _import(self, data, filename, profile_id=1):
+        from io import BytesIO
+
+        response = self.client.post(
+            f"/api/builder/import?profile_id={profile_id}",
+            data={"file": (BytesIO(data), filename)},
+            content_type="multipart/form-data",
+        )
+        return response, response.get_json()
+
+    def _set_cad_rate(self, rate):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('usd_cad_manual_rate', ?)", (str(rate),))
+        conn.commit()
+        conn.close()
+
+    def _export_in(self, pid, fmt, currency):
+        self.yield_patch.stop()
+        try:
+            with patch.object(app_module, "_builder_distribution_yield",
+                              side_effect=lambda t, _p: self.YIELDS.get(t, (0.0, None))):
+                return self.client.post(
+                    f"/api/builder/portfolios/{pid}/export?profile_id=1&currency={currency}",
+                    json={"format": fmt, "benchmark": "SPY", "period": "1y"})
+        finally:
+            self.yield_patch.start()
+
+    def test_an_excel_export_imports_back_with_its_settings(self):
+        pid = self._portfolio(self.HELD, name="Income Model")
+        self._patch(pid, {"target_monthly_income": 35, "max_weight_pct": 40, "starting_balance": 5000})
+        response, _analyzed = self._export(pid, "xlsx")
+        imported, body = self._import(response.data, "portfolio_builder_Income_Model_1y.xlsx")
+
+        self.assertEqual(imported.status_code, 200, body)
+        self.assertEqual(body["name"], "Income Model")
+        self.assertEqual(body["format"], "xlsx")
+        self.assertEqual(body["currency"], "USD")
+        # The Portfolio total row is not a holding.
+        self.assertEqual([(h["ticker"], h["dollar_amount"]) for h in body["holdings"]], list(self.HELD.items()))
+        self.assertEqual(body["total"], 3500.0)
+        self.assertEqual(body["starting_balance"], 5000.0)
+        self.assertEqual(body["target_monthly_income"], 35.0)
+        # The Summary also states the monthly target as a yield; only the one it was set as comes back.
+        self.assertIsNone(body["target_yield_pct"])
+        self.assertEqual(body["max_weight_pct"], 40.0)
+        self.assertEqual(body["skipped"], [])
+
+        # Someone else's account takes it through the ordinary create call.
+        created = self.client.post("/api/builder/portfolios?profile_id=2",
+                                   json={k: body[k] for k in self.CREATE_FIELDS})
+        self.assertEqual(created.status_code, 201, created.get_json())
+        new_id = created.get_json()["id"]
+        listed = {p["id"]: p for p in self.client.get("/api/builder/portfolios?profile_id=2").get_json()["portfolios"]}
+        self.assertEqual(listed[new_id]["name"], "Income Model")
+        self.assertEqual(listed[new_id]["target_monthly_income"], 35.0)
+        self.assertEqual(listed[new_id]["starting_balance"], 5000.0)
+        held = self.client.get(f"/api/builder/portfolios/{new_id}/holdings?profile_id=2").get_json()["holdings"]
+        self.assertEqual([(h["ticker"], h["dollar_amount"]) for h in held], list(self.HELD.items()))
+
+    def test_an_excel_yield_target_imports_as_a_yield(self):
+        pid = self._portfolio(self.HELD)
+        self._set_target(pid, 8)
+        _imported, body = self._import(self._export(pid, "xlsx")[0].data, "model.xlsx")
+        self.assertEqual(body["target_yield_pct"], 8.0)
+        self.assertIsNone(body["target_monthly_income"])
+        self.assertIsNone(body["starting_balance"])
+
+    def test_a_csv_export_imports_back_named_from_its_file(self):
+        pid = self._portfolio(self.HELD, name="My Model / 2026")
+        response, _analyzed = self._export(pid, "csv")
+        imported, body = self._import(response.data, "portfolio_builder_My_Model_2026_1y (1).csv")
+
+        self.assertEqual(imported.status_code, 200, body)
+        self.assertEqual(body["name"], "My Model 2026")
+        self.assertEqual(body["format"], "csv")
+        self.assertEqual([(h["ticker"], h["dollar_amount"]) for h in body["holdings"]], list(self.HELD.items()))
+        self.assertFalse(body["has_settings"])
+        self.assertIsNone(body["target_yield_pct"])
+
+    def test_a_cad_excel_export_imports_back_at_the_files_rate(self):
+        self._set_cad_rate(1.25)
+        pid = self._portfolio(self.HELD)
+        self._patch(pid, {"starting_balance": 5000, "target_monthly_income": 35})
+        response = self._export_in(pid, "xlsx", "CAD")
+        self.assertEqual(response.status_code, 200)
+        # Today's rate has moved since; the file's own rate undoes its conversion.
+        self._set_cad_rate(1.5)
+        imported, body = self._import(response.data, "model.xlsx")
+
+        self.assertEqual(imported.status_code, 200, body)
+        self.assertEqual(body["currency"], "CAD")
+        self.assertEqual(body["rate"], 1.25)
+        self.assertEqual(body["rate_source"], "file")
+        self.assertEqual([(h["ticker"], h["dollar_amount"]) for h in body["holdings"]], list(self.HELD.items()))
+        self.assertEqual(body["starting_balance"], 5000.0)
+        self.assertEqual(body["target_monthly_income"], 35.0)
+
+    def test_a_cad_csv_export_says_so_and_imports_back_at_todays_rate(self):
+        import csv
+        from io import StringIO
+
+        self._set_cad_rate(1.25)
+        pid = self._portfolio(self.HELD)
+        response = self._export_in(pid, "csv", "CAD")
+        header = next(csv.reader(StringIO(response.data.decode("utf-8-sig"))))
+        self.assertIn("Amount (CAD)", header)
+        self.assertIn("Shares", header)
+        imported, body = self._import(response.data, "model.csv")
+
+        self.assertEqual(imported.status_code, 200, body)
+        self.assertEqual(body["currency"], "CAD")
+        self.assertEqual(body["rate_source"], "current")
+        self.assertEqual([(h["ticker"], h["dollar_amount"]) for h in body["holdings"]], list(self.HELD.items()))
+
+    def test_a_usd_csv_export_keeps_its_plain_headers(self):
+        response, _analyzed = self._export(self._portfolio(self.HELD), "csv")
+        self.assertTrue(response.data.decode("utf-8-sig").startswith("Ticker,Name,Yield %,Yield Source,Amount,"))
+
+    def test_import_reads_a_hand_made_sheet_and_reports_what_it_skips(self):
+        text = (
+            "My model\n"
+            "Symbol,Shares,Price\n"
+            "aaa,10,12.5\n"
+            "AAA,2,12.5\n"
+            "not a ticker,1,1\n"
+            "BBB,0,40\n"
+            "\n"
+            "Total,,\n"
+        )
+        imported, body = self._import(text.encode(), "shared.csv")
+        self.assertEqual(imported.status_code, 200, body)
+        self.assertEqual(body["name"], "shared")
+        # The same ticker twice is one holding.
+        self.assertEqual(body["holdings"], [{"ticker": "AAA", "dollar_amount": 150.0}])
+        self.assertEqual([s["ticker"] for s in body["skipped"]], ["not a ticker", "BBB"])
+
+    def test_import_refuses_what_it_cannot_read(self):
+        self.assertEqual(self._import(b"", "x.csv")[0].status_code, 400)
+        no_ticker = self._import(b"Fund,Value\nAAA,100\n", "x.csv")
+        self.assertEqual(no_ticker[0].status_code, 400)
+        self.assertIn("Ticker", no_ticker[1]["error"])
+        old_excel = self._import(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64, "x.xls")
+        self.assertIn(".xlsx", old_excel[1]["error"])
+        self.assertEqual(self._import(b"PK\x03\x04garbage", "x.xlsx")[0].status_code, 400)
+        no_amounts = self._import(b"Ticker,Amount\nAAA,0\n", "x.csv")
+        self.assertEqual(no_amounts[0].status_code, 400)
+        # CAD with no rate in the file and none set here cannot be read back to dollars.
+        no_rate = self._import(b"Ticker,Amount (CAD)\nAAA,100\n", "x.csv")
+        self.assertEqual(no_rate[0].status_code, 400)
+        self.assertIn("USD/CAD", no_rate[1]["error"])
+        self.assertEqual(self.client.post("/api/builder/import?profile_id=1").status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
