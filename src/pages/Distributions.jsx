@@ -14,7 +14,8 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const TABS = [['monthly', 'Monthly Income'], ['analyzer', 'Distribution Analyzer'], ['portfolio', 'Portfolio Income'], ['floor', 'Income Floor'], ['drip', 'DRIP Ledger']]
 const DASH = '—'
 const SHOW_SOLD_KEY = 'distributions.showSoldHoldings'
-const COLORS = { actual: '#32b979', estimate: '#e4aa45', reference: '#55b9ea', latest: '#e8a543' }
+// `compare` matches --dist-compare in Distributions.css; Plotly cannot read CSS variables.
+const COLORS = { actual: '#32b979', estimate: '#e4aa45', reference: '#55b9ea', latest: '#e8a543', compare: '#a275ee' }
 const money = v => v == null ? DASH : formatMoney(v)
 const money4 = v => v == null ? DASH : formatMoney(v, { digits: 4 })
 const deltaMoney = v => v == null ? DASH : formatMoneyDelta(v)
@@ -149,9 +150,10 @@ function SortableTable({ columns, rows, initialSort = 'ticker', onTicker, select
   if (sort?.key !== 'category') groupNames.sort((a, b) => String(a).localeCompare(String(b)))
   const groups = groupBy ? groupNames.map(name => [name, sorted.filter(r => groupBy(r) === name)]) : [[null, sorted]]
   const totalCells = row => columns.map((col, i) => <td key={col.key}>{i === 0 ? row.ticker : row[col.key] != null ? col.format?.(row[col.key], row) ?? row[col.key] : DASH}</td>)
-  const renderRow = r => <tr key={r.ticker} className={selected === r.ticker ? 'dist-selected-row' : ''}>{columns.map(col => <td key={col.key} className={`${col.text ? 'dist-left' : ''} ${col.highlight ? 'dist-highlight' : ''} ${col.signed ? tone(r[col.key]) : ''}`}
+  const renderRow = r => <tr key={r.ticker} className={[selected === r.ticker && 'dist-selected-row', r.compare && 'dist-compare-row'].filter(Boolean).join(' ')}>{columns.map(col => <td key={col.key} className={`${col.text ? 'dist-left' : ''} ${col.highlight ? 'dist-highlight' : ''} ${col.signed ? tone(r[col.key]) : ''}`}
       title={col.key === 'ticker' ? r.message || r.description : col.key === 'description' ? r.description : undefined}>
       {col.key === 'ticker' && onTicker ? <button className="dist-ticker" type="button" onClick={() => onTicker(r.ticker)}>{r.ticker}</button> : col.format ? col.format(r[col.key], r) : r[col.key] ?? DASH}
+      {col.key === 'ticker' && r.compare && <span className="dist-compare-tag" title="Added to compare; not held in this portfolio">compare</span>}
     </td>)}</tr>
   return <div className="holdings-table-wrap dist-table-wrap"><table className="holdings-table dist-table">
     <thead><tr>{columns.map(col => <DistributionSortHeader key={col.key} column={col} sort={sort} onSort={onSort} />)}</tr></thead>
@@ -183,17 +185,31 @@ const ANALYZER_COLUMNS = [
 // Wrapper avoids Array/column callbacks passing a row as the optional precision.
 for (const col of ANALYZER_COLUMNS) if (col.format === percent) col.format = v => percent(v)
 
-function Analyzer({ rows, loading, holdings, custom, setCustom, allHoldings, setAllHoldings, refresh }) {
+function Analyzer({ rows, loading, holdings, heldTickers, custom, setCustom, allHoldings, setAllHoldings, refresh }) {
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(null)
-  const visible = rows.filter(r => r.ticker.includes(query.trim().toUpperCase()))
-  const chartRows = visible.filter(r => r.low != null && r.high != null).sort((a, b) => b.average - a.average).slice(0, 30)
+  // Funds added only to compare (not held here) are marked in the chart and table.
+  const compare = new Set(custom.filter(t => !heldTickers.has(t)))
+  // Adding a fund already held changes no table row, so say why nothing new appeared.
+  const alreadyHeld = custom.filter(t => heldTickers.has(t))
+  const visible = rows.filter(r => r.ticker.includes(query.trim().toUpperCase())).map(r => compare.has(r.ticker) ? { ...r, compare: true } : r)
+  const ranged = visible.filter(r => r.low != null && r.high != null).sort((a, b) => b.average - a.average)
+  // Added funds are always charted: a portfolio full of higher payers would
+  // otherwise push a ~14% comparison fund below the top-30 cut-off.
+  const chartRows = ranged.filter((r, i) => i < 30 || custom.includes(r.ticker))
+  // Held and compared funds are split into separate traces, which would
+  // reorder the category axis; the layout pins it to this yield ranking.
+  const chartTickers = chartRows.map(r => r.ticker)
+  const ownedRows = chartRows.filter(r => !r.compare), compareRows = chartRows.filter(r => r.compare)
+  const rangeTrace = (list, name, color) => ({ type: 'scatter', mode: 'markers', name, x: list.map(r => r.ticker), y: list.map(r => r.average), marker: { color, size: 10 },
+    error_y: { type: 'data', symmetric: false, array: list.map(r => r.high - r.average), arrayminus: list.map(r => r.average - r.low), color, thickness: 2 },
+    customdata: list.map(r => [r.low, r.high]), hovertemplate: `%{x}${list[0]?.compare ? ' (compared)' : ''}<br>Average: %{y:.2f}%<br>Low–high: %{customdata[0]:.2f}% – %{customdata[1]:.2f}%<extra></extra>` })
   const detail = visible.find(r => r.ticker === selected && r.events?.length) || visible.find(r => r.events?.length)
   const add = e => {
     e.preventDefault()
     const values = input.toUpperCase().split(/[\s,]+/).filter(t => /^[A-Z0-9.^=\-/]{1,20}$/.test(t))
-    if (values.length) { setCustom([...new Set([...custom, ...values])]); setInput('') }
+    if (values.length) { setCustom([...new Set([...custom, ...values])]); setSelected(values[0]); setInput('') }
   }
   return <>
     <div className="dist-controls">
@@ -203,13 +219,15 @@ function Analyzer({ rows, loading, holdings, custom, setCustom, allHoldings, set
       <button type="button" className="btn" onClick={refresh} disabled={loading}>Reload market data</button>
     </div>
     {custom.length > 0 && <div className="dist-chips">{custom.map(t => <button key={t} className="dist-chip" type="button" title={`Remove ${t} from comparison`} onClick={() => setCustom(custom.filter(v => v !== t))}>{t} ×</button>)}</div>}
+    {alreadyHeld.length > 0 && <p className="dist-note">You already hold {alreadyHeld.join(', ')} in this portfolio, so {alreadyHeld.length === 1 ? 'it was' : 'they were'} already in the table below. {alreadyHeld.length === 1 ? 'It now stays' : 'They now stay'} on the chart even when ranked below the top 30.</p>}
     {loading && <div className="dist-loading" role="status"><span className="spinner" /> Loading historical prices and cash distributions…</div>}
-    {chartRows.length > 0 && <Chart title="Annualized payout yield range" subtitle={`Historical low to high range, with average and latest payout yield${visible.length > 30 ? ' (top 30 by average yield)' : ''}.`}
-      data={[{ type: 'scatter', mode: 'markers', name: 'Historical average', x: chartRows.map(r => r.ticker), y: chartRows.map(r => r.average), marker: { color: COLORS.reference, size: 10 },
-        error_y: { type: 'data', symmetric: false, array: chartRows.map(r => r.high - r.average), arrayminus: chartRows.map(r => r.average - r.low), color: COLORS.reference, thickness: 2 },
-        customdata: chartRows.map(r => [r.low, r.high]), hovertemplate: '%{x}<br>Average: %{y:.2f}%<br>Low–high: %{customdata[0]:.2f}% – %{customdata[1]:.2f}%<extra></extra>' },
-      { type: 'scatter', mode: 'markers', name: 'Latest', x: chartRows.map(r => r.ticker), y: chartRows.map(r => r.latest), marker: { color: COLORS.latest, size: 10, symbol: 'diamond' }, hovertemplate: '%{x}<br>Latest: %{y:.2f}%<extra></extra>' }]}
-      layout={{ xaxis: { type: 'category', tickangle: chartRows.length > 12 ? -45 : 0 }, yaxis: { ticksuffix: '%', rangemode: 'tozero' }, margin: { t: 20, l: 65, r: 20, b: 70 } }} />}
+    {chartRows.length > 0 && <Chart title="Annualized payout yield range" subtitle={`Historical low to high range, with average and latest payout yield${ranged.length > chartRows.length ? ` (top 30 by average yield${custom.length ? ', plus the funds you added to compare' : ''})` : ''}.${compareRows.length ? ' Funds you added to compare are in purple.' : ''}`}
+      data={[...(ownedRows.length ? [rangeTrace(ownedRows, 'Historical average', COLORS.reference)] : []),
+        { type: 'scatter', mode: 'markers', name: 'Latest', x: chartTickers, y: chartRows.map(r => r.latest), marker: { color: COLORS.latest, size: 10, symbol: 'diamond' }, hovertemplate: '%{x}<br>Latest: %{y:.2f}%<extra></extra>' },
+        ...(compareRows.length ? [rangeTrace(compareRows, 'Compared fund average', COLORS.compare)] : [])]}
+      layout={{ xaxis: { type: 'category', categoryorder: 'array', categoryarray: chartTickers, tickvals: chartTickers,
+        ticktext: chartRows.map(r => r.compare ? `<b><span style="color:${COLORS.compare}">${r.ticker}</span></b>` : r.ticker), tickangle: chartRows.length > 12 ? -45 : 0 },
+        yaxis: { ticksuffix: '%', rangemode: 'tozero' }, margin: { t: 20, l: 65, r: 20, b: 70 } }} />}
     <h2>All fund distributions</h2>
     {!loading && visible.some(r => r.status === 'unavailable') && <p className="dist-note">Market history unavailable for {visible.filter(r => r.status === 'unavailable').length} of {visible.length} displayed funds; see the data status column or retry.</p>}
     <SortableTable rows={visible} columns={ANALYZER_COLUMNS} onTicker={setSelected} selected={detail?.ticker} />
@@ -411,7 +429,7 @@ export default function Distributions() {
     {loading && <div className="dist-loading" role="status"><span className="spinner" /> Loading portfolio distributions…</div>}
     {!loading && !error && data && <>
       {tab === 'monthly' && <MonthlyIncome history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={includeEstimates} setIncludeEstimates={setIncludeEstimates} query={monthlyQuery} setQuery={setMonthlyQuery} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} />}
-      {tab === 'analyzer' && <Analyzer rows={symbols.map(ticker => market.get(ticker) || { ticker, status: marketReady ? 'unavailable' : 'loading', message: marketReady ? 'No market history returned for this symbol.' : 'Loading…' })} loading={loadingMarket} holdings={incomeHoldings} custom={custom} setCustom={setCustom} allHoldings={allHoldings} setAllHoldings={setAllHoldings} refresh={() => setMarketRefresh(v => v + 1)} />}
+      {tab === 'analyzer' && <Analyzer rows={symbols.map(ticker => market.get(ticker) || { ticker, status: marketReady ? 'unavailable' : 'loading', message: marketReady ? 'No market history returned for this symbol.' : 'Loading…' })} loading={loadingMarket} holdings={incomeHoldings} heldTickers={heldTickers} custom={custom} setCustom={setCustom} allHoldings={allHoldings} setAllHoldings={setAllHoldings} refresh={() => setMarketRefresh(v => v + 1)} />}
       {tab === 'portfolio' && <PortfolioIncome holdings={incomeHoldings} history={data} market={market} loading={loadingMarket} />}
       {tab === 'drip' && <DistributionDripLedger key={profileQueryString} refreshKey={refresh} showSold={showSold} setShowSold={setShowSold} heldTickers={heldTickers} dripStatus={dripStatus} />}
       {tab === 'floor' && <DistributionIncomeFloor key={profileQueryString} history={data} holdings={holdings} year={year} setYear={setYear} includeEstimates={floorIncludeEstimates} setIncludeEstimates={setFloorIncludeEstimates} />}
