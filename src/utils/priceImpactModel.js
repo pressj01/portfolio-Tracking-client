@@ -71,11 +71,10 @@ export function projectPriceImpact(holdings, options) {
     const shares = Number(h.quantity) || 0
     const price = Number(h.current_price) || 0
     const freq = FREQ_MAP[String(h.div_frequency || '').trim()] || 0
-    let dps = Number(h.div) || 0
-    if (dps <= 0 && shares > 0 && freq > 0) {
-      const estimate = Number(h.estim_payment_per_year) || 0
-      if (estimate > 0) dps = estimate / (shares * freq)
-    }
+    const estimate = Number(h.estim_payment_per_year) || 0
+    const dps = (estimate > 0 && shares > 0 && freq > 0)
+      ? (estimate / (shares * freq))
+      : (Number(h.div) || 0)
     const sensitivity = holdingIncomeSensitivity(h, shockPct)
     const incomeFactor = Math.max(0, 1 + (shockPct / 100) * sensitivity.beta)
     return {
@@ -118,6 +117,7 @@ export function projectPriceImpact(holdings, options) {
         const alloc = monthlyContribution * (weights[h.ticker] || 0)
         const newShares = alloc / h.adjustedPrice
         simShares[h.ticker] += newShares
+        if (reinvestFrac > 0) simDripShares[h.ticker] += newShares
         contributionShares[h.ticker] += newShares
       })
     }
@@ -145,6 +145,7 @@ export function projectPriceImpact(holdings, options) {
       month: m,
       label,
       total_income: Math.round(monthIncome * 100) / 100,
+      income_without_reinvest: Math.round(adjustedCurrentMonthlyIncome * 100) / 100,
       annualized_income: Math.round(monthIncome * 12 * 100) / 100,
       total_shares: Math.round(rows.reduce((sum, h) => sum + simShares[h.ticker], 0) * 100) / 100,
     })

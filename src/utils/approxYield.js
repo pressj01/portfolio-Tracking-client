@@ -62,8 +62,38 @@ function foldExtraDistributions(distributions, multiplier) {
   return periods
 }
 
+// One-off specials are left out of a forward yield (rule chosen 2026-11-27),
+// say a single $2.01 payment against a regular $0.14 a month. A
+// special is a payment at least 3x the median of the fund's other recent
+// payments, unless a neighbour is high too: two or more high payments in a
+// row are a level change (weekly to monthly, a raised payout), not a special.
+// Same rule as backend/special_distributions.py.
+const SPECIAL_MULTIPLE = 3
+const SPECIAL_LOOKBACK = 13
+const SPECIAL_MIN_PEERS = 4
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+// `distributions` newest first; returns them without one-off specials.
+export function withoutSpecialDistributions(distributions) {
+  const window = distributions.slice(0, SPECIAL_LOOKBACK)
+  if (window.length < SPECIAL_MIN_PEERS + 1) return distributions
+  const high = window.map((item, idx) => {
+    const peers = window.filter((_, other) => other !== idx).map(p => p.amount).filter(a => a > 0)
+    if (peers.length < SPECIAL_MIN_PEERS) return false
+    const typical = median(peers)
+    return typical > 0 && item.amount >= SPECIAL_MULTIPLE * typical
+  })
+  const special = new Set(window.filter((_, idx) => high[idx] && !high[idx - 1] && !high[idx + 1]))
+  return special.size ? distributions.filter(item => !special.has(item)) : distributions
+}
+
 export function annualDistributionEstimate(history, frequency) {
-  const distributions = (Array.isArray(history) ? history : [])
+  const allDistributions = (Array.isArray(history) ? history : [])
     .map(item => ({
       amount: Number(item?.amount),
       dateValue: new Date(item?.date).getTime(),
@@ -75,9 +105,16 @@ export function annualDistributionEstimate(history, frequency) {
     ))
     .sort((a, b) => b.dateValue - a.dateValue)
 
-  if (!distributions.length) return null
+  if (!allDistributions.length) return null
 
-  const multiplier = annualDistributionMultiplier(frequency, history)
+  const distributions = withoutSpecialDistributions(allDistributions)
+  const specialNote = distributions.length < allDistributions.length ? ', one-off special left out' : ''
+  // Without a declared cadence it is read from the latest gap, which an
+  // off-cycle special would distort.
+  const multiplier = annualDistributionMultiplier(
+    frequency,
+    distributions.map(item => ({ date: item.dateValue })),
+  )
   // A fund that recently changed to weekly/monthly should use only the
   // uninterrupted run at its current cadence; older quarterly payments would
   // otherwise dilute the estimate.
@@ -95,7 +132,7 @@ export function annualDistributionEstimate(history, frequency) {
   }
 
   const foldedNote = used => (
-    used.some(item => item.parts > 1) ? ', extra payments counted with their period' : ''
+    (used.some(item => item.parts > 1) ? ', extra payments counted with their period' : '') + specialNote
   )
 
   const fullCycle = recentRun.slice(0, multiplier)

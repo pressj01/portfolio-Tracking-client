@@ -67,6 +67,8 @@ def _row_value(row, key, index):
 def is_drip_notes(notes):
     """Same test the importers' ``[DRIP]`` tagging and the DRIP tracker use."""
     text = str(notes or "").casefold()
+    if "[adjustment]" in text:
+        return False
     return "[drip]" in text or "reinvest" in text
 
 
@@ -114,13 +116,20 @@ def parse_range(start, end, today):
     return start, end
 
 
-def _cost_fits(cost, amount, price):
+def _cost_fits(cost, amount, price, gap=0):
     """Whether a reinvestment costing ``cost`` can be the payment of ``amount``.
 
     Whole-share DRIP leaves up to one share's price behind as cash, and
-    brokers round shares and prices differently, so allow both.
+    brokers round shares and prices differently, so allow both. On the payment
+    date itself (``abs(gap) <= 1``), funds that reinvest only whole shares or
+    only the income component (leaving ROC/cash behind) can reinvest any
+    positive fraction up to ``amount``.
     """
-    return cost <= amount * 1.03 + 0.05 and amount - cost <= max(price, amount * 0.03) + 0.05
+    if cost > amount * 1.03 + 0.05:
+        return False
+    if abs(gap) <= 1:
+        return True
+    return amount - cost <= max(price, amount * 0.03) + 0.05
 
 
 def pair_payments(payments, drip_buys):
@@ -135,7 +144,11 @@ def pair_payments(payments, drip_buys):
     """
     events = [dict(p, reinvested=0.0, shares=0.0, cost=0.0, buys=[])
               for p in sorted(payments, key=lambda p: p["day"])]
-    for buy in sorted(drip_buys, key=lambda b: b["day"]):
+    sorted_buys = sorted(
+        drip_buys,
+        key=lambda b: (b["day"], -(b["shares"] * _num(b.get("price")))),
+    )
+    for buy in sorted_buys:
         price = _num(buy.get("price"))
         cost = buy["shares"] * price if price > 0 else None
         best = None
@@ -145,15 +158,35 @@ def pair_payments(payments, drip_buys):
             gap = (buy["day"] - event["day"]).days
             if not -PAIR_DAYS_BEFORE <= gap <= PAIR_DAYS_AFTER:
                 continue
-            if cost is not None and not _cost_fits(event["cost"] + cost, event["amount"], price):
+            if cost is not None and not _cost_fits(event["cost"] + cost, event["amount"], price, gap=gap):
                 continue
             if cost is None and event["buys"]:
                 continue
-            score = (len(event["buys"]), abs(gap), abs((cost or event["amount"]) - event["amount"]))
+            new_cost = event["cost"] + (cost if cost is not None else event["amount"])
+            completes_split = (
+                bool(event["buys"])
+                and cost is not None
+                and abs(new_cost - event["amount"]) <= max(0.05, event["amount"] * 0.02)
+            )
+            bucket_rank = 0 if completes_split else len(event["buys"])
+            score = (bucket_rank, abs(gap), abs(new_cost - event["amount"]))
             if best is None or score < best[0]:
                 best = (score, event)
         if best is None:
             if cost is None or cost <= 0:
+                continue
+            # Suppress broker re-book / duplicate CSV DRIP rows when an existing
+            # event within +-3 days already matched an identical-dollar DRIP buy.
+            is_rebook_dup = any(
+                ev["buys"]
+                and abs((buy["day"] - ev["day"]).days) <= PAIR_DAYS_BEFORE
+                and any(
+                    abs((b["shares"] * _num(b.get("price"))) - cost) <= max(0.05, cost * 0.02)
+                    for b in ev["buys"]
+                )
+                for ev in events
+            )
+            if is_rebook_dup:
                 continue
             events.append({"day": buy["day"], "ex": None, "amount": cost, "source": "drip_record",
                            "synthetic": True, "reinvested": cost, "shares": buy["shares"],

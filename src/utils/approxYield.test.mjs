@@ -167,3 +167,31 @@ test('no in-window prices is its own reason', () => {
   assert.equal(buildYieldOnCostSeries(series, options), null)
   assert.equal(yieldOnCostGapReason(series, options), 'no prices in this window')
 })
+
+// A monthly fund's last year: $0.14 a month, a $0.266 December, a $0.246
+// September and a one-off $2.01 in November that is not its new monthly rate.
+const MONTHLY_WITH_SPECIAL = [
+  pay('2025-12-30', 0.266), pay('2026-01-28', 0.14), pay('2026-02-25', 0.14), pay('2026-03-27', 0.14),
+  pay('2026-04-28', 0.14), pay('2026-05-27', 0.14), pay('2026-06-26', 0.14), pay('2026-07-29', 0.14),
+  pay('2026-08-27', 0.14), pay('2026-09-28', 0.246), pay('2026-11-25', 2.01),
+]
+
+test('a one-off special is left out of the forward yield', () => {
+  const estimate = annualDistributionEstimate(MONTHLY_WITH_SPECIAL, 'M')
+  // The ten regular payments, averaged and annualized.
+  const regular = MONTHLY_WITH_SPECIAL.slice(0, -1).map(p => p.amount)
+  close(estimate.annual, (regular.reduce((a, b) => a + b, 0) / regular.length) * 12)
+  assert.ok(estimate.annual < 2.2, `got ${estimate.annual}`)
+  assert.match(estimate.basis, /one-off special left out/)
+})
+
+test('repeated high payments are a level change, not a special', () => {
+  const history = [
+    pay('2026-01-07', 0.1), pay('2026-01-14', 0.1), pay('2026-01-21', 0.1), pay('2026-01-28', 0.1),
+    pay('2026-02-04', 0.1), pay('2026-03-04', 0.45), pay('2026-04-01', 0.45), pay('2026-04-29', 0.45),
+  ]
+  const estimate = annualDistributionEstimate(history, 'M')
+  // Unchanged behaviour: the monthly run back to the last weekly payment.
+  close(estimate.annual, ((0.45 * 3 + 0.1) / 4) * 12)
+  assert.doesNotMatch(estimate.basis, /special/)
+})
