@@ -23,6 +23,7 @@ from datetime import date, timedelta
 from statistics import median
 
 from distribution_analysis import CADENCES, _cadence
+from special_distributions import special_flags
 
 # A recorded payment further than this after the nearest ex-date is not
 # evidence of the fund's pay timing (a missed ex-date, a special payout).
@@ -151,16 +152,21 @@ def model_income_estimate(position, today=None):
     distributions = position["distributions"]
     if not distributions or position["shares"] <= 0:
         return 0.0, None, 0.0
-    last_day, latest = distributions[-1]
-    if (today - last_day).days > STALE_PAYER_DAYS:
+    if (today - distributions[-1][0]).days > STALE_PAYER_DAYS:
         return 0.0, None, 0.0
-    days = [day for day, _ in distributions]
+    # A one-off special is left out of the rate (rule chosen 2026-11-27): the
+    # latest *regular* payout × cadence. A single $2.01 special against a usual
+    # $0.14 a month had been annualized x12.
+    flags = special_flags([cash for _, cash in distributions])
+    regular = [item for item, special in zip(distributions, flags) if not special] or distributions
+    last_day, latest = regular[-1]
+    days = [day for day, _ in regular]
     code = _cadence([(b - a).days for a, b in zip(days, days[1:])][-3:])
     per_year = CADENCES.get(code, (None, None))[1]
     if per_year:
         annual = latest * per_year * position["shares"]
     else:
-        annual = sum(cash for day, cash in distributions if (last_day - day).days < 365) * position["shares"]
+        annual = sum(cash for day, cash in regular if (last_day - day).days < 365) * position["shares"]
     return latest, code, annual
 
 
@@ -188,6 +194,7 @@ def model_holding_rows(positions, categories=None, today=None):
             "estim_payment_per_year": _money(annual),
             "category": category.get("category"),
             "subcategory": category.get("subcategory"),
+            "subcategory_id": category.get("subcategory_id"),
             "percent_of_account": round(position["amount"] / total * 100, 4) if total > 0 and position["shares"] > 0 else 0.0,
             "reinvest": None,
             "first_date": position["first_date"].isoformat() if position["first_date"] else None,

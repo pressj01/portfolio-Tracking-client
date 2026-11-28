@@ -5738,19 +5738,27 @@ def _lifetime_dividend_income(conn, profile_ids, through_date=None):
     """Return portfolio-wide dividend income, including closed positions.
 
     Holdings snapshots can carry lifetime totals that predate the payment
-    ledger, while the payment ledger is the only remaining source for tickers
-    that have since been sold. Merge the two per ticker so overlapping history
-    is not counted twice and closed-position income is not lost.
+    ledger, while the payment ledger (plus any broker ``[DRIP]`` reinvestment
+    buys in ``transactions`` that predate ``dividend_payments``) is the source
+    for older and closed-position distributions. Merge per ticker so overlapping
+    history is not counted twice and closed-position income is not lost.
     """
+    import datetime
+    from collections import defaultdict
+    from distribution_analysis import ESTIMATE_SOURCES
+    from drip_ledger import is_drip_notes, pair_payments
+
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if not ids:
         return 0.0
     placeholders = ",".join("?" * len(ids))
+    est_ph = ",".join("?" * len(ESTIMATE_SOURCES))
     holding_rows = conn.execute(
-        f"""SELECT ticker, COALESCE(SUM(total_divs_received), 0) AS amount
+        f"""SELECT UPPER(TRIM(ticker)) AS ticker, COALESCE(SUM(total_divs_received), 0) AS amount
             FROM all_account_info
             WHERE profile_id IN ({placeholders})
-            GROUP BY ticker""",
+              AND ticker IS NOT NULL AND TRIM(ticker) != ''
+            GROUP BY UPPER(TRIM(ticker))""",
         ids,
     ).fetchall()
     totals = {
@@ -5759,18 +5767,84 @@ def _lifetime_dividend_income(conn, profile_ids, through_date=None):
     }
 
     date_clause = " AND payment_date <= ?" if through_date else ""
-    payment_params = ids + ([through_date] if through_date else [])
+    payment_params = [*ids, *([through_date] if through_date else []), *ESTIMATE_SOURCES]
     payment_rows = conn.execute(
-        f"""SELECT ticker, COALESCE(SUM(amount), 0) AS amount
+        f"""SELECT UPPER(TRIM(ticker)) AS ticker, COALESCE(SUM(amount), 0) AS amount
             FROM dividend_payments
             WHERE profile_id IN ({placeholders}){date_clause}
-              AND LOWER(COALESCE(source, '')) != 'refresh_estimate'
-            GROUP BY ticker""",
+              AND LOWER(TRIM(COALESCE(source, ''))) NOT IN ({est_ph})
+              AND ticker IS NOT NULL AND TRIM(ticker) != ''
+            GROUP BY UPPER(TRIM(ticker))""",
         payment_params,
     ).fetchall()
-    for row in payment_rows:
-        ticker = row["ticker"]
-        payment_total = _num_or_zero(row["amount"])
+    ledger_totals = {
+        row["ticker"]: _num_or_zero(row["amount"])
+        for row in payment_rows
+    }
+
+    # Include genuine [DRIP] reinvestment buys in transactions that predate or
+    # lack a corresponding dividend_payments row (e.g. transferred accounts).
+    has_tx_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transactions'"
+    ).fetchone()
+    if has_tx_table:
+        tx_date_clause = " AND transaction_date <= ?" if through_date else ""
+        tx_params = ids + ([through_date] if through_date else [])
+        raw_buys = conn.execute(
+            f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker,
+                       transaction_date, shares, price_per_share, notes
+                FROM transactions
+                WHERE profile_id IN ({placeholders})
+                  AND UPPER(COALESCE(transaction_type, '')) = 'BUY'{tx_date_clause}""",
+            tx_params,
+        ).fetchall()
+        buys_by_key = defaultdict(list)
+        for r in raw_buys:
+            if not r["ticker"] or not is_drip_notes(r["notes"]):
+                continue
+            try:
+                d = datetime.date.fromisoformat(str(r["transaction_date"] or "")[:10])
+            except ValueError:
+                continue
+            sh = abs(_num_or_zero(r["shares"]))
+            px = _num_or_zero(r["price_per_share"])
+            if sh > 0 and px > 0:
+                buys_by_key[(int(r["profile_id"]), r["ticker"])].append({
+                    "day": d,
+                    "shares": sh,
+                    "price": px,
+                    "profile_id": int(r["profile_id"]),
+                })
+        if buys_by_key:
+            drip_tickers = sorted({t for _, t in buys_by_key})
+            t_ph = ",".join("?" * len(drip_tickers))
+            pay_detail_rows = conn.execute(
+                f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, payment_date, amount
+                    FROM dividend_payments
+                    WHERE profile_id IN ({placeholders}){date_clause}
+                      AND UPPER(TRIM(ticker)) IN ({t_ph})
+                      AND amount > 0
+                      AND LOWER(TRIM(COALESCE(source, ''))) NOT IN ({est_ph})""",
+                [*ids, *([through_date] if through_date else []), *drip_tickers, *ESTIMATE_SOURCES],
+            ).fetchall()
+            pays_by_key = defaultdict(list)
+            for r in pay_detail_rows:
+                try:
+                    d = datetime.date.fromisoformat(str(r["payment_date"] or "")[:10])
+                except ValueError:
+                    continue
+                pays_by_key[(int(r["profile_id"]), r["ticker"])].append({
+                    "day": d,
+                    "amount": _num_or_zero(r["amount"]),
+                    "profile_id": int(r["profile_id"]),
+                })
+            for key, key_buys in buys_by_key.items():
+                _, ticker = key
+                for ev in pair_payments(pays_by_key.get(key, []), key_buys):
+                    if ev.get("synthetic"):
+                        ledger_totals[ticker] = ledger_totals.get(ticker, 0.0) + float(ev["amount"] or 0.0)
+
+    for ticker, payment_total in ledger_totals.items():
         totals[ticker] = max(totals[ticker], payment_total) if ticker in totals else payment_total
     return round(sum(totals.values()), 2)
 
@@ -15788,6 +15862,60 @@ def _current_distribution_run_rate(pos, freq_code, per_year, current_div=None):
     return (sum(recent) / len(recent)) * per_year
 
 
+def _drop_special_distributions(pos):
+    """A chronological per-share series without its one-off specials."""
+    from special_distributions import special_flags
+
+    if pos is None or pos.empty:
+        return pos
+    flags = special_flags(pos.tolist())
+    if not any(flags):
+        return pos
+    return pos[[not flag for flag in flags]]
+
+
+def _distribution_rate_amount(snapshot, declared):
+    """The per-share amount that describes the fund's regular rate.
+
+    ``declared`` unless the snapshot's history shows it is a one-off special,
+    in which case the last regular payment. Used where an amount is
+    annualized directly (a cadence-locked holding).
+    """
+    from special_distributions import declared_is_special
+
+    history = (snapshot or {}).get("history")
+    if not declared or history is None or getattr(history, "empty", True):
+        return declared
+    pos = _div_calc_positive_dividends(history).sort_index()
+    if pos.empty or not declared_is_special(declared, pos.tolist()):
+        return declared
+    regular = _drop_special_distributions(pos)
+    return float(regular.iloc[-1]) if not regular.empty else declared
+
+
+def _distribution_amount_after_special(snapshot, declared, today):
+    """Div/Share to store after a refresh: a paid special reverts to the regular amount.
+
+    Div/Share is the next payment (the Action Center's upcoming deposit, the
+    accrual estimate). A declared special that has not been paid yet is the
+    next payment, so it stays; once its pay date has passed, the next payment
+    is a regular one. Without a pay date, a week after the ex-date counts as
+    paid; a special already in the history with no dates at all has passed.
+    """
+    rate = _distribution_rate_amount(snapshot, declared)
+    if rate == declared:
+        return declared
+    pay = _parse_timestamp_value((snapshot or {}).get("div_pay_date"))
+    ex = _parse_timestamp_value((snapshot or {}).get("ex_div_date"))
+    if pay is not None:
+        paid = pay.date() <= today
+    elif ex is not None:
+        paid = ex.date() + datetime.timedelta(days=7) <= today
+    else:
+        paid = True
+    return rate if paid else declared
+
+
 def _div_calc_annual_dividend(divs, freq_code, current_div=None):
     """Return an annual dividend estimate for the calculator.
 
@@ -15797,16 +15925,31 @@ def _div_calc_annual_dividend(divs, freq_code, current_div=None):
     yield. For variable weekly/monthly option-income funds, prefer a completed
     trailing-12-month total — but only while the payout has held its level,
     since those funds ratchet the distribution with NAV.
+
+    One-off specials (``special_distributions``) are left out of the estimate:
+    a single $2.01 special against a regular $0.14 a month used to be averaged
+    into the last three payments and annualized x12. The second value stays
+    the true trailing total, specials included.
     """
-    pos = _div_calc_positive_dividends(divs)
-    if pos.empty:
+    from special_distributions import declared_is_special
+
+    all_pos = _div_calc_positive_dividends(divs)
+    if all_pos.empty:
         return 0.0, 0.0, "none"
+    all_pos = all_pos.sort_index()
 
     _, per_year = _DIV_CALC_FREQ_MAP.get(freq_code, ("Quarterly", 4))
-    tz = pos.index.tz
+    tz = all_pos.index.tz
     now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
-    trailing = pos[pos.index >= now - pd.DateOffset(years=1)]
-    ttm_div = float(trailing.sum()) if not trailing.empty else 0.0
+    year_ago = now - pd.DateOffset(years=1)
+    all_trailing = all_pos[all_pos.index >= year_ago]
+    ttm_div = float(all_trailing.sum()) if not all_trailing.empty else 0.0
+
+    pos = _drop_special_distributions(all_pos)
+    if declared_is_special(current_div, all_pos.tolist()):
+        current_div = None  # the next payment, not the rate
+    trailing = pos[pos.index >= year_ago]
+    regular_ttm = float(trailing.sum()) if not trailing.empty else 0.0
 
     last_div = float(pos.iloc[-1])
     run_rate_div = last_div * per_year
@@ -15820,7 +15963,7 @@ def _div_calc_annual_dividend(divs, freq_code, current_div=None):
 
     if freq_code in ("W", "M"):
         min_full_year_payments = max(1, int(per_year * 0.75))
-        if len(trailing) >= min_full_year_payments and ttm_div > 0:
+        if len(trailing) >= min_full_year_payments and regular_ttm > 0:
             # A completed year only forecasts the year ahead while the payout
             # has held its level. ULTI's weekly distribution decayed from
             # $0.35 to $0.095 over its first year, so its trailing total still
@@ -15831,10 +15974,10 @@ def _div_calc_annual_dividend(divs, freq_code, current_div=None):
             )
             if (
                 current_rate > 0
-                and abs(current_rate - ttm_div) > ttm_div * _CURRENT_DISTRIBUTION_LEVEL_SHIFT
+                and abs(current_rate - regular_ttm) > regular_ttm * _CURRENT_DISTRIBUTION_LEVEL_SHIFT
             ):
                 return current_rate, ttm_div, "annualized_recent_distributions"
-            return ttm_div, ttm_div, "trailing_12_month"
+            return regular_ttm, ttm_div, "trailing_12_month"
 
         if len(pos) >= 2:
             # A newly weekly/monthly fund may still contain years of payments
@@ -15860,7 +16003,7 @@ def _div_calc_annual_dividend(divs, freq_code, current_div=None):
 
         return run_rate_div, ttm_div, "latest_distribution_rate"
 
-    return (ttm_div or run_rate_div), ttm_div, "trailing_12_month"
+    return (regular_ttm or run_rate_div), ttm_div, "trailing_12_month"
 
 
 def _expected_annual_distribution_yield_pct(
@@ -16739,6 +16882,8 @@ def _build_repair_metadata_from_snapshot(holding, snapshot):
         return None
 
     div = float(snapshot.get("div") or 0)
+    # A paid one-off special is no longer the next payment (see the refresh).
+    div = float(_distribution_amount_after_special(snapshot, div, datetime.date.today()) or div)
     quantity = float(holding["quantity"] or 0)
     purchase_value = float(holding["purchase_value"] or 0)
     current_value = float(holding["current_value"] or 0)
@@ -21024,9 +21169,9 @@ def _reinvest_history(ticker):
     cached = _cache_get(_REINVEST_HISTORY_CACHE, ticker, ttl=_REINVEST_HISTORY_TTL_SEC)
     if cached is not None:
         return cached
-    import yfinance as yf
     try:
-        hist = _yf_ticker(ticker).history(period="max", auto_adjust=False, actions=True)
+        symbol = _yahoo_symbol_for_ticker(ticker)
+        hist = _yf_ticker(symbol).history(period="max", auto_adjust=False, actions=True)
     except Exception:
         hist = None
     _cache_set(_REINVEST_HISTORY_CACHE, ticker, hist)
@@ -22021,6 +22166,10 @@ def refresh_market_data():
                 # Including a deliberate $0 ("this fund stopped paying"), which
                 # falls through to the zeroing branch below and stays there.
                 new_div = float(h.get("div") or 0) or None
+            elif new_div:
+                # A one-off special (say $2.01 against a regular $0.14) is the
+                # next payment only until it has been paid.
+                new_div = _distribution_amount_after_special(snapshot, new_div, refresh_date) or new_div
             if not new_div:
                 actuals_holding = dict(h)
                 actuals_holding["last_payment_cash"] = last_payment_cash.get((pid, t))
@@ -22276,8 +22425,12 @@ def refresh_market_data():
                         # using that history here would leave the row labelled
                         # weekly while annualizing it 12 times.  The latest
                         # distribution must instead be annualized at the
-                        # holding's saved cadence.
-                        annual_div = new_div * _refresh_frequency_multiplier(cur_freq)
+                        # holding's saved cadence — unless it is a one-off
+                        # special, which describes one payment, not the rate.
+                        rate_div = new_div if div_override_active else (
+                            _distribution_rate_amount(snapshot, new_div) or new_div
+                        )
+                        annual_div = rate_div * _refresh_frequency_multiplier(cur_freq)
                     else:
                         annual_div = _annual_dividend_per_share_from_snapshot(
                             snapshot,
@@ -36228,28 +36381,28 @@ def income_summary():
         total_ytd += _estimate_ytd_income(h) if stored_ytd is None else stored_ytd
     estimated_month_to_date = total_month
 
-    # Estimated reinvest fraction (forward-looking run-rate split by the
-    # per-holding reinvest flag). Used as a proportional fallback when actual
-    # income can't be attributed to individual tickers (e.g. monthly_payouts).
-    frac_row = conn.execute(
-        f"""SELECT
-               COALESCE(SUM(CASE WHEN reinvest = 'Y'
-                                 THEN approx_monthly_income ELSE 0 END), 0) AS reinv,
-               COALESCE(SUM(approx_monthly_income), 0) AS total
-            FROM all_account_info
-            WHERE profile_id IN ({placeholders})
-              AND quantity IS NOT NULL AND quantity > 0""",
-        pids,
-    ).fetchone()
-    est_total = float(frac_row["total"] or 0)
-    reinvest_fraction = (float(frac_row["reinv"] or 0) / est_total) if est_total else 0.0
-
     payment_pids = pids
     if not is_agg and len(pids) == 1 and pids[0] == 1:
         owner_source_ids = _get_owner_source_profile_ids(conn)
         if owner_source_ids:
             payment_pids = owner_source_ids
     payment_placeholders = ",".join("?" * len(payment_pids))
+
+    # Estimated reinvest fraction (forward-looking run-rate split by each
+    # account's reinvest flag — using payment_pids so Owner expands to its
+    # member accounts rather than collapsing partly-reinvested tickers to 'Y').
+    frac_row = conn.execute(
+        f"""SELECT
+               COALESCE(SUM(CASE WHEN reinvest = 'Y'
+                                 THEN approx_monthly_income ELSE 0 END), 0) AS reinv,
+               COALESCE(SUM(approx_monthly_income), 0) AS total
+            FROM all_account_info
+            WHERE profile_id IN ({payment_placeholders})
+              AND quantity IS NOT NULL AND quantity > 0""",
+        payment_pids,
+    ).fetchone()
+    est_total = float(frac_row["total"] or 0)
+    reinvest_fraction = (float(frac_row["reinv"] or 0) / est_total) if est_total else 0.0
     month_start = today.replace(day=1).isoformat()
     today_iso = today.isoformat()
 
@@ -36292,30 +36445,22 @@ def income_summary():
     lifetime_income = max(lifetime_income, round(total_ytd, 2))
 
     # Split the actual current-month income into reinvested vs not-reinvested.
-    # When income comes from recorded dividend payments we can attribute each
-    # payment to its ticker's reinvest flag exactly; otherwise fall back to the
-    # estimated reinvest fraction so the two always sum to current_month_income.
+    # When income comes from recorded dividend payments, pair each payment with
+    # its actual [DRIP] buy transaction in that account (falling back to the
+    # account's reinvest flag only when an account has no transaction ledger),
+    # so changing DRIP settings mid-month never retroactively misclassifies
+    # earlier payments.
     if current_month_income_source == "dividend_payments":
-        # Attribute each payment to ITS OWN account's reinvest flag (ticker +
-        # profile_id). The same ticker can be reinvested in one account (e.g. a
-        # Roth IRA) and taken as cash in another, so collapsing to one flag per
-        # ticker would mis-bucket the cash payments.
-        split = conn.execute(
-            f"""SELECT
-                   COALESCE(SUM(CASE WHEN a.reinvest = 'Y'
-                                     THEN dp.amount ELSE 0 END), 0) AS reinv,
-                   COALESCE(SUM(CASE WHEN a.reinvest IS NULL OR a.reinvest != 'Y'
-                                     THEN dp.amount ELSE 0 END), 0) AS not_reinv
-                FROM dividend_payments dp
-                LEFT JOIN all_account_info a
-                  ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
-                WHERE dp.profile_id IN ({payment_placeholders})
-                  AND dp.payment_date >= ? AND dp.payment_date <= ?
-                  AND LOWER(COALESCE(dp.source, '')) != 'refresh_estimate'""",
-            payment_pids + [month_start, today_iso],
-        ).fetchone()
-        current_month_reinvested = float(split["reinv"] or 0)
-        current_month_not_reinvested = float(split["not_reinv"] or 0)
+        split_res = _split_recorded_payments_reinvested(
+            conn,
+            payment_pids,
+            today.replace(day=1),
+            today,
+            today,
+            include_synthetic=False,
+        )
+        current_month_reinvested = round(min(max(0.0, total_month), split_res["reinvested"]), 2)
+        current_month_not_reinvested = round(total_month - current_month_reinvested, 2)
     else:
         current_month_reinvested = round(total_month * reinvest_fraction, 2)
         current_month_not_reinvested = round(total_month - current_month_reinvested, 2)
@@ -36361,22 +36506,187 @@ def income_summary():
     })
 
 
+def _split_recorded_payments_reinvested(
+    conn,
+    payment_pids,
+    window_start_date,
+    window_end_date,
+    today,
+    allowed_tickers=None,
+    include_synthetic=True,
+):
+    """Split recorded dividend payments into reinvested vs cash over a date window.
+
+    Uses ``drip_ledger.pair_payments`` against actual ``[DRIP]`` buy rows in
+    ``transactions`` whenever an account has a transaction ledger, falling back
+    to each account's ``all_account_info.reinvest`` flag only for accounts with
+    no imported transactions.
+    """
+    import datetime
+    from collections import defaultdict
+    from distribution_analysis import ESTIMATE_SOURCES
+    from drip_ledger import PAIR_DAYS_AFTER, PAIR_DAYS_BEFORE, is_drip_notes, pair_payments
+
+    if not payment_pids or (allowed_tickers is not None and not allowed_tickers):
+        return {
+            "reinvested": 0.0,
+            "not_reinvested": 0.0,
+            "total": 0.0,
+            "payment_rows": 0,
+            "months_with_data": 0,
+        }
+
+    pay_marks = ",".join("?" * len(payment_pids))
+    est_marks = ",".join("?" * len(ESTIMATE_SOURCES))
+    profiles_with_tx = {
+        int(r[0]) for r in conn.execute(
+            f"SELECT DISTINCT profile_id FROM transactions WHERE profile_id IN ({pay_marks})",
+            payment_pids,
+        ).fetchall()
+    }
+    reinvest_flags = {
+        (int(r["profile_id"]), r["ticker"]): (r["reinvest"] or "").upper() == "Y"
+        for r in conn.execute(
+            f"SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, MAX(reinvest) AS reinvest "
+            f"FROM all_account_info WHERE profile_id IN ({pay_marks}) GROUP BY 1, 2",
+            payment_pids,
+        ).fetchall()
+    }
+
+    pair_start = (window_start_date - datetime.timedelta(days=PAIR_DAYS_BEFORE + PAIR_DAYS_AFTER)).isoformat()
+    window_end = window_end_date.isoformat()
+    buy_end = min(today, window_end_date + datetime.timedelta(days=PAIR_DAYS_AFTER)).isoformat()
+
+    ticker_clause = ""
+    ticker_params = []
+    if allowed_tickers is not None:
+        sorted_tickers = sorted(allowed_tickers)
+        ticker_clause = f" AND UPPER(TRIM(ticker)) IN ({','.join('?' * len(sorted_tickers))})"
+        ticker_params = sorted_tickers
+
+    pay_rows = conn.execute(
+        f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, payment_date, amount, source
+            FROM dividend_payments
+            WHERE profile_id IN ({pay_marks})
+              AND payment_date >= ? AND payment_date <= ?
+              AND amount > 0
+              AND LOWER(TRIM(COALESCE(source, ''))) NOT IN ({est_marks})
+              {ticker_clause}""",
+        [*payment_pids, pair_start, window_end, *ESTIMATE_SOURCES, *ticker_params],
+    ).fetchall()
+
+    buy_rows = conn.execute(
+        f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, transaction_date, shares, price_per_share, notes
+            FROM transactions
+            WHERE profile_id IN ({pay_marks})
+              AND UPPER(COALESCE(transaction_type, '')) = 'BUY'
+              AND transaction_date >= ? AND transaction_date <= ?
+              {ticker_clause}""",
+        [*payment_pids, pair_start, buy_end, *ticker_params],
+    ).fetchall()
+
+    pays_by_key = defaultdict(list)
+    for r in pay_rows:
+        try:
+            d = datetime.date.fromisoformat(str(r["payment_date"] or "")[:10])
+        except ValueError:
+            continue
+        pays_by_key[(int(r["profile_id"]), r["ticker"])].append({
+            "day": d,
+            "amount": float(r["amount"] or 0),
+            "source": str(r["source"] or "").strip().lower(),
+            "profile_id": int(r["profile_id"]),
+        })
+
+    buys_by_key = defaultdict(list)
+    for r in buy_rows:
+        if not is_drip_notes(r["notes"]):
+            continue
+        try:
+            d = datetime.date.fromisoformat(str(r["transaction_date"] or "")[:10])
+        except ValueError:
+            continue
+        sh = abs(float(r["shares"] or 0))
+        if sh <= 0:
+            continue
+        px = float(r["price_per_share"] or 0) or None
+        buys_by_key[(int(r["profile_id"]), r["ticker"])].append({
+            "day": d,
+            "shares": sh,
+            "price": px,
+            "profile_id": int(r["profile_id"]),
+        })
+
+    reinv = 0.0
+    not_reinv = 0.0
+    payment_count = 0
+    months_seen = set()
+
+    for key in sorted(set(pays_by_key) | set(buys_by_key)):
+        pid, _ = key
+        if pid in profiles_with_tx or buys_by_key.get(key):
+            events = pair_payments(pays_by_key.get(key, []), buys_by_key.get(key, []))
+            for ev in events:
+                if not include_synthetic and ev.get("synthetic"):
+                    continue
+                if not (window_start_date <= ev["day"] <= window_end_date):
+                    continue
+                amt = float(ev["amount"] or 0)
+                if amt <= 0:
+                    continue
+                r_amt = min(amt, float(ev.get("reinvested") or 0))
+                reinv += r_amt
+                not_reinv += max(0.0, amt - r_amt)
+                payment_count += 1
+                months_seen.add(ev["day"].strftime("%Y-%m"))
+        else:
+            is_drip = reinvest_flags.get(key, False)
+            for p in pays_by_key.get(key, []):
+                if not (window_start_date <= p["day"] <= window_end_date):
+                    continue
+                amt = float(p["amount"] or 0)
+                if amt <= 0:
+                    continue
+                if is_drip:
+                    reinv += amt
+                else:
+                    not_reinv += amt
+                payment_count += 1
+                months_seen.add(p["day"].strftime("%Y-%m"))
+
+    return {
+        "reinvested": reinv,
+        "not_reinvested": not_reinv,
+        "total": reinv + not_reinv,
+        "payment_rows": payment_count,
+        "months_with_data": len(months_seen),
+    }
+
+
 @app.route("/api/reinvestment-actual-pct", methods=["GET"])
 def reinvestment_actual_pct():
     """Actual reinvested share of distributions over the trailing N *completed*
-    calendar months (default 3), from recorded dividend payments split by each
-    account's reinvest flag.
+    calendar months (default 3), from confirmed dividend payments paired with
+    actual ``[DRIP]`` buy records (falling back to each account's reinvest flag
+    only when an account has no imported transaction ledger).
 
     The in-progress current month is excluded so the figure is stable and
-    available from the first of a new month (no ramp-up). Used by the
-    Reinvestment Impact page as a real-data alternative seed for Reinvest %.
+    available from the first of a new month (no ramp-up). Supports optional
+    ``ticker``, ``category``, and ``subcategory`` filters so scoped views on
+    the Reinvestment Impact page can seed from the selected scope's real mix.
     """
     import datetime
-    is_agg, pids = get_profile_filter()
+
+    _, pids = get_profile_filter()
     try:
         months = max(1, min(24, int(request.args.get("months", 3))))
     except (TypeError, ValueError):
         months = 3
+    single_ticker = (request.args.get("ticker") or "").strip().upper() or None
+    cat_param = (request.args.get("category") or "").strip()
+    cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
+
     conn = get_connection()
     today = datetime.date.today()
 
@@ -36392,44 +36702,50 @@ def reinvestment_actual_pct():
     window_start = window_start_date.isoformat()
     window_end = window_end_date.isoformat()
 
-    # Payments live on the Owner's source profiles when viewing the Owner roll-up.
-    payment_pids = pids
-    if not is_agg and len(pids) == 1 and pids[0] == 1:
-        owner_source_ids = _get_owner_source_profile_ids(conn)
-        if owner_source_ids:
-            payment_pids = owner_source_ids
-    payment_placeholders = ",".join("?" * len(payment_pids))
+    payment_pids = _dividend_payment_profile_ids_for_read(conn, pids)
+    scope_pids = list(dict.fromkeys([*(pids or []), *payment_pids]))
 
-    row = conn.execute(
-        f"""SELECT
-               COALESCE(SUM(CASE WHEN a.reinvest = 'Y'
-                                 THEN dp.amount ELSE 0 END), 0) AS reinv,
-               COALESCE(SUM(CASE WHEN a.reinvest IS NULL OR a.reinvest != 'Y'
-                                 THEN dp.amount ELSE 0 END), 0) AS not_reinv,
-               COUNT(*) AS rows,
-               COUNT(DISTINCT substr(dp.payment_date, 1, 7)) AS months_with_data
-            FROM dividend_payments dp
-            LEFT JOIN all_account_info a
-              ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
-            WHERE dp.profile_id IN ({payment_placeholders})
-              AND dp.payment_date >= ? AND dp.payment_date <= ?""",
-        payment_pids + [window_start, window_end],
-    ).fetchone()
+    allowed_tickers = None
+    if single_ticker:
+        allowed_tickers = {single_ticker}
+    elif cat_ids or sub_ids:
+        cats = conn.execute(
+            "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
+            (pids[0],),
+        ).fetchall()
+        categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+        _attach_subcategories(conn, scope_pids, categories)
+        # Allow matching either category IDs or category names from Projection tab
+        matched_ids = {
+            str(c["id"]) for c in categories
+            if str(c["id"]) in cat_ids or c["name"] in cat_ids
+        }
+        allowed_tickers = _reinvest_resolve_category_tickers(
+            conn, scope_pids, list(matched_ids), categories, sub_ids
+        )
+
+    split = _split_recorded_payments_reinvested(
+        conn,
+        payment_pids,
+        window_start_date,
+        window_end_date,
+        today,
+        allowed_tickers=allowed_tickers,
+        include_synthetic=True,
+    )
     conn.close()
 
-    reinv = float(row["reinv"] or 0)
-    not_reinv = float(row["not_reinv"] or 0)
-    total = reinv + not_reinv
-    pct = (reinv / total * 100) if total > 0 else None
+    total = split["total"]
+    pct = (split["reinvested"] / total * 100) if total > 0 else None
 
     return jsonify({
         "pct_reinvested": round(pct, 1) if pct is not None else None,
-        "reinvested": round(reinv, 2),
-        "not_reinvested": round(not_reinv, 2),
+        "reinvested": round(split["reinvested"], 2),
+        "not_reinvested": round(split["not_reinvested"], 2),
         "total": round(total, 2),
-        "payment_rows": int(row["rows"] or 0),
+        "payment_rows": split["payment_rows"],
         "months_requested": months,
-        "months_with_data": int(row["months_with_data"] or 0),
+        "months_with_data": split["months_with_data"],
         "window_start": window_start,
         "window_end": window_end,
     })
@@ -39128,24 +39444,30 @@ def income_growth_sim():
     }
     payments_per_month = {12: 1, 52: 52/12, 26: 26/12, 4: 1, 2: 1, 1: 1}
 
-    if holdings_override:
-        # Use caller-provided holdings instead of DB query
+    if holdings_override is not None:
+        # Use caller-provided holdings instead of DB query (including empty filter)
         holdings = []
         total_value = 0.0
         for ho in holdings_override:
             freq = freq_map.get((ho.get("freq_str") or "").strip(), 0)
             shares = float(ho.get("shares") or 0)
             price = float(ho.get("price") or 0)
+            est = float(ho.get("estim_payment_per_year") or 0)
             dps = float(ho.get("div_per_share") or 0)
+            if est > 0 and shares > 0 and freq > 0:
+                dps = est / (shares * freq)
             if shares <= 0 or price <= 0:
                 continue
             total_value += price * shares
             is_reinvest = bool(ho.get("reinvest", False))
+            drip_sh = float(ho.get("drip_shares") or 0)
+            if drip_sh <= 0 and is_reinvest:
+                drip_sh = shares
             holdings.append({
                 "ticker": (ho.get("ticker") or "").upper(),
                 "description": ho.get("description") or "",
                 "shares": shares,
-                "drip_shares": shares if is_reinvest else 0.0,
+                "drip_shares": min(shares, drip_sh) if is_reinvest else 0.0,
                 "price": price,
                 "div_per_share": dps,
                 "freq": freq,
@@ -39153,23 +39475,30 @@ def income_growth_sim():
                 "reinvest": is_reinvest,
             })
         if not holdings:
-            return jsonify(error="No valid holdings in override.")
+            return jsonify(error="No valid holdings match the selected scope.")
     else:
-        # Query holdings from DB
+        # Query holdings from DB (expand Owner to member accounts for exact DRIP split)
         _, pids = get_profile_filter()
         conn = get_connection()
-        rows = conn.execute(
-            """SELECT ticker, description, classification_type,
-                      quantity, current_price, div, div_frequency,
-                      current_annual_yield, estim_payment_per_year,
-                      reinvest, drip_quantity
-               FROM all_account_info
-               WHERE purchase_value IS NOT NULL AND purchase_value > 0
-                 AND IFNULL(quantity, 0) > 0
-                 AND profile_id IN ({})
-               ORDER BY ticker""".format(",".join("?" * len(pids))),
-            pids,
-        ).fetchall()
+        read_pids = _dividend_payment_profile_ids_for_read(conn, pids)
+
+        def _query_sim_rows(target_pids):
+            return conn.execute(
+                """SELECT ticker, description, classification_type,
+                          quantity, current_price, div, div_frequency,
+                          current_annual_yield, estim_payment_per_year,
+                          reinvest, drip_quantity
+                   FROM all_account_info
+                   WHERE IFNULL(quantity, 0) > 0
+                     AND IFNULL(current_price, 0) > 0
+                     AND profile_id IN ({})
+                   ORDER BY ticker""".format(",".join("?" * len(target_pids))),
+                target_pids,
+            ).fetchall()
+
+        rows = _query_sim_rows(read_pids)
+        if not rows and list(read_pids) != list(pids):
+            rows = _query_sim_rows(pids)
         conn.close()
 
         if not rows:
@@ -39179,6 +39508,9 @@ def income_growth_sim():
         holdings_map = {}
         for r in rows:
             t = r["ticker"]
+            qty = float(r["quantity"] or 0)
+            est = float(r["estim_payment_per_year"] or 0)
+            reinv_y = (r["reinvest"] or "N").upper() == "Y"
             if t not in holdings_map:
                 holdings_map[t] = {
                     "ticker": t,
@@ -39187,34 +39519,26 @@ def income_growth_sim():
                     "current_price": float(r["current_price"] or 0),
                     "div_per_share": float(r["div"] or 0),
                     "freq_str": (r["div_frequency"] or "").strip(),
-                    "estim_payment_per_year": float(r["estim_payment_per_year"] or 0),
+                    "estim_payment_per_year": 0.0,
                     "reinvest": False,
                     "drip_quantity": 0.0,
                 }
-            holdings_map[t]["quantity"] += float(r["quantity"] or 0)
-            # Per-ticker DRIP: 'Y' if any row has it on
-            if (r["reinvest"] if isinstance(r, dict) else "N") == "Y":
+            holdings_map[t]["quantity"] += qty
+            holdings_map[t]["estim_payment_per_year"] += est
+            if reinv_y:
                 holdings_map[t]["reinvest"] = True
-            # drip_quantity: use stored value if available, else accumulate from rows with reinvest='Y'
-            dq = float(r["drip_quantity"] or 0) if r["drip_quantity"] is not None else None
-            if dq is not None and dq > 0:
-                holdings_map[t]["drip_quantity"] = max(holdings_map[t]["drip_quantity"], dq)
-            elif (r["reinvest"] if isinstance(r, dict) else "N") == "Y":
-                holdings_map[t]["drip_quantity"] += float(r["quantity"] or 0)
+                holdings_map[t]["drip_quantity"] += qty
 
         holdings = []
         total_value = 0.0
         for h in holdings_map.values():
             freq = freq_map.get(h["freq_str"], 0)
             dps = h["div_per_share"]
-            if dps == 0 and h["quantity"] > 0 and freq > 0:
-                est = h["estim_payment_per_year"]
-                if est > 0:
-                    dps = est / (h["quantity"] * freq)
+            if h["estim_payment_per_year"] > 0 and h["quantity"] > 0 and freq > 0:
+                dps = h["estim_payment_per_year"] / (h["quantity"] * freq)
             total_value += h["current_price"] * h["quantity"]
             has_drip = h["reinvest"] if reinvest_pct > 0 else False
-            # drip_shares: if drip_quantity is set, use it; else use all shares (all accounts have DRIP on)
-            drip_sh = h["drip_quantity"] if (has_drip and h["drip_quantity"] > 0) else (h["quantity"] if has_drip else 0.0)
+            drip_sh = min(h["quantity"], h["drip_quantity"]) if has_drip else 0.0
             holdings.append({
                 "ticker": h["ticker"],
                 "description": h["description"],
@@ -39270,11 +39594,14 @@ def income_growth_sim():
             if monthly_contribution > 0 and weights:
                 for tk, w in weights.items():
                     alloc = monthly_contribution * w
-                    adj_price = next(h["price"] for h in holdings if h["ticker"] == tk) * price_factor
+                    h_ref = next(h for h in holdings if h["ticker"] == tk)
+                    adj_price = h_ref["price"] * price_factor
                     if adj_price > 0:
                         new_sh = alloc / adj_price
                         sim_shares[tk] += new_sh
                         contrib_shares[tk] += new_sh
+                        if h_ref.get("reinvest"):
+                            sim_drip_shares[tk] += new_sh
 
             # Calculate income for this month and DRIP reinvest
             month_income = 0.0
@@ -39334,9 +39661,9 @@ def income_growth_sim():
             entry["annualized_income"] = _safe(t12)
 
         prev_ann = None
-        for entry in monthly_series:
+        for idx, entry in enumerate(monthly_series):
             ann = entry["annualized_income"] or 0
-            if i < 12:
+            if idx < 12:
                 # Trailing window not yet full — suppress noisy changes
                 entry["change_dollar"] = None
                 entry["change_pct"] = None
@@ -61425,255 +61752,979 @@ def _reinvest_resolve_category_tickers(conn, pids, cat_ids, categories, sub_ids=
     return tickers
 
 
+def _reinvest_valid_day(val, today):
+    """Parse an ISO date and reject malformed or future years (e.g. '20226-04-10')."""
+    import datetime
+    if isinstance(val, datetime.datetime):
+        d = val.date()
+    elif isinstance(val, datetime.date):
+        d = val
+    else:
+        s = str(val or "").strip()
+        # Reject 5-digit years like '20226-04-10' before slicing [:10]
+        parts = s.split("T")[0].split(" ")[0].split("-")
+        if len(parts) != 3 or len(parts[0]) != 4:
+            return None
+        try:
+            d = datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+        except ValueError:
+            return None
+    if d.year < 1900 or d > today:
+        return None
+    return d
+
+
+def _reinvest_shares_entitled(pos, day, lookback_days=45):
+    """Shares a recorded payment on ``day`` was paid on, for a ``drip_ledger.Position``.
+
+    Normally the shares held at the start of ``day``. A position sold between
+    the ex-date and the pay date holds nothing on the pay date (ex-dates are
+    rarely recorded), yet the payment is for the shares sold: use the count
+    held just before the most recent sale within ``lookback_days``.
+    """
+    import datetime
+    held = pos.shares_before(day)
+    if held > 1e-9:
+        return held
+    held = pos.shares_before(day + datetime.timedelta(days=1))
+    if held > 1e-9:
+        return held
+    for trade in reversed(pos.trades):
+        if trade["day"] >= day:
+            continue
+        if (day - trade["day"]).days > lookback_days:
+            break
+        if trade["signed"] < 0:
+            before = pos.shares_before(trade["day"])
+            if before > 1e-9:
+                return before
+    return pos.quantity
+
+
+def _reinvest_market_from_hist(hist):
+    """Wrap a cached yfinance history DataFrame as a ``drip_ledger.Market``."""
+    from drip_ledger import Market
+    if hist is None or getattr(hist, "empty", True) or "Close" not in hist.columns:
+        return None
+    frame = hist.copy()
+    frame.index = _ensure_naive_datetime_index(frame).index
+    frame = frame.sort_index()
+    priced = frame.loc[frame["Close"].notna() & (frame["Close"] > 0)]
+    if priced.empty:
+        return None
+    prices = [
+        {"date": day.strftime("%Y-%m-%d"), "close": float(val)}
+        for day, val in priced["Close"].items()
+    ]
+    payouts = None
+    if "Dividends" in frame.columns:
+        payouts = frame.loc[frame.index <= priced.index[-1], "Dividends"].fillna(0.0)
+        if "Capital Gains" in frame.columns:
+            payouts = payouts + frame.loc[frame.index <= priced.index[-1], "Capital Gains"].fillna(0.0)
+    distributions = (
+        [
+            {"date": day.strftime("%Y-%m-%d"), "amount": float(val)}
+            for day, val in payouts.items()
+            if pd.notna(val) and float(val) > 0
+        ]
+        if payouts is not None else []
+    )
+    splits = []
+    if "Stock Splits" in frame.columns:
+        for day, val in frame["Stock Splits"].items():
+            if pd.notna(val) and float(val) > 0 and abs(float(val) - 1.0) > 1e-9:
+                splits.append({"date": day.strftime("%Y-%m-%d"), "ratio": float(val)})
+    return Market({"prices": prices, "distributions": distributions, "splits": splits})
+
+
+def _reinvestment_impact_model_response(builder_id, *, view, months_back, categories, filtered_tickers,
+                                        single_ticker, cutoff_date, current_key, is_current_partial):
+    """The Historical payload for a Portfolio Builder model (see ``reinvestment_model``)."""
+    import datetime
+    from reinvestment_model import model_reinvestment_history
+
+    try:
+        model = _load_distribution_model(builder_id)
+    except LookupError as exc:
+        return jsonify(error=str(exc)), 404
+    tickers = None
+    if filtered_tickers is not None:
+        tickers = {str(t or "").strip().upper() for t in filtered_tickers}
+    if single_ticker:
+        tickers = {single_ticker} if tickers is None else tickers & {single_ticker}
+    pre_cutoff_date = cutoff_date - datetime.timedelta(days=120 if view != "yearly" else 370)
+    payload = model_reinvestment_history(
+        model["positions"], model["markets"], model["lags"],
+        view=view, cutoff_date=cutoff_date, pre_cutoff_date=pre_cutoff_date, today=model["today"],
+        period_key=lambda day: _reinvest_period_key(pd.Timestamp(day), view),
+        current_key=current_key, is_current_partial=is_current_partial,
+        tickers=tickers, single_ticker=single_ticker,
+    )
+    priced = [p for p in model["positions"] if p["available"]]
+    payload.update({
+        "view": view,
+        "months_back": months_back,
+        "single_ticker": single_ticker,
+        "categories": categories,
+        "model": {
+            "id": model["id"],
+            "name": model["name"],
+            "holdings": len(model["positions"]),
+            "invested": round(sum(p["amount"] for p in priced), 2),
+            "price_date": max((p["price_date"] for p in priced), default=None).isoformat() if priced else None,
+            "unavailable": sorted(p["ticker"] for p in model["positions"] if not p["available"]),
+            # Started trading after the window began, so they pay only part of it.
+            "late_starters": [{"ticker": p["ticker"], "first_date": p["first_date"].isoformat()}
+                              for p in sorted(priced, key=lambda p: p["first_date"])
+                              if p["first_date"] > cutoff_date and (tickers is None or p["ticker"] in tickers)],
+        },
+    })
+    return jsonify(payload)
+
+
 @app.route("/api/reinvestment-impact/data", methods=["GET"])
 def reinvestment_impact_data():
     """Decompose how dividend reinvestment changes payouts over time.
 
-    Replays each holding's distribution + price history (yfinance, hybridised
-    with recorded dividend_payments cash where available) to show, per period:
-    the aggregate distribution, DRIP share growth, and a 3-way attribution of
-    payout change to share-count growth, distribution-rate change, and price.
+    Replays each account's actual holding history (confirmed ``dividend_payments``
+    paired with ``[DRIP]`` buy transactions and share lot changes via
+    ``drip_ledger.Position``), falling back to Yahoo Finance price + dividend
+    reconstruction only for pre-ledger shares or positions without payment
+    records. Emits per-period payouts, DRIP share accumulation, counterfactual
+    cash-only income, and payout-change attribution across DRIP shares,
+    position buys/sells, and per-share distribution rates.
     """
     import datetime
+    from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor
+    from distribution_analysis import ESTIMATE_SOURCES
+    from drip_ledger import (
+        PAIR_DAYS_AFTER,
+        PAIR_DAYS_BEFORE,
+        Position,
+        is_drip_notes,
+        pair_payments,
+    )
 
     view = request.args.get("view", "monthly")  # yearly | monthly | weekly
     if view not in ("yearly", "monthly", "weekly"):
         view = "monthly"
-    months_back = int(request.args.get("months_back", 60 if view == "monthly" else 12))
+    try:
+        months_back = int(request.args.get("months_back", 60 if view == "monthly" else 12))
+    except (TypeError, ValueError):
+        months_back = 60 if view == "monthly" else 12
+    months_back = max(1, min(600, months_back))
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
     sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
     single_ticker = (request.args.get("ticker") or "").strip().upper() or None
+    try:
+        # A Portfolio Builder model (any account's) replaces the portfolio's own records.
+        builder_id = _distribution_builder_id()
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
-    is_agg, pids = get_profile_filter()
+    _, pids = get_profile_filter()
     profile_id = pids[0]
     conn = get_connection()
 
-    # Owner has no dividend_payments of its own — its real payments live in the
-    # member sub-accounts. Mirror the dashboard's remap so actual-payment lookups
-    # read the sub-accounts instead of Owner's (essentially empty) own rows.
-    payment_pids = pids
-    if not is_agg and len(pids) == 1 and pids[0] == 1:
-        owner_source_ids = _get_owner_source_profile_ids(conn)
-        if owner_source_ids:
-            payment_pids = owner_source_ids
+    # Expand Owner roll-up (profile 1) to its member accounts so per-account
+    # DRIP flags, transactions, and recorded payments are replayed accurately
+    # instead of treating a partly reinvested Owner row as 100% DRIP.
+    account_pids = _dividend_payment_profile_ids_for_read(conn, pids)
+    scope_pids = list(dict.fromkeys([*(pids or []), *account_pids]))
 
     cats = conn.execute(
         "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
         (profile_id,),
     ).fetchall()
     categories = [{"id": c["id"], "name": c["name"]} for c in cats]
-    _attach_subcategories(conn, pids, categories)
+    _attach_subcategories(conn, scope_pids, categories)
 
-    filtered_tickers = _reinvest_resolve_category_tickers(conn, pids, cat_ids, categories, sub_ids)
+    filtered_tickers = _reinvest_resolve_category_tickers(
+        conn, scope_pids, cat_ids, categories, sub_ids
+    )
 
-    # ── Window cutoff ───────────────────────────────────────────────────────
+    # ── Window cutoff (aligned to clean period boundaries) ──────────────────
     today = datetime.date.today()
-    total_months = today.year * 12 + (today.month - 1) - months_back
-    cutoff_date = datetime.date(total_months // 12, total_months % 12 + 1, 1)
+    if view == "yearly":
+        years_back = max(1, months_back // 12)
+        cutoff_date = datetime.date(today.year - years_back + 1, 1, 1)
+    else:
+        total_months = today.year * 12 + (today.month - 1) - months_back
+        cutoff_date = datetime.date(total_months // 12, total_months % 12 + 1, 1)
+        if view == "weekly":
+            cutoff_date = cutoff_date - datetime.timedelta(days=cutoff_date.weekday())
     cutoff_key = _reinvest_period_key(pd.Timestamp(cutoff_date), view)
-    # Holding import dates are typically "today" (no per-event lot history), so a
-    # true forward replay from acquisition has nothing to show. Instead we model
-    # the current position reinvested across the selected window: replay begins
-    # just before the window start so every in-window distribution is included.
-    replay_start = cutoff_date - datetime.timedelta(days=1)
+    current_key = _reinvest_period_key(pd.Timestamp(today), view)
+    if view == "yearly":
+        is_current_partial = not (today.month == 12 and today.day == 31)
+    elif view == "monthly":
+        is_current_partial = (today + datetime.timedelta(days=1)).day != 1
+    else:
+        is_current_partial = today.weekday() < 4
 
-    # ── Holdings to replay ──────────────────────────────────────────────────
-    placeholders = ",".join("?" * len(pids))
-    clauses = [f"profile_id IN ({placeholders})", "IFNULL(quantity, 0) > 0"]
-    params = list(pids)
-    if filtered_tickers is not None:
-        if filtered_tickers:
-            tph = ",".join("?" * len(filtered_tickers))
-            clauses.append(f"ticker IN ({tph})")
-            params.extend(sorted(filtered_tickers))
-        else:
-            clauses.append("1 = 0")
-    if single_ticker:
-        clauses.append("ticker = ?")
-        params.append(single_ticker)
-    holding_rows = conn.execute(
-        f"""SELECT ticker, MAX(description) as description,
-                   SUM(IFNULL(base_quantity, quantity)) as base_qty,
-                   MAX(reinvest) as reinvest,
-                   MIN(COALESCE(import_date, purchase_date)) as start_date
-            FROM all_account_info
-            WHERE {' AND '.join(clauses)}
-            GROUP BY ticker""",
-        params,
-    ).fetchall()
-    holdings = [dict(r) for r in holding_rows]
+    if builder_id is not None:
+        conn.close()
+        return _reinvestment_impact_model_response(
+            builder_id, view=view, months_back=months_back, categories=categories,
+            filtered_tickers=filtered_tickers, single_ticker=single_ticker,
+            cutoff_date=cutoff_date, current_key=current_key, is_current_partial=is_current_partial,
+        )
 
-    # ── Actual recorded payments (hybrid sourcing), bucketed per period ───────
-    actual_by_period = {}
-    actual_tickers = set()
-    if holdings:
-        tph = ",".join("?" * len(holdings))
-        payment_placeholders = ",".join("?" * len(payment_pids))
+    # ── Query per-account positions (open + closed/transferred with payouts) ─
+    def _ticker_scope_clause():
+        extra_clauses = []
+        extra_params = []
+        if filtered_tickers is not None:
+            if filtered_tickers:
+                tph = ",".join("?" * len(filtered_tickers))
+                extra_clauses.append(f"UPPER(TRIM(ticker)) IN ({tph})")
+                extra_params.extend(sorted(filtered_tickers))
+            else:
+                extra_clauses.append("1 = 0")
+        if single_ticker:
+            extra_clauses.append("UPPER(TRIM(ticker)) = ?")
+            extra_params.append(single_ticker)
+        return extra_clauses, extra_params
+
+    def _fetch_positions(target_pids):
+        ph = ",".join("?" * len(target_pids))
+        extra_clauses, extra_params = _ticker_scope_clause()
+        clauses = [f"profile_id IN ({ph})", *extra_clauses]
+        q_params = [*target_pids, *extra_params]
+        return [
+            dict(r) for r in conn.execute(
+                f"""SELECT profile_id,
+                           UPPER(TRIM(ticker)) AS ticker,
+                           MAX(description) AS description,
+                           SUM(COALESCE(quantity, 0)) AS quantity,
+                           SUM(COALESCE(base_quantity, quantity, 0)) AS base_qty,
+                           MAX(COALESCE(current_price, 0)) AS current_price,
+                           MAX(COALESCE(div, 0)) AS div,
+                           SUM(CASE WHEN COALESCE(quantity, 0) > 1e-9
+                                    THEN COALESCE(estim_payment_per_year, 0) ELSE 0 END) AS estim,
+                           MAX(reinvest) AS reinvest,
+                           MIN(purchase_date) AS purchase_date,
+                           MAX(import_date) AS import_date
+                    FROM all_account_info
+                    WHERE {' AND '.join(clauses)}
+                    GROUP BY profile_id, UPPER(TRIM(ticker))""",
+                q_params,
+            ).fetchall()
+        ]
+
+    pos_rows = _fetch_positions(account_pids)
+    pos_pids = list(account_pids)
+    if not pos_rows and list(account_pids) != list(pids):
+        # Fallback for synthetic single-profile fixtures where only profile 1 has rows.
+        # Only switch when profile 1 really has them: a scope whose tickers were all
+        # sold (no open rows anywhere) must still read the member accounts' ledgers.
+        own_rows = _fetch_positions(pids)
+        if own_rows:
+            pos_rows = own_rows
+            pos_pids = list(pids)
+
+    trades_by_key = defaultdict(list)
+    payments_by_key = defaultdict(list)
+    profiles_with_tx = set()
+    profiles_with_payments = set()
+
+    if pos_pids:
+        pid_ph = ",".join("?" * len(pos_pids))
+        est_ph = ",".join("?" * len(ESTIMATE_SOURCES))
+        extra_clauses, extra_params = _ticker_scope_clause()
+        extra_sql = (" AND " + " AND ".join(extra_clauses)) if extra_clauses else ""
+
+        profiles_with_tx = {
+            int(r[0]) for r in conn.execute(
+                f"SELECT DISTINCT profile_id FROM transactions WHERE profile_id IN ({pid_ph})",
+                pos_pids,
+            ).fetchall()
+        }
+        profiles_with_payments = {
+            int(r[0]) for r in conn.execute(
+                f"""SELECT DISTINCT profile_id FROM dividend_payments
+                    WHERE profile_id IN ({pid_ph})
+                      AND amount > 0
+                      AND LOWER(TRIM(COALESCE(source, ''))) NOT IN ({est_ph})""",
+                [*pos_pids, *ESTIMATE_SOURCES],
+            ).fetchall()
+        }
+
+        tx_rows = conn.execute(
+            f"""SELECT id, sort_order, profile_id, UPPER(TRIM(ticker)) AS ticker,
+                       transaction_date, UPPER(transaction_type) AS kind,
+                       shares, price_per_share, notes
+                FROM transactions
+                WHERE profile_id IN ({pid_ph})
+                  AND UPPER(COALESCE(transaction_type, '')) IN ('BUY', 'SELL')
+                  {extra_sql}
+                ORDER BY transaction_date, COALESCE(sort_order, id), id""",
+            [*pos_pids, *extra_params],
+        ).fetchall()
+        for order, r in enumerate(tx_rows):
+            d = _reinvest_valid_day(r["transaction_date"], today)
+            sh = abs(float(r["shares"] or 0))
+            if d is None or sh <= 0 or not r["ticker"]:
+                continue
+            is_buy = r["kind"] == "BUY"
+            trades_by_key[(int(r["profile_id"]), r["ticker"])].append({
+                "day": d,
+                "order": order,
+                "kind": r["kind"],
+                "shares": sh,
+                "signed": sh if is_buy else -sh,
+                "price": float(r["price_per_share"] or 0) or None,
+                "drip": is_buy and is_drip_notes(r["notes"]),
+                "profile_id": int(r["profile_id"]),
+            })
+
         pay_rows = conn.execute(
-            f"""SELECT ticker, payment_date, SUM(amount) as amount
+            f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker,
+                       payment_date, ex_date, amount, source
                 FROM dividend_payments
-                WHERE profile_id IN ({payment_placeholders})
-                  AND ticker IN ({tph})
-                GROUP BY ticker, payment_date""",
-            list(payment_pids) + [h["ticker"] for h in holdings],
+                WHERE profile_id IN ({pid_ph})
+                  AND amount > 0
+                  AND LOWER(TRIM(COALESCE(source, ''))) NOT IN ({est_ph})
+                  {extra_sql}""",
+            [*pos_pids, *ESTIMATE_SOURCES, *extra_params],
         ).fetchall()
         for r in pay_rows:
-            ts = _parse_timestamp_value(r["payment_date"])
-            if ts is None:
+            d = _reinvest_valid_day(r["payment_date"], today)
+            if d is None or not r["ticker"]:
                 continue
-            key = _reinvest_period_key(ts, view)
-            actual_by_period[key] = actual_by_period.get(key, 0.0) + float(r["amount"] or 0)
-            actual_tickers.add(r["ticker"])
+            ex = _reinvest_valid_day(r["ex_date"], today)
+            payments_by_key[(int(r["profile_id"]), r["ticker"])].append({
+                "day": d,
+                "ex": ex if (ex and ex <= d) else None,
+                "amount": float(r["amount"] or 0),
+                "source": str(r["source"] or "").strip().lower(),
+                "profile_id": int(r["profile_id"]),
+            })
+
     conn.close()
 
-    # ── Replay each holding ───────────────────────────────────────────────────
-    # Aggregate accumulators keyed by period.
-    agg = {}  # key -> {payout_recon, drip_added, shares_eff, rate_eff, price_eff}
+    # Whether the window reaches back past the first recorded payment in scope,
+    # i.e. the window total is every payment on record (not a claim about the
+    # Dashboard's Lifetime figure, which also counts holding-level totals).
+    first_record_day = min((p["day"] for pays in payments_by_key.values() for p in pays), default=None)
+    covers_all_records = first_record_day is not None and first_record_day >= cutoff_date
+
+    # Include closed/sold/transferred positions that recorded payouts or DRIP buys
+    # in the window even if quantity is now 0 or the row left all_account_info,
+    # matching Dashboard Lifetime / YTD / Monthly income totals.
+    pre_cutoff_global = cutoff_date - datetime.timedelta(days=120 if view != "yearly" else 370)
+    pos_by_key = {(int(r["profile_id"]), r["ticker"]): r for r in pos_rows if r.get("ticker")}
+    for key in sorted(set(payments_by_key) | set(trades_by_key)):
+        if key in pos_by_key:
+            continue
+        has_pay = any(p["day"] >= pre_cutoff_global for p in payments_by_key.get(key, []))
+        has_drip = any(t["drip"] and t["day"] >= pre_cutoff_global for t in trades_by_key.get(key, []))
+        if has_pay or has_drip:
+            pid_k, tkr_k = key
+            pos_by_key[key] = {
+                "profile_id": pid_k,
+                "ticker": tkr_k,
+                "description": "",
+                "quantity": 0.0,
+                "base_qty": 0.0,
+                "current_price": 0.0,
+                "div": 0.0,
+                "estim": 0.0,
+                "reinvest": "N",
+                "purchase_date": None,
+                "import_date": None,
+            }
+
+    pos_rows = [
+        r for key, r in sorted(pos_by_key.items())
+        if float(r.get("quantity") or 0) > 1e-9
+        or any(p["day"] >= pre_cutoff_global for p in payments_by_key.get(key, []))
+        or any(t["drip"] and t["day"] >= pre_cutoff_global for t in trades_by_key.get(key, []))
+    ]
+    held_tickers = sorted({r["ticker"] for r in pos_rows if r.get("ticker")})
+
+    # ── Only fetch market history for positions needing Yahoo reconstruction/prices ─
+    need_market_tickers = set()
+    for r in pos_rows:
+        pid = int(r["profile_id"])
+        key = (pid, r["ticker"])
+        pos_trades = trades_by_key.get(key, [])
+        pos_pays = payments_by_key.get(key, [])
+        qty = float(r["quantity"] or 0)
+        reinvest_flag = (r.get("reinvest") or "").upper() == "Y"
+        if pid not in profiles_with_payments and qty > 1e-9:
+            # Positions-only account with no recorded dividend_payments: reconstruct via Yahoo
+            if float(r.get("div") or 0) > 0 or float(r.get("estim") or 0) > 0 or not pos_trades:
+                need_market_tickers.add(r["ticker"])
+        elif pid not in profiles_with_tx and reinvest_flag and pos_pays:
+            # Account has dividend_payments without transactions: needs market prices for DRIP shares
+            need_market_tickers.add(r["ticker"])
+        elif qty > 1e-9 and float(r.get("current_price") or 0) <= 0:
+            need_market_tickers.add(r["ticker"])
+
+    markets = {}
+    if need_market_tickers:
+        sorted_need = sorted(need_market_tickers)
+        if len(sorted_need) == 1:
+            markets[sorted_need[0]] = _reinvest_market_from_hist(_reinvest_history(sorted_need[0]))
+        else:
+            with ThreadPoolExecutor(max_workers=min(6, len(sorted_need))) as pool:
+                for sym, hist in zip(sorted_need, pool.map(_reinvest_history, sorted_need)):
+                    markets[sym] = _reinvest_market_from_hist(hist)
+
+    # ── Group account positions by ticker and replay ─────────────────────────
+    by_ticker_rows = defaultdict(list)
+    for r in pos_rows:
+        by_ticker_rows[r["ticker"]].append(r)
+
+    MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    agg = {}
     per_ticker = []
+    daily_events = []  # (day, total_amt, drip_inc_amt) for exact calendar run-rate
+    actual_any = False
+    recon_any = False
 
     def _bucket(key):
         rec = agg.get(key)
         if rec is None:
-            rec = {"payout_recon": 0.0, "payout_nodrip": 0.0, "drip_added": 0.0,
-                   "shares_eff": 0.0, "rate_eff": 0.0, "price_eff": 0.0}
+            rec = {
+                "payout_actual": 0.0,
+                "payout_recon": 0.0,
+                "income_from_drip": 0.0,
+                "reinvested_amt": 0.0,
+                "cash_amt": 0.0,
+                "drip_added": 0.0,
+                "shares_eff": 0.0,
+                "trades_eff": 0.0,
+                "rate_eff": 0.0,
+                "price_eff": 0.0,
+            }
             agg[key] = rec
         return rec
 
-    # Portfolio-wide reinvestment-coverage accumulators (over ALL holdings, before
-    # the per_ticker list is truncated to the top contributors).
-    reinvested_payout_total = 0.0   # distributions from holdings with DRIP on
-    cash_payout_total = 0.0         # distributions taken as cash (DRIP off)
-    drip_off = []                   # [{ticker, payout}] for DRIP-off holdings
+    reinvested_payout_total = 0.0
+    cash_payout_total = 0.0
+    total_drip_shares_value = 0.0
+    total_net_drip_shares = 0.0
+    total_current_value = 0.0
+    total_current_drip_value = 0.0
+    total_est_annual = 0.0
+    total_est_reinvested = 0.0
+    drip_off = []
 
-    for h in holdings:
-        ticker = h["ticker"]
-        hist = _reinvest_history(ticker)
-        if hist is None or getattr(hist, "empty", True) or "Dividends" not in hist.columns:
-            continue
-        div_series = hist["Dividends"]
-        div_series = div_series[div_series > 0]
-        close_series = hist["Close"].dropna() if "Close" in hist.columns else None
-        if div_series.empty or close_series is None or close_series.empty:
-            continue
+    for ticker in sorted(by_ticker_rows.keys()):
+        t_rows = by_ticker_rows[ticker]
+        market = markets.get(ticker)
+        description = next((r["description"] for r in t_rows if r.get("description")), "") or ""
+        current_price = max((float(r.get("current_price") or 0) for r in t_rows), default=0.0)
+        if current_price <= 0 and market is not None:
+            current_price = float(market.close_on_or_before(today) or 0.0)
 
-        reinvest = (h.get("reinvest") or "").upper() == "Y"
-        base_qty = float(h.get("base_qty") or 0)
-        series = _drip_period_series(
-            div_series, close_series, base_qty, view,
-            reinvest=reinvest, start_date=replay_start, today=today,
+        open_rows = [r for r in t_rows if float(r.get("quantity") or 0) > 1e-9]
+        accounts_total = len(open_rows)
+        accounts_reinvest_on = sum(1 for r in open_rows if (r.get("reinvest") or "").upper() == "Y")
+        ticker_qty_total = sum(float(r.get("quantity") or 0) for r in open_rows)
+        ticker_qty_drip_now = sum(
+            float(r.get("quantity") or 0)
+            for r in open_rows
+            if (r.get("reinvest") or "").upper() == "Y"
         )
-        if not series:
+        ticker_est_total = sum(float(r.get("estim") or 0) for r in open_rows)
+        ticker_est_drip = sum(
+            float(r.get("estim") or 0)
+            for r in open_rows
+            if (r.get("reinvest") or "").upper() == "Y"
+        )
+        if ticker_est_total > 1e-9:
+            current_reinvest_pct = round(100.0 * ticker_est_drip / ticker_est_total, 1)
+        elif ticker_qty_total > 1e-9:
+            current_reinvest_pct = round(100.0 * ticker_qty_drip_now / ticker_qty_total, 1)
+        else:
+            current_reinvest_pct = 0.0
+        any_reinvest_now = ticker_qty_drip_now > 1e-9
+        total_current_value += ticker_qty_total * current_price
+        total_current_drip_value += ticker_qty_drip_now * current_price
+        total_est_annual += ticker_est_total
+        total_est_reinvested += ticker_est_drip
+
+        # Per-period accumulator for this ticker across all accounts holding it.
+        t_periods = {}
+        # Include 1 prior period before cutoff_key if available for period-1 attribution
+        pre_cutoff_date = cutoff_date - datetime.timedelta(days=120 if view != "yearly" else 370)
+        ticker_net_drip_held = 0.0
+
+        def _t_rec(k):
+            tr = t_periods.get(k)
+            if tr is None:
+                tr = {
+                    "payout_actual": 0.0,
+                    "payout_recon": 0.0,
+                    "income_from_drip": 0.0,
+                    "reinvested_amt": 0.0,
+                    "cash_amt": 0.0,
+                    "drip_added": 0.0,
+                    "pay_dates": defaultdict(lambda: [0.0, 0.0]),  # date -> [amt_sum, held_sum]
+                }
+                t_periods[k] = tr
+            return tr
+
+        for r in t_rows:
+            pid = int(r["profile_id"])
+            qty = float(r.get("quantity") or 0)
+            pos_trades = trades_by_key.get((pid, ticker), [])
+            pos_pays = payments_by_key.get((pid, ticker), [])
+            if qty <= 1e-9 and not pos_pays and not any(t["drip"] for t in pos_trades):
+                continue
+            reinvest_flag = (r.get("reinvest") or "").upper() == "Y"
+            pdate = _reinvest_valid_day(r.get("purchase_date"), today)
+            idate = _reinvest_valid_day(r.get("import_date"), today)
+
+            pos = Position(pid, ticker, qty, pos_trades, pos_pays, market)
+            drip_buys = [t for t in pos.trades if t["drip"] and t["day"] <= today]
+            paired = pair_payments(pos.payments, drip_buys)
+
+            # Accounts without a transaction ledger rely on their reinvest flag
+            if pid not in profiles_with_tx and reinvest_flag and market is not None:
+                for ev in paired:
+                    if ev["shares"] <= 0 and ev["amount"] > 0:
+                        px = market.close_on_or_before(ev["day"])
+                        if px and px > 0:
+                            ev["reinvested"] = ev["amount"]
+                            ev["shares"] = ev["amount"] / px
+                            ev["price"] = px
+
+            first_event_day = paired[0]["day"] if paired else None
+            boundary_day = first_event_day if first_event_day is not None else (today + datetime.timedelta(days=1))
+            target_end_shares = pos.quantity if first_event_day is None else pos.shares_before(first_event_day)
+
+            # Determine earliest date this position was open for pre-record reconstruction
+            if pos.trades and pos.shares_before(pos.trades[0]["day"]) <= 0.01:
+                open_day = pos.trades[0]["day"]
+            elif pdate is not None and (idate is None or pdate < idate or first_event_day is not None):
+                open_day = pdate
+            else:
+                open_day = pre_cutoff_date
+
+            drip_cum = 0.0
+
+            # 1) Market reconstruction ONLY for positions-only accounts that have no
+            # confirmed dividend_payments ledger (so accounts with payment history
+            # match Dashboard Lifetime / YTD / Monthly income to the penny).
+            opened_after_pre_cutoff = open_day > pre_cutoff_date
+            recon_start = max(pre_cutoff_date, open_day)
+            if (
+                pid not in profiles_with_payments
+                and qty > 1e-9
+                and target_end_shares > 0.01
+                and market is not None
+                and market.distributions
+                and recon_start < boundary_day
+            ):
+                seg_divs = []
+                for d_day, d_amt in market.distributions:
+                    after_open = (d_day > open_day) if opened_after_pre_cutoff else (d_day >= recon_start)
+                    if after_open and recon_start <= d_day < boundary_day and d_day <= today and d_amt > 0:
+                        px = market.close_on_or_before(d_day)
+                        if px and px > 0:
+                            seg_divs.append((d_day, float(d_amt), float(px)))
+                if seg_divs:
+                    trades_in_seg = [t for t in pos.trades if recon_start <= t["day"] < boundary_day]
+                    if not trades_in_seg:
+                        # Anchor to target_end_shares at boundary_day so current shares stay exact
+                        in_window_divs = [(d, a, p) for (d, a, p) in seg_divs if d >= cutoff_date]
+                        pre_window_divs = [(d, a, p) for (d, a, p) in seg_divs if d < cutoff_date]
+                        growth_in_window = 1.0
+                        if reinvest_flag:
+                            for _, a, p in in_window_divs:
+                                growth_in_window *= (1.0 + a / p)
+                        shares_at_cutoff = target_end_shares / growth_in_window if growth_in_window > 0 else target_end_shares
+                        # Emit 1 pre-cutoff period if available so first in-window period has attribution baseline
+                        if pre_window_divs:
+                            growth_pre = 1.0
+                            if reinvest_flag:
+                                for _, a, p in pre_window_divs:
+                                    growth_pre *= (1.0 + a / p)
+                            s_run = shares_at_cutoff / growth_pre if growth_pre > 0 else shares_at_cutoff
+                            for d_day, d_amt, px in pre_window_divs:
+                                pay_d = s_run * d_amt
+                                new_sh = (pay_d / px) if reinvest_flag else 0.0
+                                pk = _reinvest_period_key(pd.Timestamp(d_day), view)
+                                tr = _t_rec(pk)
+                                tr["payout_recon"] += pay_d
+                                tr["pay_dates"][d_day][0] += pay_d
+                                tr["pay_dates"][d_day][1] += s_run
+                                s_run += new_sh
+                        s_run = shares_at_cutoff
+                        for d_day, d_amt, px in in_window_divs:
+                            pay_d = s_run * d_amt
+                            inc_drip_d = drip_cum * d_amt
+                            new_sh = (pay_d / px) if reinvest_flag else 0.0
+                            pk = _reinvest_period_key(pd.Timestamp(d_day), view)
+                            tr = _t_rec(pk)
+                            tr["payout_recon"] += pay_d
+                            tr["income_from_drip"] += inc_drip_d
+                            tr["reinvested_amt"] += pay_d if reinvest_flag else 0.0
+                            tr["cash_amt"] += 0.0 if reinvest_flag else pay_d
+                            tr["drip_added"] += new_sh
+                            tr["pay_dates"][d_day][0] += pay_d
+                            tr["pay_dates"][d_day][1] += s_run
+                            if pk >= cutoff_key:
+                                daily_events.append((d_day, pay_d, inc_drip_d))
+                            s_run += new_sh
+                            drip_cum += new_sh
+                    else:
+                        # Position has explicit non-DRIP trades but no recorded dividend_payments
+                        for d_day, d_amt, px in seg_divs:
+                            held_d = pos.shares_before(d_day)
+                            if held_d <= 1e-9:
+                                continue
+                            pay_d = held_d * d_amt
+                            pk = _reinvest_period_key(pd.Timestamp(d_day), view)
+                            tr = _t_rec(pk)
+                            tr["payout_recon"] += pay_d
+                            if d_day >= cutoff_date:
+                                inc_drip_d = min(drip_cum, held_d) * d_amt
+                                new_sh = (pay_d / px) if reinvest_flag else 0.0
+                                tr["income_from_drip"] += inc_drip_d
+                                tr["reinvested_amt"] += pay_d if reinvest_flag else 0.0
+                                tr["cash_amt"] += 0.0 if reinvest_flag else pay_d
+                                tr["drip_added"] += new_sh
+                                if pk >= cutoff_key:
+                                    daily_events.append((d_day, pay_d, inc_drip_d))
+                                drip_cum += new_sh
+                            tr["pay_dates"][d_day][0] += pay_d
+                            tr["pay_dates"][d_day][1] += held_d
+
+            # 2) Chronological walk of actual recorded payments + trades
+            if paired:
+                timeline = []
+                for ev in paired:
+                    if ev["day"] < pre_cutoff_date or ev["day"] > today:
+                        continue
+                    entitle_day = ev.get("ex") or ev["day"]
+                    timeline.append((entitle_day, 0, "entitle", ev))
+                    timeline.append((ev["day"], 1, "pay", ev))
+                for idx, trd in enumerate(pos.trades):
+                    if cutoff_date <= trd["day"] <= today:
+                        timeline.append((trd["day"], 2, "trade", idx))
+                timeline.sort(key=lambda item: (item[0], item[1]))
+
+                for day, _, kind, item in timeline:
+                    if kind == "entitle":
+                        held_ex = _reinvest_shares_entitled(pos, day)
+                        item["_held_at_ex"] = held_ex
+                        item["_drip_at_ex"] = min(drip_cum, held_ex) if day >= cutoff_date else 0.0
+                        continue
+                    if kind == "trade":
+                        trd = pos.trades[item]
+                        if trd["drip"]:
+                            drip_cum += trd["shares"]
+                        elif trd["signed"] < 0:
+                            before, after = pos.shares_around(item)
+                            ratio = min(1.0, after / before) if before > 0 else 0.0
+                            drip_cum *= ratio
+                        continue
+
+                    ev = item
+                    amt = float(ev["amount"] or 0)
+                    if amt <= 0:
+                        continue
+                    held = ev.get("_held_at_ex") or pos.shares_before(ev["day"]) or pos.quantity
+                    pk = _reinvest_period_key(pd.Timestamp(ev["day"]), view)
+                    tr = _t_rec(pk)
+                    tr["payout_actual"] += amt
+                    if held > 1e-9:
+                        tr["pay_dates"][ev["day"]][0] += amt
+                        tr["pay_dates"][ev["day"]][1] += held
+
+                    if pk >= cutoff_key:
+                        r_amt = min(amt, float(ev.get("reinvested") or 0))
+                        c_amt = max(0.0, amt - r_amt)
+                        sh_added = float(ev.get("shares") or 0)
+                        # If paired buy wasn't also in pos.trades (e.g. modeled on no-tx account), advance drip_cum
+                        if pid not in profiles_with_tx and reinvest_flag and sh_added > 0:
+                            drip_cum_for_pay = min(drip_cum, held)
+                            drip_cum += sh_added
+                        else:
+                            drip_cum_for_pay = min(ev.get("_drip_at_ex", 0.0), held)
+                        per_sh = (amt / held) if held > 1e-9 else 0.0
+                        inc_drip = per_sh * drip_cum_for_pay
+                        tr["income_from_drip"] += inc_drip
+                        tr["reinvested_amt"] += r_amt
+                        tr["cash_amt"] += c_amt
+                        tr["drip_added"] += sh_added
+                        daily_events.append((ev["day"], amt, inc_drip))
+
+            ticker_net_drip_held += min(drip_cum, pos.quantity)
+
+        # ── Aggregate this ticker's ordered periods & compute 4-way attribution ─
+        if not t_periods:
             continue
 
-        ordered = sorted(series.items())  # [(key, rec), ...]
-        prev = None
-        t_payout, t_drip, t_dps = [], [], []
+        market_divs_by_period = defaultdict(list)
+        if market is not None and market.distributions:
+            for d_day, d_amt in market.distributions:
+                if pre_cutoff_date <= d_day <= today and d_amt > 0:
+                    market_divs_by_period[_reinvest_period_key(pd.Timestamp(d_day), view)].append(float(d_amt))
+
         t_labels = []
-        t_rate_impact = 0.0  # this ticker's $ payout change attributable to rate moves
-        for key, rec in ordered:
-            if key < cutoff_key:
-                prev = (rec["shares_start"], rec["dps"])
+        t_payout = []
+        t_drip = []
+        t_dps = []
+        t_pay_counts = []
+        t_reinv_sum = 0.0
+        t_cash_sum = 0.0
+        t_extra_drip_sum = 0.0
+        t_rate_impact = 0.0
+        prev_state = None  # (s_nondrip, s_drip, dps)
+
+        for key in sorted(t_periods.keys()):
+            tr = t_periods[key]
+            p_tot = tr["payout_actual"] + tr["payout_recon"]
+            if p_tot <= 1e-9 and tr["drip_added"] <= 1e-9:
                 continue
+
+            # Effective per-share distribution paid in this period for this ticker
+            pay_dates = tr["pay_dates"]
+            dps_from_events = sum(
+                (amt_d / held_d) for amt_d, held_d in pay_dates.values() if held_d > 1e-9
+            )
+            if single_ticker == ticker and market_divs_by_period.get(key) and tr["payout_actual"] <= 1e-9:
+                dps_val = sum(market_divs_by_period[key])
+                pay_cnt = len(market_divs_by_period[key])
+            elif dps_from_events > 1e-9:
+                dps_val = dps_from_events
+                pay_cnt = len(pay_dates)
+            elif market_divs_by_period.get(key):
+                dps_val = sum(market_divs_by_period[key])
+                pay_cnt = len(market_divs_by_period[key])
+            else:
+                # No per-share evidence for this period (no share count at the
+                # payment, no market history). Carry the last known rate so the
+                # change lands on shares; never divide the payout by a placeholder
+                # share count, which turns a $50 payment into a $50/share "rate".
+                dps_val = prev_state[2] if prev_state is not None else None
+                pay_cnt = max(1, len(pay_dates))
+
+            dps_known = dps_val is not None and dps_val > 1e-9
+            inc_drip = min(p_tot, tr["income_from_drip"])
+            if dps_known:
+                s_eff = p_tot / dps_val
+                s_drip = inc_drip / dps_val
+                s_nondrip = max(0.0, s_eff - s_drip)
+
+            if key < cutoff_key:
+                prev_state = (s_nondrip, s_drip, dps_val) if dps_known else None
+                continue
+
             bucket = _bucket(key)
-            bucket["payout_recon"] += rec["payout"]
-            # Counterfactual: income had the position NOT been reinvested (shares
-            # frozen at base_qty). dps is per-share, so no-DRIP income = dps * base.
-            bucket["payout_nodrip"] += rec["dps"] * base_qty
-            bucket["drip_added"] += rec["drip_shares_added"]
-            # 3-way attribution of payout change vs this ticker's previous period
-            if prev is not None:
-                s_prev, dps_prev = prev
-                s_cur = rec["shares_start"]
-                dps_cur = rec["dps"]
-                d_shares = s_cur - s_prev
-                d_dps = dps_cur - dps_prev
-                bucket["shares_eff"] += d_shares * dps_prev
-                bucket["rate_eff"] += d_dps * s_prev
-                bucket["price_eff"] += d_shares * d_dps
-                t_rate_impact += d_dps * s_prev
-            prev = (rec["shares_start"], rec["dps"])
+            bucket["payout_actual"] += tr["payout_actual"]
+            bucket["payout_recon"] += tr["payout_recon"]
+            bucket["income_from_drip"] += inc_drip
+            bucket["reinvested_amt"] += tr["reinvested_amt"]
+            bucket["cash_amt"] += tr["cash_amt"]
+            bucket["drip_added"] += tr["drip_added"]
+            if tr["payout_actual"] > 1e-9:
+                actual_any = True
+            if tr["payout_recon"] > 1e-9:
+                recon_any = True
+
+            if prev_state is not None and dps_known:
+                sn_prev, sd_prev, dps_prev = prev_state
+                s_prev = sn_prev + sd_prev
+                d_sd = s_drip - sd_prev
+                d_sn = s_nondrip - sn_prev
+                d_dps = dps_val - dps_prev
+                sh_eff = d_sd * dps_prev
+                tr_eff = d_sn * dps_prev
+                rt_eff = d_dps * s_prev
+                pr_eff = (d_sd + d_sn) * d_dps
+                bucket["shares_eff"] += sh_eff
+                bucket["trades_eff"] += tr_eff
+                bucket["rate_eff"] += rt_eff
+                bucket["price_eff"] += pr_eff
+                t_rate_impact += rt_eff
+
+            if dps_known:
+                prev_state = (s_nondrip, s_drip, dps_val)
             t_labels.append(key)
-            t_payout.append(round(rec["payout"], 2))
-            t_drip.append(round(rec["drip_shares_added"], 4))
-            t_dps.append(round(rec["dps"], 6))
+            t_payout.append(round(p_tot, 2))
+            t_drip.append(round(tr["drip_added"], 4))
+            t_dps.append(round(dps_val, 6) if dps_known else None)
+            t_pay_counts.append(int(pay_cnt))
+            t_reinv_sum += tr["reinvested_amt"]
+            t_cash_sum += tr["cash_amt"]
+            t_extra_drip_sum += inc_drip
 
         if t_labels:
             ticker_total = round(sum(t_payout), 2)
-            if reinvest:
-                reinvested_payout_total += ticker_total
-            else:
-                cash_payout_total += ticker_total
-                if ticker_total > 0:
-                    drip_off.append({"ticker": ticker, "payout": ticker_total})
+            reinvested_payout_total += t_reinv_sum
+            cash_payout_total += t_cash_sum
+            t_drip_val = round(ticker_net_drip_held * current_price, 2)
+            total_drip_shares_value += t_drip_val
+            total_net_drip_shares += ticker_net_drip_held
+            t_cov = t_reinv_sum + t_cash_sum
+            t_reinv_pct = round(100.0 * t_reinv_sum / t_cov, 1) if t_cov > 1e-9 else (100.0 if any_reinvest_now else 0.0)
+            is_open_holding = ticker_qty_total > 1e-9
+            if is_open_holding and t_cash_sum > 0.01 and current_reinvest_pct < 99.9:
+                drip_off.append({
+                    "ticker": ticker,
+                    "payout": round(t_cash_sum, 2),
+                    "total_payout": ticker_total,
+                    "current_reinvest_pct": current_reinvest_pct,
+                })
             per_ticker.append({
                 "ticker": ticker,
-                "description": (h.get("description") or "")[:40],
-                "reinvest": reinvest,
+                "description": description[:40],
+                "closed": not is_open_holding,
+                "reinvest": any_reinvest_now,
+                "accounts_total": accounts_total,
+                "accounts_reinvest_on": accounts_reinvest_on,
+                "current_reinvest_pct": current_reinvest_pct,
+                "est_annual_income": round(ticker_est_total, 2),
+                "reinvest_pct": t_reinv_pct,
                 "labels": t_labels,
                 "payout": t_payout,
                 "drip_shares_added": t_drip,
                 "dps": t_dps,
+                "payment_counts": t_pay_counts,
                 "total_payout": ticker_total,
+                "reinvested_payout": round(t_reinv_sum, 2),
+                "cash_payout": round(t_cash_sum, 2),
                 "total_drip_shares": round(sum(t_drip), 4),
+                "net_drip_shares_held": round(ticker_net_drip_held, 4),
+                "drip_shares_value": t_drip_val,
+                "extra_income_from_drip": round(t_extra_drip_sum, 2),
                 "rate_impact": round(t_rate_impact, 2),
             })
 
     # ── Assemble aggregate series over the sorted union of period keys ────────
     labels = sorted(agg.keys())
+    payout_actual = [round(agg[k]["payout_actual"], 2) for k in labels]
     payout_recon = [round(agg[k]["payout_recon"], 2) for k in labels]
-    payout_actual = [round(actual_by_period.get(k, 0.0), 2) for k in labels]
     payout_hybrid = [
-        (pa if pa > 0 else pr) for pa, pr in zip(payout_actual, payout_recon)
+        round(agg[k]["payout_actual"] + agg[k]["payout_recon"], 2) for k in labels
     ]
-    payout_source = ["actual" if actual_by_period.get(k, 0.0) > 0 else "reconstructed"
-                     for k in labels]
+    payout_source = [
+        "mixed" if (agg[k]["payout_actual"] > 0.005 and agg[k]["payout_recon"] > 0.005)
+        else ("actual" if agg[k]["payout_actual"] > 0.005 else "reconstructed")
+        for k in labels
+    ]
+    partial_periods = [bool(is_current_partial and k == current_key) for k in labels]
+    income_from_drip_series = [round(agg[k]["income_from_drip"], 2) for k in labels]
+    payout_nodrip = [
+        round(max(0.0, payout_hybrid[i] - income_from_drip_series[i]), 2)
+        for i in range(len(labels))
+    ]
+    reinvested_series = [round(agg[k]["reinvested_amt"], 2) for k in labels]
+    cash_series = [round(agg[k]["cash_amt"], 2) for k in labels]
     drip_added = [round(agg[k]["drip_added"], 4) for k in labels]
-    # Counterfactual "took the cash" payout, and the running compounding benefit
-    # (with-DRIP reconstruction minus the no-DRIP path).
-    payout_nodrip = [round(agg[k]["payout_nodrip"], 2) for k in labels]
+
     drip_benefit_cumulative = []
     run_benefit = 0.0
-    for pr, pn in zip(payout_recon, payout_nodrip):
-        run_benefit += (pr - pn)
+    for v in income_from_drip_series:
+        run_benefit += v
         drip_benefit_cumulative.append(round(run_benefit, 2))
+
     cumulative = []
     run = 0.0
     for v in drip_added:
         run += v
         cumulative.append(round(run, 4))
+
     decomp = {
         "shares": [round(agg[k]["shares_eff"], 2) for k in labels],
+        "trades": [round(agg[k]["trades_eff"], 2) for k in labels],
         "rate": [round(agg[k]["rate_eff"], 2) for k in labels],
         "price": [round(agg[k]["price_eff"], 2) for k in labels],
     }
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # ── Summary & Dashboard-aligned forward / realized run-rates ──────────────
     total_payout = round(sum(payout_hybrid), 2)
+    total_actual_payout = round(sum(payout_actual), 2)
+    total_recon_payout = round(sum(payout_recon), 2)
     total_drip_shares = round(sum(drip_added), 4)
     sum_shares_eff = sum(decomp["shares"])
     sum_rate_eff = sum(decomp["rate"])
     sum_price_eff = sum(decomp["price"])
-    # Share of the *gross* forces moving payouts that came from DRIP share growth
-    # (bounded 0–100; the net-change ratio explodes when offsetting effects cancel).
     gross_effect = abs(sum_shares_eff) + abs(sum_rate_eff) + abs(sum_price_eff)
     drip_pct_of_growth = round(100 * sum_shares_eff / gross_effect, 1) if gross_effect > 1e-9 else 0.0
-    periods_per_year = {"weekly": 52, "monthly": 12, "yearly": 1}[view]
-    run_rate = round((payout_hybrid[-1] if payout_hybrid else 0.0) * periods_per_year, 2)
 
-    # Extra income generated by reinvesting (reconstructed with-DRIP vs no-DRIP).
-    total_recon = sum(payout_recon)
-    total_nodrip = sum(payout_nodrip)
-    extra_income_from_drip = round(total_recon - total_nodrip, 2)
-    extra_income_pct = round(100 * (total_recon - total_nodrip) / total_nodrip, 1) if total_nodrip > 1e-9 else 0.0
+    # Trailing 3 completed calendar months × 4 handles weekly (13×4=52),
+    # monthly (3×4=12), and quarterly (1×4=4) payers simultaneously without
+    # partial-month distortion on the 1st..30th of an unfinished month.
+    cur_month_start = today.replace(day=1)
+    last_full_month_end = cur_month_start - datetime.timedelta(days=1)
 
-    # Reinvestment coverage: share of distributions reinvested vs. taken as cash.
+    def _shift_months(d, delta):
+        ym = d.year * 12 + (d.month - 1) + delta
+        return datetime.date(ym // 12, ym % 12 + 1, 1)
+
+    m3_start = _shift_months(cur_month_start, -3)
+    m12_start = _shift_months(cur_month_start, -12)
+    earliest_ev_day = min((ev[0] for ev in daily_events), default=None)
+
+    sum_3m = sum(amt for d, amt, _ in daily_events if m3_start <= d <= last_full_month_end)
+    drip_3m = sum(drp for d, _, drp in daily_events if m3_start <= d <= last_full_month_end)
+    sum_12m = sum(amt for d, amt, _ in daily_events if m12_start <= d <= last_full_month_end)
+    drip_12m = sum(drp for d, _, drp in daily_events if m12_start <= d <= last_full_month_end)
+
+    def _fmt_mo(d):
+        return f"{MONTH_ABBR[d.month - 1]} '{str(d.year)[-2:]}"
+
+    if earliest_ev_day is not None and earliest_ev_day <= m3_start and sum_3m > 0:
+        realized_run_rate = round(sum_3m * 4.0, 2)
+        current_drip_pace = round(drip_3m * 4.0, 2)
+        realized_run_rate_basis = f"{_fmt_mo(m3_start)}–{_fmt_mo(last_full_month_end)} × 4"
+    elif earliest_ev_day is not None and earliest_ev_day <= m12_start and sum_12m > 0:
+        realized_run_rate = round(sum_12m, 2)
+        current_drip_pace = round(drip_12m, 2)
+        realized_run_rate_basis = f"{_fmt_mo(m12_start)}–{_fmt_mo(last_full_month_end)}"
+    else:
+        completed_idx = [i for i, p in enumerate(partial_periods) if not p]
+        ref_idx = completed_idx[-1] if completed_idx else (len(payout_hybrid) - 1 if payout_hybrid else None)
+        periods_per_year = {"weekly": 52, "monthly": 12, "yearly": 1}[view]
+        if ref_idx is not None:
+            realized_run_rate = round(payout_hybrid[ref_idx] * periods_per_year, 2)
+            current_drip_pace = round(income_from_drip_series[ref_idx] * periods_per_year, 2)
+            realized_run_rate_basis = f"{labels[ref_idx]} × {periods_per_year}"
+        else:
+            realized_run_rate = 0.0
+            current_drip_pace = 0.0
+            realized_run_rate_basis = "no completed periods"
+
+    current_drip_share_pct = round(100.0 * current_drip_pace / realized_run_rate, 1) if realized_run_rate > 1e-9 else 0.0
+
+    # Match Dashboard's forward Est. Annual Income when open holdings have forward estimates
+    est_annual_income = round(total_est_annual, 2)
+    est_monthly_income = round(total_est_annual / 12.0, 2)
+    est_annual_reinvested = round(total_est_reinvested, 2)
+    est_annual_cash = round(max(0.0, total_est_annual - total_est_reinvested), 2)
+    if est_annual_income > 0:
+        run_rate = est_annual_income
+        run_rate_basis = "current holdings forward estimate (matches Dashboard)"
+    else:
+        run_rate = realized_run_rate
+        run_rate_basis = realized_run_rate_basis
+
+    # Extra income generated by reinvesting (exact distributions paid on DRIP shares)
+    extra_income_from_drip = round(sum(income_from_drip_series), 2)
+    total_nodrip = round(max(0.0, total_payout - extra_income_from_drip), 2)
+    extra_income_pct = round(100.0 * extra_income_from_drip / total_nodrip, 1) if total_nodrip > 1e-9 else 0.0
+
+    # Reinvestment coverage over the window + current setting coverage (matches Dashboard Est. % Reinvested)
     coverage_total = reinvested_payout_total + cash_payout_total
     pct_reinvested = round(100 * reinvested_payout_total / coverage_total, 1) if coverage_total > 1e-9 else 0.0
+    if total_est_annual > 1e-9:
+        current_reinvest_pct_scope = round(100.0 * total_est_reinvested / total_est_annual, 1)
+    elif total_current_value > 1e-9:
+        current_reinvest_pct_scope = round(100.0 * total_current_drip_value / total_current_value, 1)
+    else:
+        current_reinvest_pct_scope = 0.0
     drip_off.sort(key=lambda d: d["payout"], reverse=True)
 
-    # Notable per-ticker distribution-rate changes over the window (top raises/cuts
-    # by dollar impact). Computed before per_ticker is truncated below.
     rate_sorted = sorted((t for t in per_ticker if abs(t.get("rate_impact", 0)) > 0.005),
                          key=lambda t: t["rate_impact"])
     rate_cuts = [{"ticker": t["ticker"], "rate_impact": t["rate_impact"]}
@@ -61681,7 +62732,6 @@ def reinvestment_impact_data():
     rate_raises = [{"ticker": t["ticker"], "rate_impact": t["rate_impact"]}
                    for t in reversed(rate_sorted[-3:]) if t["rate_impact"] > 0]
 
-    # Top contributors by payout (skip when a single ticker is requested)
     per_ticker.sort(key=lambda t: t["total_payout"], reverse=True)
     if not single_ticker:
         per_ticker = per_ticker[:15]
@@ -61697,7 +62747,11 @@ def reinvestment_impact_data():
             "payout_actual": payout_actual,
             "payout_reconstructed": payout_recon,
             "payout_source": payout_source,
+            "partial_periods": partial_periods,
             "payout_nodrip": payout_nodrip,
+            "income_from_drip": income_from_drip_series,
+            "reinvested_amount": reinvested_series,
+            "cash_amount": cash_series,
             "drip_benefit_cumulative": drip_benefit_cumulative,
             "drip_shares_added": drip_added,
             "drip_shares_cumulative": cumulative,
@@ -61708,13 +62762,31 @@ def reinvestment_impact_data():
         "rate_cuts": rate_cuts,
         "summary": {
             "total_payout": total_payout,
+            "total_actual_payout": total_actual_payout,
+            "total_reconstructed_payout": total_recon_payout,
             "total_drip_shares": total_drip_shares,
+            "net_drip_shares_held": round(total_net_drip_shares, 4),
+            "drip_shares_value": round(total_drip_shares_value, 2),
             "drip_pct_of_growth": drip_pct_of_growth,
             "run_rate": run_rate,
-            "has_actual": bool(actual_tickers),
+            "run_rate_basis": run_rate_basis,
+            "est_annual_income": est_annual_income,
+            "est_monthly_income": est_monthly_income,
+            "est_annual_reinvested": est_annual_reinvested,
+            "est_annual_cash": est_annual_cash,
+            "realized_run_rate": realized_run_rate,
+            "realized_run_rate_basis": realized_run_rate_basis,
+            "current_drip_pace": current_drip_pace,
+            "current_drip_share_pct": current_drip_share_pct,
+            "has_actual": actual_any,
+            "has_reconstructed": recon_any,
+            "has_partial_last": bool(partial_periods and partial_periods[-1]),
+            "covers_all_records": covers_all_records,
             "extra_income_from_drip": extra_income_from_drip,
             "extra_income_pct": extra_income_pct,
+            "total_nodrip": total_nodrip,
             "pct_reinvested": pct_reinvested,
+            "current_reinvest_pct": current_reinvest_pct_scope,
             "reinvested_payout": round(reinvested_payout_total, 2),
             "cash_payout": round(cash_payout_total, 2),
             "drip_off": drip_off[:8],
@@ -62159,7 +63231,8 @@ def _distribution_model_categories(conn, tickers):
         return {}
     out = {}
     for row in conn.execute(
-        f"""SELECT UPPER(TRIM(tc.ticker)) AS ticker, c.name AS category, s.name AS subcategory
+        f"""SELECT UPPER(TRIM(tc.ticker)) AS ticker, c.name AS category, s.name AS subcategory,
+                   s.id AS subcategory_id
             FROM ticker_categories tc
             JOIN categories c ON c.id = tc.category_id
             LEFT JOIN subcategories s ON s.id = tc.subcategory_id
@@ -62168,7 +63241,8 @@ def _distribution_model_categories(conn, tickers):
             ORDER BY tc.profile_id""",
         [*pids, *tickers],
     ):
-        out.setdefault(row["ticker"], {"category": row["category"], "subcategory": row["subcategory"]})
+        out.setdefault(row["ticker"], {"category": row["category"], "subcategory": row["subcategory"],
+                                       "subcategory_id": row["subcategory_id"]})
     return out
 
 
@@ -62247,6 +63321,13 @@ def portfolio_distributions_model_holdings():
     if model is None:
         return jsonify(error="builder_id is required."), 400
     rows = model_holding_rows(model["positions"], model["categories"], model["today"])
+    # Nested sub-category chains, so a parent sub-category filter matches its children.
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        _attach_subcategory_paths(conn, pids, rows)
+    finally:
+        conn.close()
     priced = [p for p in model["positions"] if p["available"]]
     return jsonify(
         rows=rows,

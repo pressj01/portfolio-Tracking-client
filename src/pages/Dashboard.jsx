@@ -2723,16 +2723,39 @@ export default function Dashboard() {
             : null}
           title="Upside capture ÷ downside capture versus the S&P 500 (SPY). Above 1.00 the portfolio kept more of the market's gains than of its losses."
         />
-        <SummaryCard label="Lifetime Income" value={fmt(totals.lifetimeIncome)} color="var(--pos)" />
+        <SummaryCard
+          label="Lifetime Income"
+          value={fmt(totals.lifetimeIncome)}
+          color="var(--pos)"
+          title="Recorded dividend payments, plus [DRIP] share purchases that have no matching payment row. Those purchases are real distributions from before an account's payment history was imported."
+        />
         <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="var(--pos)" />
         <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="var(--pos)" sub={currentMonthSub} />
         <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="var(--pos)" sub="Annual estimate / 12" />
         <SummaryCard label="Est. Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="var(--accent-bright)" sub="Forward run-rate" />
         <SummaryCard label="Est. Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="var(--warning-money)" sub="Forward run-rate" />
         <SummaryCard label="Est. % Reinvested" value={pct(totals.reinvestPct)} color="var(--pos-muted)" sub="Forward run-rate" />
-        <SummaryCard label={`${currentMonth} Reinvested`} value={fmt(totals.currentMonthReinvested)} color="var(--accent-bright)" sub={currentMonthSub} />
-        <SummaryCard label={`${currentMonth} Not Reinvested`} value={fmt(totals.currentMonthNotReinvested)} color="var(--warning-money)" sub={currentMonthSub} />
-        <SummaryCard label={`${currentMonth} % Reinvested`} value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'} color="var(--pos-muted)" sub={currentMonthSub} />
+        <SummaryCard
+          label={`${currentMonth} Reinvested`}
+          value={fmt(totals.currentMonthReinvested)}
+          color="var(--accent-bright)"
+          sub={currentMonthSub}
+          title="Payments this month matched to the [DRIP] share purchases that reinvested them. Changing a DRIP checkbox today does not reclassify payments already received."
+        />
+        <SummaryCard
+          label={`${currentMonth} Not Reinvested`}
+          value={fmt(totals.currentMonthNotReinvested)}
+          color="var(--warning-money)"
+          sub={currentMonthSub}
+          title="Payments this month with no matching [DRIP] purchase. These were taken as cash."
+        />
+        <SummaryCard
+          label={`${currentMonth} % Reinvested`}
+          value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'}
+          color="var(--pos-muted)"
+          sub={currentMonthSub}
+          title="Share of this month's recorded payments that were actually reinvested, from the DRIP purchases, not from the current DRIP checkboxes."
+        />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="var(--pos)" />
         <SummaryCard
           label={appliedIrrExclusions.length ? 'Filtered IRR' : 'Portfolio IRR'}
