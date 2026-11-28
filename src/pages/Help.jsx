@@ -3401,9 +3401,10 @@ function DistributionsHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Testing a Portfolio Builder model</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         By default every tab reads the portfolio selected in the navbar. Tick <strong>Test a Portfolio Builder model</strong> under
-        the page title and choose one of that portfolio&apos;s Portfolio Builder models to run all five tabs on the model instead.
-        A banner names the model while it is being tested; untick the box to go back. The box resets when the app restarts;
-        the model you chose is remembered.
+        the page title and choose a Portfolio Builder model to run all five tabs on the model instead. The list holds the models
+        saved in every account, grouped under the account each one is saved in, so any model can be tested whichever portfolio is
+        selected; the page names the account the chosen model is saved in. A banner names the model while it is being tested;
+        untick the box to go back. The box resets when the app restarts; the model you chose is remembered.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>The income is modeled, not received.</strong> A model has no payment records, so each fund&apos;s actual past
@@ -5989,6 +5990,9 @@ function PortfolioBuilderHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What's New</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Models from every account.</strong> The sidebar lists the models saved in every account, under
+          each account&apos;s name, so you can open any of them whichever account is selected. The Dividend Calculator
+          (<strong>From Builder</strong>) and Distributions (<strong>Test a Portfolio Builder model</strong>) list them the same way.</li>
         <li><strong>From my holdings…</strong> picks any of the selected account's holdings, at market value, to
           start a new model or add to the open one. It replaces <em>Copy my holdings</em>, which always took all of them.</li>
         <li><strong>Re-weight</strong> shifts the open model's weights toward a goal (best score, smallest drawdown,
@@ -6002,6 +6006,7 @@ function PortfolioBuilderHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Managing Portfolios</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Saved portfolios appear in the <strong>left sidebar</strong> with their holding count and total. Click one to open it; the Builder reopens the last one you used.</li>
+        <li>The sidebar lists the models saved in <strong>every account</strong>. The selected account&apos;s models come first; when other accounts have models too, each group sits under its account&apos;s name. A model always stays saved in the account that built it, but any account can open, grade, edit, compare, export, or delete it, and the title line says <em>saved in …</em> when it belongs to another account. New portfolios, <strong>From my holdings…</strong>, imports, and <strong>Save As</strong> copies are saved in the selected account.</li>
         <li><strong>+ New Portfolio</strong> starts an empty model and asks for its starting balance. <strong>From my holdings…</strong> starts one from your real positions (see below). <strong>Import file…</strong> adds one from an Export Excel or Export CSV file, yours or one someone shared with you (see Exporting and Importing).</li>
         <li>Click the portfolio title to <strong>rename</strong> it (Enter saves, Esc cancels).</li>
         <li>Use <strong>Save As</strong> to duplicate the current portfolio under a new name, and <strong>Clear</strong> to remove every holding.</li>
@@ -7901,8 +7906,9 @@ function DividendCalculatorHelp() {
       <p style={{ marginBottom: '1rem' }}>
         Project income and portfolio growth over time across one or more ETFs and stocks, with or without
         dividend reinvestment (DRIP). Unlike the Income Growth Simulator (which uses your actual portfolio),
-        the Dividend Calculator works from any tickers you enter — useful for evaluating new positions, comparing
-        funds side-by-side, or modeling what-if scenarios before you buy.
+        the Dividend Calculator works from any tickers you enter, from your holdings, or from a Portfolio Builder
+        model — useful for evaluating new positions, comparing funds side-by-side, or modeling what-if scenarios
+        before you buy.
       </p>
       <p style={{ marginBottom: '1rem' }}>
         After at least one ticker loads, the <strong>Current payout</strong> bubble at the top of the page shows
@@ -7979,7 +7985,7 @@ function DividendCalculatorHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Years to Invest</strong> — Length of the projection (1–50 years).</li>
-        <li><strong>Initial Investment Per Ticker</strong> — Starting dollar amount applied to each ticker. Updating this value re-derives the share count for any already-loaded tickers.</li>
+        <li><strong>Initial Investment Per Ticker</strong> — Starting dollar amount applied to each ticker you type in. Updating this value re-derives the share count for those tickers. Tickers loaded with <strong>From Portfolio</strong> or <strong>From Builder</strong> keep their own amounts; when every ticker came from one of them, this field shows the <strong>Portfolio Value</strong> or <strong>Model Value</strong> instead.</li>
         <li><strong>Contribution Schedule</strong> — Choose Annual or Monthly. The choices are mutually exclusive, so the calculator never applies both contribution schedules at once. Annual totals are divided across each ticker's payout periods, while monthly contributions are deposited at each month-end. Switching schedules converts the current total to its equivalent annual or monthly amount.</li>
         <li><strong>Contribution Total</strong> — Total new dollars added per selected period. This is also the dollar base used for every ticker's allocation percentage.</li>
         <li><strong>Contribution Window</strong> — Choose Full period to contribute throughout the projection, or Limited to stop new contributions after the first X years or months. For example, $300 monthly for 2 years in a 10-year projection contributes $7,200 during the first 24 months, then projects the remaining 8 years using DRIP and growth without additional cash deposits.</li>
@@ -8015,6 +8021,24 @@ function DividendCalculatorHelp() {
         selected contribution allocation is applied across them and final results are aggregated.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
+        <strong>From Portfolio</strong> lists the holdings of the account selected in the navbar. Tick the ones
+        you want (or <strong>Select All</strong>) and add them; each starts at its current value and share count.
+      </p>
+      <h4 style={{ marginBottom: '0.5rem' }}>From a Portfolio Builder model</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>From Builder</strong> loads a model portfolio you made in Portfolio Builder, so you can project its
+        income and growth over the years. The model list holds the models saved in <em>every</em> account, grouped
+        under the account each one is saved in, so you can use any of them whichever account is selected. Choose a
+        model and its holdings appear with each one&apos;s dollar amount and weight; every holding is ticked to
+        start, so untick any you want to leave out, then click <strong>Load</strong>.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Each ticker starts at the model&apos;s dollar amount, bought at today&apos;s price; its card shows that amount as <strong>Model Amount</strong>. Holdings the model has not given a dollar amount yet are left out.</li>
+        <li>Loading a model <strong>replaces</strong> the tickers already in the calculator. Tick <strong>Keep the tickers already here</strong> to add the model&apos;s tickers instead; a ticker that is already loaded keeps its current amount. Your settings and targets are not changed.</li>
+        <li>Yields come from each fund&apos;s own lookup, the same as a ticker you type in. Portfolio Builder estimates income with its own yield sources, so the <strong>Current payout</strong> here can differ a little from the model&apos;s est. income in the Builder. Pick another yield basis on any ticker&apos;s card to compare.</li>
+        <li>The calculator remembers the last model you chose. Nothing is saved back to the model: change the model itself in Portfolio Builder.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
         Each ticker becomes its own card with editable fields, listed under the settings in the left column.
         With one or two tickers the cards are open; with three or more they start collapsed to a one-line
         summary (value, yield, payout frequency, DRIP %) — click a ticker&apos;s name to open or close its card.
@@ -8024,7 +8048,7 @@ function DividendCalculatorHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Per-Ticker Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Initial Investment / Stock Price / Number of Shares</strong> — These three fields stay in sync. Editing any one of them recomputes the others. Override the share count or price if you want to model a position different from the live market.</li>
+        <li><strong>Initial Investment / Stock Price / Number of Shares</strong> — These three fields stay in sync. Editing any one of them recomputes the others. Override the share count or price if you want to model a position different from the live market. The first field reads <strong>Current Value</strong> for a ticker from your portfolio and <strong>Model Amount</strong> for one from a Portfolio Builder model.</li>
         <li><strong>Initial Dividend Yield</strong> — Annual yield based on the trailing distribution. Drives the first-year income.</li>
         <li><strong>Dividend Growth</strong> — Annual percentage increase applied to the dividend per share each year. Auto-filled from Yahoo's historical growth rate; override based on your own expectations.</li>
         <li><strong>Return of Capital</strong> — Percentage of distributions that aren't taxable income (common for covered-call ETFs and some MLPs). Reduces the dividend tax drag without affecting cash flow.</li>

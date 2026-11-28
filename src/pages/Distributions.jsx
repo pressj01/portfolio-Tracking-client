@@ -6,6 +6,7 @@ import ThemedPlot from '../components/ThemedPlot'
 import DistributionIncomeFloor from './DistributionIncomeFloor'
 import DistributionDripLedger from './DistributionDripLedger'
 import DistributionSortHeader from '../components/DistributionSortHeader'
+import BuilderModelSelect from '../components/BuilderModelSelect'
 import useTableSort from '../utils/useTableSort'
 import { formatMoney, formatMoneyDelta } from '../utils/money'
 import './Distributions.css'
@@ -72,7 +73,7 @@ function Empty({ children }) { return <div className="dist-empty">{children}</di
 const listNames = names => names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
 const shortDate = iso => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 
-// Which portfolio the tabs read: the selected portfolio, or one of its Portfolio Builder models.
+// Which portfolio the tabs read: the selected portfolio, or a Portfolio Builder model from any account.
 function SourcePicker({ portfolioName, models, useModel, setUseModel, activeModel, setModelId }) {
   const empty = models != null && !models.length
   return <div className="dist-controls dist-source" role="group" aria-label="Portfolio to analyze">
@@ -80,10 +81,9 @@ function SourcePicker({ portfolioName, models, useModel, setUseModel, activeMode
       <input type="checkbox" checked={Boolean(activeModel)} disabled={models == null || empty} onChange={e => setUseModel(e.target.checked)} />
       <span>Test a Portfolio Builder model{activeModel ? '' : <> instead of <strong>{portfolioName}</strong></>}</span>
     </label>
-    {useModel && models?.length > 0 && <label>Model <select aria-label="Portfolio Builder model" value={activeModel?.id || ''} onChange={e => setModelId(Number(e.target.value))}>
-      {models.map(m => <option key={m.id} value={m.id}>{m.name} · {m.holding_count} {m.holding_count === 1 ? 'holding' : 'holdings'} · {formatMoney(m.total_value, { digits: 0 })}</option>)}
-    </select></label>}
-    {empty && <span className="dist-source-hint">No Portfolio Builder models for {portfolioName} yet. <Link to="/portfolio-builder">Build one</Link> to test it here.</span>}
+    {useModel && models?.length > 0 && <label>Model <BuilderModelSelect aria-label="Portfolio Builder model" models={models} value={activeModel?.id} onChange={setModelId} /></label>}
+    {activeModel?.account_name && <span className="dist-source-hint">Saved in {activeModel.account_name}</span>}
+    {empty && <span className="dist-source-hint">No Portfolio Builder models yet. <Link to="/portfolio-builder">Build one</Link> to test it here.</span>}
   </div>
 }
 
@@ -411,7 +411,7 @@ export default function Distributions() {
   const [refresh, setRefresh] = useState(0)
   const [marketRefresh, setMarketRefresh] = useState(0)
   const [marketState, setMarketState] = useState(null)
-  // Source: the selected portfolio (default) or one of its Portfolio Builder models.
+  // Source: the selected portfolio (default) or a Portfolio Builder model saved in any account.
   const [useModel, setUseModelState] = useState(() => {
     try { return sessionStorage.getItem(USE_MODEL_KEY) === '1' } catch { return false }
   })
@@ -536,7 +536,7 @@ export default function Distributions() {
   const viewKey = `${profileQueryString}:${builderId ? `model:${builderId}` : 'own'}`
 
   return <div className="page dashboard distributions-page">
-    <header className="dist-page-header"><div><h1>Distributions</h1><p className="dist-note">Track payment history, compare payout yields and understand where portfolio income comes from. <strong>{sourceName}</strong>{activeModel ? ` (Portfolio Builder model of ${currentProfileName})` : ''}{data ? ` · through ${data.as_of}` : ''}</p></div>
+    <header className="dist-page-header"><div><h1>Distributions</h1><p className="dist-note">Track payment history, compare payout yields and understand where portfolio income comes from. <strong>{sourceName}</strong>{activeModel ? ` (Portfolio Builder model saved in ${activeModel.account_name || currentProfileName})` : ''}{data ? ` · through ${data.as_of}` : ''}</p></div>
       <button type="button" className="btn" onClick={() => setRefresh(v => v + 1)} disabled={loading}>Refresh data</button></header>
     <SourcePicker portfolioName={currentProfileName} models={models} useModel={useModel} setUseModel={setUseModel} activeModel={activeModel} setModelId={setModelId} />
     {model && <ModelBanner model={model} />}

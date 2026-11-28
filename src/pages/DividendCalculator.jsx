@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import Plot from '../components/ThemedPlot'
 import GoalProjectionChart from '../components/GoalProjectionChart'
+import BuilderModelSelect from '../components/BuilderModelSelect'
 import { useProfileFetch } from '../context/ProfileContext'
 import {
   convertMoneySeries,
@@ -651,10 +653,14 @@ const DEFAULT_ROW = {
   yieldBasis: '',
   yieldOptions: [],
   yieldNote: '',
-  source: 'manual', // 'manual' | 'portfolio'
+  source: 'manual', // 'manual' | 'portfolio' | 'model' (a Portfolio Builder model's amount)
+  modelName: '',
   status: 'empty', // empty | loading | loaded | error
   message: '',
 }
+
+// The Portfolio Builder model last loaded with "From Builder".
+const BUILDER_MODEL_KEY = 'dividendCalculator.builderModelId'
 
 const DEFAULT_SETTINGS = {
   years: 10,
@@ -868,6 +874,18 @@ export default function DividendCalculator() {
   const [calcMessage, setCalcMessage] = useState('')
   const [calculateWhenReady, setCalculateWhenReady] = useState(false)
   const [allocationAdjustmentSummary, setAllocationAdjustmentSummary] = useState(null)
+  // Portfolio Builder models from every account, whichever account is selected.
+  const [builderModels, setBuilderModels] = useState(null)
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelPickerId, setModelPickerIdState] = useState(() => {
+    try { return Number(localStorage.getItem(BUILDER_MODEL_KEY)) || null } catch { return null }
+  })
+  const [modelHoldings, setModelHoldings] = useState(null) // { id, rows, unfunded } | { id, error }
+  const [modelPicked, setModelPicked] = useState(() => new Set())
+  const [keepCurrentTickers, setKeepCurrentTickers] = useState(false)
+  // Bumped whenever the ticker list is replaced, so lookups still running for
+  // the old list cannot write into the new one.
+  const rowsGeneration = useRef(0)
 
   // The projection follows the inputs live: every loaded ticker and setting
   // feeds straight into the results, so the goal chart can move as you type.
@@ -917,6 +935,44 @@ export default function DividendCalculator() {
       .catch(() => {})
   }, [pf])
 
+  const loadBuilderModels = useCallback(() => {
+    pf('/api/builder/portfolios')
+      .then(r => r.json())
+      .then(d => setBuilderModels(Array.isArray(d?.portfolios) ? d.portfolios : []))
+      .catch(() => setBuilderModels([]))
+  }, [pf])
+
+  useEffect(() => { loadBuilderModels() }, [loadBuilderModels])
+
+  const activePickerModel = builderModels?.length
+    ? builderModels.find(m => m.id === modelPickerId) || builderModels[0]
+    : null
+  const pickerModelId = modelPickerOpen ? (activePickerModel?.id ?? null) : null
+  const currentModelHoldings = modelHoldings?.id === pickerModelId ? modelHoldings : null
+
+  // The chosen model's holdings, every funded one ticked to start.
+  useEffect(() => {
+    if (!pickerModelId) return undefined
+    let stale = false
+    pf(`/api/builder/portfolios/${pickerModelId}/holdings`)
+      .then(async r => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok || d.error) throw new Error(d.error || `Could not load the model (HTTP ${r.status})`)
+        return d
+      })
+      .then(d => {
+        if (stale) return
+        const all = (d.holdings || []).filter(h => h && h.ticker)
+        const funded = all
+          .filter(h => Number(h.dollar_amount) > 0)
+          .map(h => ({ ...h, ticker: String(h.ticker).toUpperCase(), dollar_amount: Number(h.dollar_amount) }))
+        setModelHoldings({ id: pickerModelId, rows: funded, unfunded: all.length - funded.length })
+        setModelPicked(new Set(funded.map(h => h.ticker)))
+      })
+      .catch(e => { if (!stale) setModelHoldings({ id: pickerModelId, error: e.message }) })
+    return () => { stale = true }
+  }, [pf, pickerModelId])
+
   useEffect(() => {
     setRows(prev => {
       let changed = false
@@ -934,6 +990,7 @@ export default function DividendCalculator() {
     const sym = (symbol || '').trim().toUpperCase()
     if (!sym) return
     if (rows.some(r => r.ticker === sym && r.status === 'loaded')) return
+    const generation = rowsGeneration.current
     // mark a placeholder as loading
     const placeholderIdx = rows.length === 1 && rows[0].status === 'empty' ? 0 : -1
     if (placeholderIdx === -1) {
@@ -945,6 +1002,7 @@ export default function DividendCalculator() {
     try {
       const r = await pf(`/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
       const d = await r.json()
+      if (generation !== rowsGeneration.current) return
       if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
       const initialInvestment = Number(defaultInitialInvestment) || DEFAULT_SETTINGS.defaultInitialInvestment
       const price = d.price || 0
@@ -980,26 +1038,36 @@ export default function DividendCalculator() {
         return applyContributionAllocation(nextRows, annualContribution, contributionMode)
       })
     } catch (e) {
+      if (generation !== rowsGeneration.current) return
       setRows(prev => prev.map(row => row.ticker === sym ? { ...row, status: 'error', message: e.message } : row))
     }
   }
 
   // Add multiple tickers atomically, then look each up.
   // holdingsMap: optional { ticker: holding } from portfolio picker
-  const loadTickers = (symbols, holdingsMap) => {
+  // model: optional { name, amounts: { ticker: dollars } } from a Portfolio Builder model
+  // replace: swap out every current ticker instead of adding to them
+  const loadTickers = (symbols, holdingsMap, { model = null, replace = false } = {}) => {
     const sanitized = Array.from(new Set(
       (symbols || []).map(s => (s || '').trim().toUpperCase()).filter(Boolean)
     ))
     if (!sanitized.length) return
 
+    if (replace) {
+      rowsGeneration.current += 1
+      setAllocationAdjustmentSummary(null)
+      setTickerCardOpen({})
+    }
+    const generation = rowsGeneration.current
     const fallbackInvestment = Number(defaultInitialInvestment) || DEFAULT_SETTINGS.defaultInitialInvestment
     const priceGrowth = Number(defaultPriceGrowthPct) || 0
     const loadedSet = new Set(
-      rows.filter(r => r.status === 'loaded' || r.status === 'loading').map(r => r.ticker)
+      replace ? [] : rows.filter(r => r.status === 'loaded' || r.status === 'loading').map(r => r.ticker)
     )
     const toFetch = sanitized.filter(s => !loadedSet.has(s))
     if (!toFetch.length) return
     setRows(prev => {
+      if (replace) return toFetch.map(sym => newRow({ ticker: sym, status: 'loading' }))
       const existing = new Set(prev.map(r => r.ticker))
       const placeholders = toFetch
         .filter(sym => !existing.has(sym))
@@ -1014,15 +1082,22 @@ export default function DividendCalculator() {
         try {
           const r = await pf(`/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
           const d = await r.json()
+          if (generation !== rowsGeneration.current) return
           if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
           const lookupPrice = Number(d.price) || 0
           const h = holdingsMap?.[sym]
           const isPortfolio = h?.quantity > 0
+          // A model ticker starts at the model's dollar amount, bought at today's price.
+          const modelAmount = isPortfolio ? 0 : (Number(model?.amounts?.[sym]) || 0)
+          const isModel = modelAmount > 0
           const holdingPrice = Number(h?.current_price) || 0
           const price = isPortfolio ? (holdingPrice || lookupPrice) : lookupPrice
-          const shares = isPortfolio ? Number(h.quantity) : (price > 0 ? fallbackInvestment / price : 0)
+          const startingAmount = isModel ? modelAmount : fallbackInvestment
+          const shares = isPortfolio ? Number(h.quantity) : (price > 0 ? startingAmount / price : 0)
           const holdingValue = Number(h?.current_value) || 0
-          const initialInvestment = isPortfolio && holdingValue > 0 ? holdingValue : shares * price
+          const initialInvestment = isPortfolio && holdingValue > 0
+            ? holdingValue
+            : (isModel ? modelAmount : shares * price)
           const sharePrice = isPortfolio && shares > 0 && holdingValue > 0 ? holdingValue / shares : price
           const portfolioYieldPct = portfolioYieldPctFromHolding(h, initialInvestment)
           const yieldSelection = yieldSelectionFromLookup(d, portfolioYieldPct)
@@ -1049,7 +1124,8 @@ export default function DividendCalculator() {
                   yieldOptions: yieldSelection.yieldOptions,
                   yieldNote: yieldSelection.yieldNote,
                   initialInvestment,
-                  source: isPortfolio ? 'portfolio' : 'manual',
+                  source: isPortfolio ? 'portfolio' : (isModel ? 'model' : 'manual'),
+                  modelName: isModel ? model.name : '',
                   status: 'loaded',
                   message: '',
                 }
@@ -1059,6 +1135,7 @@ export default function DividendCalculator() {
             return applyContributionAllocation(nextRows, annualContribution, contributionMode)
           })
         } catch (e) {
+          if (generation !== rowsGeneration.current) return
           setRows(prev => prev.map(row =>
             row.ticker === sym ? { ...row, status: 'error', message: e.message } : row
           ))
@@ -1083,6 +1160,7 @@ export default function DividendCalculator() {
   }, [currentHoldings, pickerSearch])
 
   const togglePicker = () => {
+    setModelPickerOpen(false)
     setPickerOpen(open => {
       if (!open) {
         setPicked(new Set(rows.filter(r => r.status === 'loaded').map(r => r.ticker)))
@@ -1112,6 +1190,45 @@ export default function DividendCalculator() {
     loadTickers(symbols, holdingsMap)
   }
 
+  // ── From Builder: a Portfolio Builder model's holdings and dollar amounts ──
+  const setModelPickerId = (id) => {
+    setModelPickerIdState(id)
+    try { localStorage.setItem(BUILDER_MODEL_KEY, String(id)) } catch { /* private mode */ }
+  }
+
+  const toggleModelPicker = () => {
+    if (!modelPickerOpen) {
+      // Pick up models saved since the page opened.
+      loadBuilderModels()
+      setPickerOpen(false)
+      setKeepCurrentTickers(false)
+    }
+    setModelPickerOpen(!modelPickerOpen)
+  }
+
+  const modelPickerRows = currentModelHoldings?.rows || []
+  const modelPickerTotal = modelPickerRows.reduce((s, h) => s + h.dollar_amount, 0)
+  const modelPickedTotal = modelPickerRows
+    .filter(h => modelPicked.has(h.ticker))
+    .reduce((s, h) => s + h.dollar_amount, 0)
+
+  const toggleModelPicked = (t) => {
+    setModelPicked(prev => {
+      const next = new Set(prev)
+      if (next.has(t)) next.delete(t); else next.add(t)
+      return next
+    })
+  }
+
+  const applyModel = () => {
+    const model = activePickerModel
+    const symbols = modelPickerRows.map(h => h.ticker).filter(t => modelPicked.has(t))
+    if (!model || !symbols.length) return
+    setModelPickerOpen(false)
+    const amounts = Object.fromEntries(modelPickerRows.map(h => [h.ticker, h.dollar_amount]))
+    loadTickers(symbols, null, { model: { name: model.name, amounts }, replace: !keepCurrentTickers })
+  }
+
   const removeRow = (idx) => {
     setAllocationAdjustmentSummary(null)
     setRows(prev => {
@@ -1122,6 +1239,7 @@ export default function DividendCalculator() {
   }
 
   const resetAll = () => {
+    rowsGeneration.current += 1
     setRows([newRow()])
     setTickerInput('')
     setYears(DEFAULT_SETTINGS.years)
@@ -1181,7 +1299,8 @@ export default function DividendCalculator() {
     setDefaultInitialInvestment(value)
     setRows(prev => {
       const nextRows = prev.map(r => {
-        if (r.status !== 'loaded' || r.source === 'portfolio') return r
+        // Portfolio and model tickers keep their own starting amounts.
+        if (r.status !== 'loaded' || r.source === 'portfolio' || r.source === 'model') return r
         const initialInvestment = Number(value) || 0
         return {
           ...r,
@@ -1334,10 +1453,21 @@ export default function DividendCalculator() {
   const loadedRows = rows.filter(r => r.status === 'loaded')
   const isLoadingTicker = rows.some(r => r.status === 'loading')
   const portfolioRows = loadedRows.filter(r => r.source === 'portfolio')
+  const modelRows = loadedRows.filter(r => r.source === 'model')
   const manualRows = loadedRows.filter(r => r.source === 'manual')
-  const allPortfolio = loadedRows.length > 0 && manualRows.length === 0
-  const mixedSources = portfolioRows.length > 0 && manualRows.length > 0
-  const portfolioTotal = portfolioRows.reduce((s, r) => s + (Number(r.initialInvestment) || 0), 0)
+  // Portfolio and model tickers start at their own amounts; manual ones at the per-ticker default.
+  const fixedRows = [...portfolioRows, ...modelRows]
+  const allFixed = loadedRows.length > 0 && manualRows.length === 0
+  const mixedSources = fixedRows.length > 0 && manualRows.length > 0
+  const fixedTotal = fixedRows.reduce((s, r) => s + (Number(r.initialInvestment) || 0), 0)
+  const modelNames = [...new Set(modelRows.map(r => r.modelName).filter(Boolean))]
+  const modelLabel = modelNames.length === 1 ? modelNames[0] : 'Portfolio Builder'
+  const fixedValueLabel = modelRows.length && !portfolioRows.length
+    ? 'Model Value'
+    : (modelRows.length ? 'Starting Value' : 'Portfolio Value')
+  const fixedSourcesNote = modelRows.length && portfolioRows.length
+    ? 'Portfolio and model tickers keep their own amounts'
+    : (modelRows.length ? `${modelLabel} model tickers use the model's amounts` : 'Portfolio tickers use current values')
   const allocatedContribution = contributionAllocatedTotal(loadedRows)
   const contributionDivisor = contributionFrequency === 'monthly' ? 12 : 1
   const displayedContributionTotal = (Number(annualContribution) || 0) / contributionDivisor
@@ -1448,11 +1578,19 @@ export default function DividendCalculator() {
     return (
       <span>
         Combined projection across <strong>{loadedRows.length}</strong> tickers
-        {allPortfolio
-          ? <> using current portfolio values (<strong>{fmtMoneyShort(portfolioTotal)}</strong> total)</>
-          : mixedSources
-            ? <> ({portfolioRows.length} from portfolio, {manualRows.length} manual)</>
-            : null
+        {allFixed && modelRows.length && !portfolioRows.length
+          ? (modelNames.length === 1
+              ? <> from the Portfolio Builder model <strong>{modelLabel}</strong> at its dollar amounts (<strong>{fmtMoneyShort(fixedTotal)}</strong> total)</>
+              : <> from Portfolio Builder models at their dollar amounts (<strong>{fmtMoneyShort(fixedTotal)}</strong> total)</>)
+          : allFixed
+            ? <> using current {modelRows.length ? 'portfolio values and model amounts' : 'portfolio values'} (<strong>{fmtMoneyShort(fixedTotal)}</strong> total)</>
+            : mixedSources
+              ? <> ({[
+                  portfolioRows.length ? `${portfolioRows.length} from portfolio` : '',
+                  modelRows.length ? `${modelRows.length} from the ${modelLabel} model` : '',
+                  `${manualRows.length} manual`,
+                ].filter(Boolean).join(', ')})</>
+              : null
         }.
         Each ticker uses its own price, yield, growth, and payout frequency.
         <span className="dc-hero-tickers">
@@ -1494,7 +1632,10 @@ export default function DividendCalculator() {
         <div className={`dc-chip-input${activeRows.length > 14 ? ' dc-chip-input-dense' : ''}`}>
           {activeRows.length > 0 && (
             <div className="dc-chip-input-head">
-              <span>{loadedRows.length} ticker{loadedRows.length === 1 ? '' : 's'} selected</span>
+              <span>
+                {loadedRows.length} ticker{loadedRows.length === 1 ? '' : 's'} selected
+                {modelNames.length === 1 && modelRows.length === loadedRows.length ? ` · ${modelNames[0]} (Portfolio Builder model)` : ''}
+              </span>
               {activeRows.length > loadedRows.length && <span>{activeRows.length - loadedRows.length} pending</span>}
             </div>
           )}
@@ -1523,7 +1664,16 @@ export default function DividendCalculator() {
         >
           From Portfolio{pickerOpen ? ' ▲' : ' ▼'}
         </button>
-        <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={isLoadingTicker}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={toggleModelPicker}
+          aria-expanded={modelPickerOpen}
+          title="Load a Portfolio Builder model's holdings at its dollar amounts. Models from every account are listed."
+        >
+          From Builder{modelPickerOpen ? ' ▲' : ' ▼'}
+        </button>
+        <button type="button" className="btn btn-primary dc-calc-btn" onClick={handleCalculate} disabled={isLoadingTicker}>
           {calculateWhenReady || isLoadingTicker ? 'Loading...' : 'Calculate'}
         </button>
         <button type="button" className="btn dc-reset" onClick={resetAll}>Reset</button>
@@ -1605,6 +1755,105 @@ export default function DividendCalculator() {
               onClick={applyPicked}
             >
               Add {picked.size || ''} Ticker{picked.size === 1 ? '' : 's'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {modelPickerOpen && (
+        <div className="dc-model-picker" role="region" aria-label="Load a Portfolio Builder model">
+          <div className="dc-model-picker-head">
+            {builderModels?.length > 0 && (
+              <label className="dc-model-picker-select">
+                <span>Portfolio Builder model</span>
+                <BuilderModelSelect
+                  models={builderModels}
+                  value={activePickerModel?.id}
+                  onChange={setModelPickerId}
+                  aria-label="Portfolio Builder model"
+                />
+              </label>
+            )}
+            <div className="dc-model-picker-spacer" />
+            {modelPickerRows.length > 0 && (
+              <>
+                <button type="button" className="btn btn-sm" onClick={() => setModelPicked(new Set(modelPickerRows.map(h => h.ticker)))}>Select All</button>
+                <button type="button" className="btn btn-sm" onClick={() => setModelPicked(new Set())}>Deselect All</button>
+              </>
+            )}
+          </div>
+          {builderModels == null && <p className="dc-model-picker-note">Loading Portfolio Builder models…</p>}
+          {builderModels?.length === 0 && (
+            <p className="dc-model-picker-note">
+              No Portfolio Builder models yet. <Link to="/portfolio-builder">Build one</Link> to project its income here.
+            </p>
+          )}
+          {activePickerModel && (
+            <>
+              <p className="dc-model-picker-note">
+                Saved in <strong>{activePickerModel.account_name || 'another account'}</strong>
+                {activePickerModel.current_account === false ? ' (models from every account can be used here)' : ''}.
+                {' '}Each ticker starts at the model&apos;s dollar amount, bought at today&apos;s price.
+                {currentModelHoldings?.unfunded > 0 && ` ${currentModelHoldings.unfunded} holding${currentModelHoldings.unfunded === 1 ? ' has' : 's have'} no dollar amount and ${currentModelHoldings.unfunded === 1 ? 'is' : 'are'} left out.`}
+              </p>
+              {currentModelHoldings?.error && <div className="alert alert-error">{currentModelHoldings.error}</div>}
+              {!currentModelHoldings && <p className="dc-model-picker-note">Loading {activePickerModel.name}…</p>}
+              {currentModelHoldings && !currentModelHoldings.error && (
+                <div className="dc-model-picker-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th aria-label="Include" />
+                        <th>Ticker</th>
+                        <th>Description</th>
+                        <th className="dc-num">Model Amount</th>
+                        <th className="dc-num">Weight</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {modelPickerRows.length === 0 && (
+                        <tr><td colSpan={5} className="dc-model-picker-empty">This model has no holdings with a dollar amount yet.</td></tr>
+                      )}
+                      {modelPickerRows.map(h => (
+                        <tr key={h.ticker} onClick={() => toggleModelPicked(h.ticker)}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={modelPicked.has(h.ticker)}
+                              onChange={() => toggleModelPicked(h.ticker)}
+                              onClick={e => e.stopPropagation()}
+                              aria-label={`Include ${h.ticker}`}
+                            />
+                          </td>
+                          <td className="dc-model-picker-ticker">{h.ticker}</td>
+                          <td>{h.name || ''}</td>
+                          <td className="dc-num">{fmtMoney(h.dollar_amount)}</td>
+                          <td className="dc-num">{modelPickerTotal > 0 ? fmtPct((h.dollar_amount / modelPickerTotal) * 100, 1) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+          <div className="dc-model-picker-foot">
+            <span>{modelPicked.size} selected{modelPicked.size ? ` · ${fmtMoney(modelPickedTotal)}` : ''}</span>
+            {loadedRows.length > 0 && (
+              <label className="dc-model-picker-keep" title="Off: the model's tickers replace the ones in the calculator. On: they are added, and tickers already here keep their amounts.">
+                <input type="checkbox" checked={keepCurrentTickers} onChange={e => setKeepCurrentTickers(e.target.checked)} />
+                Keep the {loadedRows.length} ticker{loadedRows.length === 1 ? '' : 's'} already here
+              </label>
+            )}
+            <div className="dc-model-picker-spacer" />
+            <button type="button" className="btn" onClick={() => setModelPickerOpen(false)}>Cancel</button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!activePickerModel || modelPicked.size === 0 || !currentModelHoldings || Boolean(currentModelHoldings.error)}
+              onClick={applyModel}
+            >
+              Load {modelPicked.size || ''} Ticker{modelPicked.size === 1 ? '' : 's'}
             </button>
           </div>
         </div>
@@ -1736,11 +1985,11 @@ export default function DividendCalculator() {
                 <NumberInput value={years} onChange={setYears} min="1" max="50" step="1" />
               </div>
               <div className="dc-field">
-                {allPortfolio ? (
+                {allFixed ? (
                   <>
-                    <label>Portfolio Value</label>
+                    <label>{fixedValueLabel}</label>
                     <div className="dc-portfolio-summary">
-                      {fmtMoneyShort(portfolioTotal)} across {portfolioRows.length} ticker{portfolioRows.length === 1 ? '' : 's'}
+                      {fmtMoneyShort(fixedTotal)} across {fixedRows.length} ticker{fixedRows.length === 1 ? '' : 's'}
                     </div>
                   </>
                 ) : (
@@ -1749,7 +1998,7 @@ export default function DividendCalculator() {
                     <NumberInput value={fmtInputNumber(defaultInitialInvestment, 2)} onChange={updateDefaultInitialInvestment} prefix="$" step="100" />
                     {mixedSources && (
                       <div className="dc-field-note">
-                        Portfolio tickers use current values ({fmtMoneyShort(portfolioTotal)} across {portfolioRows.length})
+                        {fixedSourcesNote} ({fmtMoneyShort(fixedTotal)} across {fixedRows.length})
                       </div>
                     )}
                   </>
@@ -1985,7 +2234,7 @@ export default function DividendCalculator() {
                 )}
                 <div className="dc-grid" hidden={!cardOpen}>
                   <div className="dc-field">
-                    <label>{r.source === 'portfolio' ? 'Current Value' : 'Initial Investment'}</label>
+                    <label>{r.source === 'portfolio' ? 'Current Value' : (r.source === 'model' ? 'Model Amount' : 'Initial Investment')}</label>
                     <NumberInput
                       value={fmtInputNumber(r.initialInvestment, 2)}
                       onChange={(v) => updateRow(idx, { initialInvestment: v })}
@@ -2204,7 +2453,9 @@ export default function DividendCalculator() {
 
               <div className="dc-stat-row">
                 <div className="dc-stat">
-                  <div className="dc-stat-label">{allPortfolio ? 'Current Portfolio Value' : 'Starting Wealth'}</div>
+                  <div className="dc-stat-label">
+                    {allFixed ? (fixedValueLabel === 'Portfolio Value' ? 'Current Portfolio Value' : fixedValueLabel) : 'Starting Wealth'}
+                  </div>
                   <div className="dc-stat-value">{fmtMoneyShort(totals.initial.portfolioValue)}</div>
                 </div>
                 <div className="dc-stat">

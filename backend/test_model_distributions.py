@@ -204,9 +204,14 @@ def test_model_endpoints_serve_holdings_history_and_drip_ledger(client):
     assert ledger["tickers"][0]["evaluation"]["label"]
 
 
-def test_model_endpoints_refuse_another_profiles_model_and_bad_ids(client):
-    assert client.get("/api/portfolio-distributions?builder_id=8&profile_id=1").status_code == 404
-    assert client.get("/api/portfolio-distributions/model-holdings?builder_id=8&profile_id=1").status_code == 404
+def test_model_endpoints_read_any_accounts_model_and_refuse_bad_ids(client):
+    # A model saved in another account can be tested from the selected one.
+    other = client.get("/api/portfolio-distributions/model-holdings?builder_id=8&profile_id=1")
+    assert other.status_code == 200
+    assert other.get_json()["model"]["name"] == "Not yours"
+    assert client.get("/api/portfolio-distributions?builder_id=8&profile_id=1").get_json()["model"]
+    assert client.get("/api/portfolio-distributions?builder_id=999&profile_id=1").status_code == 404
+    assert client.get("/api/portfolio-distributions/model-holdings?builder_id=999&profile_id=1").status_code == 404
     assert client.get("/api/portfolio-distributions/drip-ledger/tickers?builder_id=x&profile_id=1").status_code == 400
     assert client.get("/api/portfolio-distributions/model-holdings?profile_id=1").status_code == 400
     # Without builder_id the page reads the portfolio's own records, as before.
