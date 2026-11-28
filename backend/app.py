@@ -54502,10 +54502,15 @@ def _builder_clean_holdings(raw_holdings):
 
 
 def _builder_portfolio_row(conn, port_id):
-    """The Builder portfolio when it belongs to the requesting profile, else None."""
+    """The Builder portfolio with this id, whichever account it is saved in, else None.
+
+    A model is a what-if mix, not account data, so every account can open,
+    test and edit it. ``profile_id`` only records where it was built (and
+    where a new one is saved); the list endpoint labels it with that account.
+    """
     return conn.execute(
-        "SELECT id, name FROM builder_portfolios WHERE id = ? AND profile_id = ?",
-        (port_id, get_profile_id()),
+        "SELECT id, name, profile_id FROM builder_portfolios WHERE id = ?",
+        (port_id,),
     ).fetchone()
 
 
@@ -54602,18 +54607,33 @@ def builder_live_holdings():
 
 @app.route("/api/builder/portfolios", methods=["GET"])
 def builder_list_portfolios():
+    """Every account's model portfolios, the selected account's first.
+
+    ``account_name`` is the account a model is saved in and ``current_account``
+    marks the selected account's own (where a new model is saved). Other
+    accounts follow, grouped by account name, newest first within each.
+    """
     pid = get_profile_id()
     conn = get_connection()
-    rows = conn.execute("""
-        SELECT p.id, p.name, p.notes, p.target_yield_pct, p.target_monthly_income,
-               p.max_weight_pct, p.starting_balance, p.created_at, p.updated_at,
-               (SELECT COUNT(*) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS holding_count,
-               (SELECT COALESCE(SUM(h.dollar_amount), 0) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS total_value
-        FROM builder_portfolios p WHERE p.profile_id = ?
-        ORDER BY p.updated_at DESC, p.id DESC
-    """, (pid,)).fetchall()
-    conn.close()
-    return jsonify({"portfolios": rows_to_dicts(rows)})
+    try:
+        rows = conn.execute("""
+            SELECT p.id, p.name, p.notes, p.target_yield_pct, p.target_monthly_income,
+                   p.max_weight_pct, p.starting_balance, p.created_at, p.updated_at,
+                   p.profile_id, COALESCE(pr.name, 'Account ' || p.profile_id) AS account_name,
+                   (SELECT COUNT(*) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS holding_count,
+                   (SELECT COALESCE(SUM(h.dollar_amount), 0) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS total_value
+            FROM builder_portfolios p
+            LEFT JOIN profiles pr ON pr.id = p.profile_id
+            ORDER BY CASE WHEN p.profile_id = ? THEN 0 ELSE 1 END,
+                     LOWER(COALESCE(pr.name, '')), p.profile_id,
+                     p.updated_at DESC, p.id DESC
+        """, (pid,)).fetchall()
+    finally:
+        conn.close()
+    portfolios = rows_to_dicts(rows)
+    for p in portfolios:
+        p["current_account"] = p["profile_id"] == pid
+    return jsonify({"portfolios": portfolios})
 
 
 @app.route("/api/builder/portfolios", methods=["POST"])
@@ -54673,7 +54693,6 @@ def builder_create_portfolio():
 
 @app.route("/api/builder/portfolios/<int:port_id>", methods=["PATCH"])
 def builder_update_portfolio(port_id):
-    pid = get_profile_id()
     data = request.get_json(silent=True) or {}
     fields, vals = [], []
     if "name" in data:
@@ -54694,11 +54713,13 @@ def builder_update_portfolio(port_id):
     if not fields:
         return jsonify({"error": "Nothing to update"}), 400
     fields.append("updated_at = CURRENT_TIMESTAMP")
-    vals.extend([port_id, pid])
+    vals.append(port_id)
     conn = get_connection()
     try:
+        # Any account may edit a model; a rename stays unique within the
+        # account it is saved in (UNIQUE (profile_id, name)).
         cur = conn.execute(
-            f"UPDATE builder_portfolios SET {', '.join(fields)} WHERE id = ? AND profile_id = ?", vals)
+            f"UPDATE builder_portfolios SET {', '.join(fields)} WHERE id = ?", vals)
         conn.commit()
     except sqlite3.IntegrityError:
         return jsonify({"error": f'A portfolio named "{data.get("name", "").strip()}" already exists.'}), 409
@@ -55412,9 +55433,13 @@ def builder_list_holdings(port_id):
             "SELECT id, ticker, dollar_amount, added_at FROM builder_holdings "
             "WHERE portfolio_id = ? ORDER BY added_at, id",
             (port_id,)).fetchall()
+        holdings = rows_to_dicts(rows)
+        # Fund names let other screens (Dividend Calculator) list a model's
+        # holdings before looking each one up.
+        _builder_fill_holding_names(holdings, conn=conn)
     finally:
         conn.close()
-    return jsonify({"holdings": rows_to_dicts(rows)})
+    return jsonify({"holdings": holdings})
 
 
 @app.route("/api/builder/portfolios/<int:port_id>/holdings", methods=["POST"])
@@ -62150,8 +62175,8 @@ def _distribution_model_categories(conn, tickers):
 def _load_distribution_model(builder_id):
     """A Builder model's positions, market histories and pay timing.
 
-    Raises LookupError when the model does not belong to the requesting
-    profile. Pay timing comes from every account's recorded payment dates
+    Raises LookupError when no model has this id; a model saved in any
+    account can be tested. Pay timing comes from every account's recorded payment dates
     for these tickers: when a fund pays after its ex-date is a property of
     the fund, not of whose account received it.
     """
@@ -62162,7 +62187,7 @@ def _load_distribution_model(builder_id):
     try:
         row = _builder_portfolio_row(conn, builder_id)
         if row is None:
-            raise LookupError("That Portfolio Builder portfolio was not found for the selected portfolio.")
+            raise LookupError("That Portfolio Builder model was not found. It may have been deleted.")
         model_id, model_name = int(row["id"]), row["name"]
         holdings = _builder_load_holdings(conn, builder_id)
         tickers = [h["ticker"] for h in holdings]

@@ -59,6 +59,8 @@ class PortfolioBuilderTest(unittest.TestCase):
             CREATE TABLE security_names (
                 ticker TEXT PRIMARY KEY, name TEXT, source TEXT, updated_at TEXT
             );
+            CREATE TABLE profiles (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+            INSERT INTO profiles (id, name) VALUES (1, 'Owner');
             """
         )
         for ticker, value in self.HELD.items():
@@ -307,18 +309,65 @@ class PortfolioBuilderTest(unittest.TestCase):
 
     # ── Writes and ownership ─────────────────────────────────────────────────
 
-    def test_another_profiles_portfolio_is_not_reachable(self):
+    def _add_account(self, profile_id, name):
+        conn = self._get_connection()
+        conn.execute("INSERT OR REPLACE INTO profiles (id, name) VALUES (?, ?)", (profile_id, name))
+        conn.commit()
+        conn.close()
+
+    def _saved_in(self, pid):
+        conn = self._get_connection()
+        row = conn.execute("SELECT profile_id FROM builder_portfolios WHERE id = ?", (pid,)).fetchone()
+        conn.close()
+        return row["profile_id"] if row else None
+
+    def test_every_accounts_models_are_listed_selected_account_first(self):
+        self._add_account(2, "Brokerage")
+        self._add_account(3, "Another IRA")
+        theirs = self._portfolio(self.HELD, name="Theirs", profile_id=2)
+        ira = self._portfolio(self.HELD, name="IRA model", profile_id=3)
+        mine = self._portfolio(self.HELD, name="Mine")
+        listed = self.client.get("/api/builder/portfolios?profile_id=1").get_json()["portfolios"]
+        self.assertEqual([p["id"] for p in listed], [mine, ira, theirs])
+        by_id = {p["id"]: p for p in listed}
+        self.assertTrue(by_id[mine]["current_account"])
+        self.assertFalse(by_id[theirs]["current_account"])
+        self.assertEqual(by_id[theirs]["account_name"], "Brokerage")
+        self.assertEqual(by_id[theirs]["profile_id"], 2)
+        self.assertEqual(by_id[theirs]["holding_count"], 3)
+        # From the other account, its own model leads.
+        listed = self.client.get("/api/builder/portfolios?profile_id=2").get_json()["portfolios"]
+        self.assertEqual(listed[0]["id"], theirs)
+        self.assertTrue(listed[0]["current_account"])
+
+    def test_another_accounts_model_opens_and_edits_from_any_account(self):
         pid = self._portfolio(self.HELD, profile_id=2)
-        self.assertEqual(self._analyze(pid, profile_id=1)[0].status_code, 404)
+        response, payload = self._analyze(pid, profile_id=1)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["holdings"]), 3)
+        holdings = self.client.get(f"/api/builder/portfolios/{pid}/holdings?profile_id=1")
+        self.assertEqual(holdings.status_code, 200)
+        self.assertEqual({h["ticker"] for h in holdings.get_json()["holdings"]}, set(self.HELD))
+        self.assertTrue(all("name" in h for h in holdings.get_json()["holdings"]))
+        renamed = self.client.patch(f"/api/builder/portfolios/{pid}?profile_id=1", json={"name": "Shared"})
+        self.assertEqual(renamed.status_code, 200)
+        # Edits never move the model: it stays saved in the account that built it.
+        self.assertEqual(self._saved_in(pid), 2)
+        self.assertEqual(
+            self.client.delete(f"/api/builder/portfolios/{pid}?profile_id=1").status_code, 200)
+        self.assertIsNone(self._saved_in(pid))
         self.assertEqual(
             self.client.get(f"/api/builder/portfolios/{pid}/holdings?profile_id=1").status_code, 404)
-        self.assertEqual(
-            self.client.delete(f"/api/builder/portfolios/{pid}?profile_id=1").status_code, 404)
-        conn = self._get_connection()
-        remaining = conn.execute(
-            "SELECT COUNT(*) FROM builder_holdings WHERE portfolio_id = ?", (pid,)).fetchone()[0]
-        conn.close()
-        self.assertEqual(remaining, 3)
+
+    def test_rename_stays_unique_within_the_models_own_account(self):
+        pid = self._portfolio(self.HELD, name="Theirs", profile_id=2)
+        self._portfolio(self.HELD, name="Taken", profile_id=2)
+        self._portfolio(self.HELD, name="Mine")
+        clash = self.client.patch(f"/api/builder/portfolios/{pid}?profile_id=1", json={"name": "Taken"})
+        self.assertEqual(clash.status_code, 409)
+        # The selected account's names do not collide with another account's model.
+        ok = self.client.patch(f"/api/builder/portfolios/{pid}?profile_id=1", json={"name": "Mine"})
+        self.assertEqual(ok.status_code, 200)
 
     def test_holding_amounts_must_be_positive(self):
         pid = self._portfolio({})
@@ -451,9 +500,12 @@ class PortfolioBuilderTest(unittest.TestCase):
             self.assertEqual(self._set_target(pid, bad).status_code, 400, bad)
         self.assertEqual(self._listed(pid)["target_yield_pct"], 6.0)
 
-    def test_target_yield_of_another_profile_is_not_writable(self):
+    def test_target_yield_of_another_accounts_model_is_writable(self):
         pid = self._portfolio(self.HELD, profile_id=2)
-        self.assertEqual(self._set_target(pid, 6, profile_id=1).status_code, 404)
+        self.assertEqual(self._set_target(pid, 6, profile_id=1).status_code, 200)
+        self.assertEqual(self._listed(pid)["target_yield_pct"], 6.0)
+        self.assertEqual(self._saved_in(pid), 2)
+        self.assertEqual(self._set_target(10**9, 6).status_code, 404)
 
     def test_save_as_carries_the_target_yield(self):
         response = self.client.post("/api/builder/portfolios?profile_id=1", json={
@@ -554,8 +606,11 @@ class PortfolioBuilderTest(unittest.TestCase):
         self.assertEqual(self._rename(pid, "AAA", "").status_code, 400)
         self.assertEqual(self._rename(pid, "ZZZ", "YYY").status_code, 404)
         self.assertEqual(self._rename(pid, "AAA", "AAA").status_code, 200)
+        self.assertEqual(self._rename(10**9, "AAA", "BBB").status_code, 404)
+        # Another account's model is editable from here too, and only that model changes.
         other = self._portfolio({"AAA": 100.0}, name="Theirs", profile_id=2)
-        self.assertEqual(self._rename(other, "AAA", "BBB", profile_id=1).status_code, 404)
+        self.assertEqual(self._rename(other, "AAA", "BBB", profile_id=1).status_code, 200)
+        self.assertEqual(self._held(other), [("BBB", 100.0)])
         self.assertEqual(self._held(pid), [("AAA", 100.0)])
 
     # ── Starting balance ─────────────────────────────────────────────────────
@@ -713,8 +768,9 @@ class PortfolioBuilderTest(unittest.TestCase):
         pid = self._portfolio(self.HELD)
         self.assertEqual(self._export(pid, "pdf")[0].status_code, 400)
         self.assertEqual(self._export(self._portfolio({}, name="Empty"), "csv")[0].status_code, 400)
+        self.assertEqual(self._export(10**9, "csv")[0].status_code, 404)
         other = self._portfolio(self.HELD, name="Theirs", profile_id=2)
-        self.assertEqual(self._export(other, "csv", profile_id=1)[0].status_code, 404)
+        self.assertEqual(self._export(other, "csv", profile_id=1)[0].status_code, 200)
 
     # ── Import ───────────────────────────────────────────────────────────────
 

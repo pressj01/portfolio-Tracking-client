@@ -16,6 +16,7 @@ import { GRADING_PREFERENCES_EVENT, gradingSettingsPayload } from '../utils/grad
 import { PERFORMANCE_PERIODS } from '../utils/performancePeriods'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 import { describeImport, suggestImportName } from '../utils/builderImport'
+import { groupModelsByAccount } from '../utils/builderModels'
 
 // The Builder grades over Dashboard's calendar windows (same keys, same
 // backend resolver), plus Max, which a model with no first trade defines as
@@ -1019,6 +1020,9 @@ export default function PortfolioBuilder() {
 
   const active = portfolios.find(p => p.id === activeId) || null
   const activeName = active?.name || ''
+  // Models from every account are listed; each stays saved in the account that built it.
+  const portfolioGroups = useMemo(() => groupModelsByAccount(portfolios), [portfolios])
+  const manyAccounts = portfolioGroups.length > 1
   const positive = v => (isNum(v) && Number(v) > 0 ? Number(v) : null)
   const savedTargetYield = positive(active?.target_yield_pct)
   const savedMonthly = positive(active?.target_monthly_income) // USD a month
@@ -1335,7 +1339,8 @@ export default function PortfolioBuilder() {
   const deletePortfolio = async (p, e) => {
     e.stopPropagation()
     const count = Number(p.holding_count) || 0
-    if (!await dialog.confirm(`Delete "${p.name}"${count ? ` and its ${count} holding${count === 1 ? '' : 's'}` : ''}?`)) return
+    const elsewhere = p.current_account === false && p.account_name ? ` from ${p.account_name}` : ''
+    if (!await dialog.confirm(`Delete "${p.name}"${count ? ` and its ${count} holding${count === 1 ? '' : 's'}` : ''}${elsewhere}?`)) return
     try {
       await send(`/api/builder/portfolios/${p.id}`, 'DELETE')
     } catch (err) { await dialog.alert(err.message); return }
@@ -2392,21 +2397,30 @@ export default function PortfolioBuilder() {
           onChange={e => importPortfolioFile(e.target.files?.[0])}
         />
         <div className="pb-port-list">
-          {portfolios.map(p => (
-            <div
-              key={p.id}
-              role="button"
-              tabIndex={0}
-              className={`pb-port-item ${p.id === activeId ? 'pb-port-active' : ''}`}
-              onClick={() => selectPortfolio(p.id)}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectPortfolio(p.id) } }}
-            >
-              <div className="pb-port-text">
-                <div className="pb-port-name" title={p.name}>{p.name}</div>
-                <div className="pb-port-sub">{fmt$(p.total_value)}</div>
-              </div>
-              <div className="pb-port-count" title="Holdings">{p.holding_count}</div>
-              <button type="button" className="pb-port-del" onClick={(e) => deletePortfolio(p, e)} title={`Delete ${p.name}`} aria-label={`Delete ${p.name}`}>&times;</button>
+          {portfolioGroups.map(group => (
+            <div key={group.key} className="pb-port-group" role="group" aria-label={`Saved in ${group.accountName}`}>
+              {manyAccounts && (
+                <div className="pb-port-group-title" title={`Model portfolios saved in ${group.accountName}. Any account can open and edit them.`}>
+                  {group.accountName}
+                </div>
+              )}
+              {group.models.map(p => (
+                <div
+                  key={p.id}
+                  role="button"
+                  tabIndex={0}
+                  className={`pb-port-item ${p.id === activeId ? 'pb-port-active' : ''}`}
+                  onClick={() => selectPortfolio(p.id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectPortfolio(p.id) } }}
+                >
+                  <div className="pb-port-text">
+                    <div className="pb-port-name" title={p.name}>{p.name}</div>
+                    <div className="pb-port-sub">{fmt$(p.total_value)}</div>
+                  </div>
+                  <div className="pb-port-count" title="Holdings">{p.holding_count}</div>
+                  <button type="button" className="pb-port-del" onClick={(e) => deletePortfolio(p, e)} title={`Delete ${p.name}`} aria-label={`Delete ${p.name}`}>&times;</button>
+                </div>
+              ))}
             </div>
           ))}
           {portfoliosLoaded && !portfolios.length && <div className="pb-muted pb-side-empty">No model portfolios yet.</div>}
@@ -2418,6 +2432,7 @@ export default function PortfolioBuilder() {
               <label key={p.id} className="pb-compare-item">
                 <input type="checkbox" checked={compareIds.includes(p.id)} onChange={() => toggleCompare(p.id)} />
                 <span>{p.name}</span>
+                {manyAccounts && p.current_account === false && <span className="pb-compare-account">{p.account_name}</span>}
               </label>
             ))}
             <button
@@ -2479,6 +2494,7 @@ export default function PortfolioBuilder() {
                   {savedBalance != null ? ` of ${fmt$(savedBalance)}` : ''}
                   {uninvested != null && uninvested >= 0.005 ? ` · ${fmt$(uninvested)} cash` : ''}
                   {pm && isNum(pm.est_annual_income) ? ` · ${fmt$(pm.est_annual_income)}/yr est. income` : ''}
+                  {active?.current_account === false && active.account_name ? ` · saved in ${active.account_name}` : ''}
                 </div>
               </div>
               <div className="pb-actions">
